@@ -1,0 +1,71 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lingshu-server",
+    "crates/lingshu-graph",
+    "crates/lingshu-vector",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "compression"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.24"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json"] }
+
+# Redis
+fred = { version = "9", features = ["enable-rustls"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Configuration
+figment = { version = "0.10", features = ["toml", "env"] }
+
+# OpenAPI
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Chrono
+chrono = { version = "0.4", features = ["serde"] }
+
+# Password hashing
+argon2 = "0.5"
+
+# JWT
+jsonwebtoken = "9"
+
+# Metrics
+prometheus-client = "0.22"
+
+# Utilities
+futures = "0.3"
+bytes = "1"
+pin-project-lite = "0.2"

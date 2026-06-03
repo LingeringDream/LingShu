@@ -1,0 +1,75 @@
+import { useState, useRef, useEffect } from 'react';
+import { useChatStore } from '../../stores/chatStore';
+import { MessageBubble } from './MessageBubble';
+import { ChatInput } from './ChatInput';
+
+export function ChatWindow() {
+  const { messages, isLoading, sendMessage } = useChatStore();
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100%',
+      background: 'var(--bg-secondary)',
+      borderRadius: '12px',
+      border: '1px solid var(--border)',
+      overflow: 'hidden',
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: '16px 20px',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px',
+      }}>
+        <div style={{
+          width: '8px',
+          height: '8px',
+          borderRadius: '50%',
+          background: 'var(--success)',
+        }} />
+        <span style={{ fontSize: '14px', fontWeight: 500 }}>灵枢对话</span>
+        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+          {isLoading ? '思考中...' : '在线'}
+        </span>
+      </div>
+
+      {/* Messages */}
+      <div style={{
+        flex: 1,
+        overflow: 'auto',
+        padding: '20px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '16px',
+      }}>
+        {messages.length === 0 && (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--text-secondary)',
+            fontSize: '14px',
+          }}>
+            向灵枢发送消息开始对话...
+          </div>
+        )}
+        {messages.map((msg) => (
+          <MessageBubble key={msg.id} message={msg} />
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      <ChatInput onSend={sendMessage} disabled={isLoading} />
+    </div>
+  );
+}
