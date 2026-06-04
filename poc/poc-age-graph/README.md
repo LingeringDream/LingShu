@@ -44,14 +44,32 @@ $$) AS (task_id agtype, title agtype, status agtype);
 
 ## 结果记录
 
+测试时间：2026-06-04
+
+运行命令：
+
+```bash
+docker compose -f poc/poc-age-graph/docker-compose.yml up -d
+```
+
+实际结果：容器初始化失败，标准 `postgres:16-bookworm` 镜像未安装 AGE 扩展。
+
+错误摘要：
+
+```text
+ERROR:  extension "age" is not available
+DETAIL: Could not open extension control file "/usr/share/postgresql/16/extension/age.control": No such file or directory.
+HINT: The extension must first be installed on the system where PostgreSQL is running.
+```
+
 | 查询 | 执行时间 | 结果 | 备注 |
 |------|---------|------|------|
-| Q1 依赖链 | - | - | |
-| Q2 路径查询 | - | - | |
-| Q3 影响分析 | - | - | |
+| Q1 依赖链 | N/A | FAIL | PostgreSQL 容器初始化阶段无法创建 AGE extension |
+| Q2 路径查询 | N/A | FAIL | PostgreSQL 容器初始化阶段无法创建 AGE extension |
+| Q3 影响分析 | N/A | FAIL | PostgreSQL 容器初始化阶段无法创建 AGE extension |
 
 ## 结论
 
 - [ ] PASS: 全部通过
 - [ ] PARTIAL: 可用但需优化
-- [ ] FAIL: 需要回退到 Neo4j
+- [x] FAIL: 当前镜像不包含 AGE，PoC 未进入查询阶段。后续需要改用包含 AGE 的 PostgreSQL 镜像、自建扩展镜像，或回退 Neo4j/pgvector 等替代方案。
