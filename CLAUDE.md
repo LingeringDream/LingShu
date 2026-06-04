@@ -1,30 +1,62 @@
-# 灵枢 (LingShu) — AI 项目经理个人助理
+# 灵枢 (LingShu) — macOS Desktop AI Assistant
 
-## 项目概述
-面向项目经理的 AI 个人助理，具备 3D 虚拟形象、深度项目管理智能、主动感知能力。
+## Project
 
-## 技术栈
-- 后端: Rust (Axum 0.7 + Tokio + sqlx + reqwest)
-- 前端: React 18 + TypeScript + Three.js + Vite
-- 数据: PostgreSQL 16 + Apache AGE, Redis 7, Qdrant
-- 部署: Docker + Docker Compose
+macOS desktop pet AI assistant. MVP: floating desktop avatar, Apple Calendar scheduling, tiered permissions, SoulLedger memory with forgetting and personality evolution, editable Memory & Personality Center. See [README.md](./README.md) for full overview and [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) for detailed spec.
 
-## 开发规范
-- Rust 代码通过 Docker 容器编译运行（宿主机未安装 Rust）
-- 使用 `docker compose -f docker/docker-compose.dev.yml` 启动开发环境
-- 前端在 `frontend/` 目录，使用 Vite dev server
-- 后端在 `crates/` 目录，使用 cargo-watch 热重载
-- API 端点使用 utoipa 自动生成 OpenAPI 文档
-- 前后端类型通过 OpenAPI 契约保持同步
+## Key Paths
 
-## 命名规范
-- Rust crate: `lingshu-*`
-- API 路径: `/api/v1/*`
-- 数据库表: snake_case, 复数形式
-- 组件: PascalCase
+| Path | Purpose |
+|------|---------|
+| `crates/lingshu-server/src/main.rs` | Backend entry point |
+| `crates/lingshu-server/migrations/` | Database migrations |
+| `crates/lingshu-graph/src/` | Future graph query candidate; not part of MVP |
+| `crates/lingshu-vector/src/` | Vector search (Qdrant) |
+| `frontend/src/main.tsx` | Frontend entry point |
+| `docker/docker-compose.dev.yml` | Dev environment orchestration |
+| `AI-PersonalAssistant-PRD.md` | Full product requirements |
 
-## 关键路径
-- 后端入口: `crates/lingshu-server/src/main.rs`
-- 数据库迁移: `crates/lingshu-server/migrations/`
-- 前端入口: `frontend/src/main.tsx`
-- Docker 编排: `docker/docker-compose.dev.yml`
+## Conventions
+
+- Rust crates: `lingshu-*`
+- API paths: `/api/v1/*`
+- Database tables: `snake_case`, plural
+- React components: `PascalCase`
+- Commits: [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`)
+
+## Quick Commands
+
+```bash
+# Infrastructure only (default profile)
+docker compose -f docker/docker-compose.dev.yml up -d
+
+# Full Docker stack
+docker compose -f docker/docker-compose.dev.yml --profile full up
+
+# Native backend
+cargo run -p lingshu-server
+
+# Native backend with hot reload
+cargo watch -x "run -p lingshu-server"
+
+# Frontend
+cd frontend && npm ci && npm run dev
+
+# Run migrations
+sqlx migrate run --source crates/lingshu-server/migrations
+
+# Test
+cargo test --all
+cd frontend && npm run type-check && npm run build
+
+# Health check
+curl http://localhost:8080/api/v1/system/health
+```
+
+## Constraints
+
+- MVP priorities: macOS desktop shell, Apple Calendar, SoulLedger, permission tiers. Do NOT build VRM/Live2D, PM workbench, third-party connectors, or L4 autonomous screen control.
+- Apache AGE: PoC failed on standard `postgres:16-bookworm` because the image lacks the AGE extension. Do not add AGE to MVP infrastructure; if graph capabilities become necessary, run a fresh AGE custom-image vs Neo4j comparison first.
+- Tauri 2: planned for Phase 1, NOT yet set up. No `src-tauri/` directory exists.
+- Infrastructure services (PostgreSQL, Redis, Qdrant) run in Docker. Backend and frontend can run natively or in Docker.
+- API endpoints must be registered in utoipa OpenAPI docs. Strict OpenAPI diffing and generated frontend clients are planned for Phase 1, not currently enforced by CI.
