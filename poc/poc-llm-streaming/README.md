@@ -47,13 +47,22 @@ wait
 
 ## 结果记录
 
+测试时间：2026-06-04
+
+当前环境检查：
+
+- 宿主机未发现 `ollama` CLI。
+- `http://localhost:11434/api/tags` 无响应。
+- 因缺少 Ollama 服务和模型，未执行 TTFT、并发和错误处理实测。
+
 | 测试 | TTFT | 总时间 | Chunks | 内存 | 结果 |
 |------|------|--------|--------|------|------|
-| 基础流式 | - | - | - | - | |
-| 并发 x10 | - | - | - | - | |
-| 错误处理 | - | - | - | - | |
+| 基础流式 | N/A | N/A | N/A | N/A | BLOCKED: Ollama unavailable |
+| 并发 x10 | N/A | N/A | N/A | N/A | BLOCKED: Ollama unavailable |
+| 错误处理 | N/A | N/A | N/A | N/A | BLOCKED: Ollama unavailable |
 
 ## 结论
 
 - [ ] PASS: TTFT < 500ms, 代理开销 < 10ms, 10 并发稳定
 - [ ] FAIL: 需要调整配置或使用其他方案
+- [x] BLOCKED: 当前环境缺少 Ollama 服务和模型，需先启动 Ollama 并拉取测试模型后再实测。

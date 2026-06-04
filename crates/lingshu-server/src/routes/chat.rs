@@ -28,7 +28,7 @@ pub struct ChatChunk {
 }
 
 pub async fn chat(
-    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::extract::State(_state): axum::extract::State<AppState>,
     Json(req): Json<ChatRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
     // Phase 0: echo back the message with a prefix

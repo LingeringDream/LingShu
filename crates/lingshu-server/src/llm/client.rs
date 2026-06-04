@@ -1,3 +1,4 @@
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -8,7 +9,7 @@ pub struct LlmClient {
     api_base_url: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -58,7 +59,7 @@ impl LlmClient {
         &self,
         model: &str,
         messages: Vec<ChatMessage>,
-    ) -> impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> {
+    ) -> futures::stream::BoxStream<'static, Result<bytes::Bytes, reqwest::Error>> {
         let url = format!("{}/api/chat", self.ollama_url);
         let req = ChatRequest {
             model: model.to_string(),
@@ -66,13 +67,13 @@ impl LlmClient {
             stream: true,
         };
 
-        futures::stream::unfold(
-            self.http.post(&url).json(&req).send(),
-            |fut| async {
-                let resp = fut.await.ok()?;
-                Some((resp.bytes_stream(), None))
-            },
-        )
-        .flat_map(|stream| stream)
+        self.http
+            .post(&url)
+            .json(&req)
+            .send()
+            .into_stream()
+            .map_ok(|resp| resp.bytes_stream())
+            .try_flatten()
+            .boxed()
     }
 }

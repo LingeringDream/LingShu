@@ -7,7 +7,7 @@ mod routes;
 mod state;
 mod ws;
 
-use axum::{Router, routing::get};
+use axum::Router;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 

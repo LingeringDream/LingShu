@@ -19,7 +19,7 @@ pub struct ListMemoriesParams {
     pub limit: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MemoryResponse {
     pub id: Uuid,
     pub memory_type: String,

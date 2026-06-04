@@ -3,6 +3,8 @@ name = "poc-llm-streaming"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+
 [dependencies]
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }

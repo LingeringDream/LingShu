@@ -1,3 +1,4 @@
+use fred::interfaces::ClientLike;
 use sqlx::postgres::PgPoolOptions;
 
 use crate::config::AppConfig;
@@ -5,7 +6,7 @@ use crate::config::AppConfig;
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
-    pub redis: fred::clients::Client,
+    pub redis: fred::clients::RedisClient,
     pub http: reqwest::Client,
     pub config: AppConfig,
     pub start_time: std::time::Instant,
@@ -22,7 +23,7 @@ impl AppState {
 
         // Redis client
         let redis_config = fred::types::RedisConfig::from_url(&config.redis.url)?;
-        let redis = fred::clients::Client::new(redis_config, None, None, None);
+        let redis = fred::clients::RedisClient::new(redis_config, None, None, None);
         redis.connect();
         redis.wait_for_connect().await?;
 

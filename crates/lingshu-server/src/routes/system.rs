@@ -45,3 +45,32 @@ pub async fn metrics() -> String {
     // Placeholder: implement prometheus-client metrics collection
     "# LingShu Metrics\n# TODO: implement prometheus metrics\n".to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn health_response_has_required_fields() {
+        let resp = HealthResponse {
+            status: "ok".to_string(),
+            version: "0.1.0".to_string(),
+            uptime_seconds: 42,
+        };
+        assert_eq!(resp.status, "ok");
+        assert_eq!(resp.version, "0.1.0");
+        assert_eq!(resp.uptime_seconds, 42);
+    }
+
+    #[test]
+    fn metrics_returns_placeholder() {
+        let output = tokio_test::block_on(async {
+            // This handler doesn't need state, but axum handlers return impl IntoResponse
+            // Just verify it returns a non-empty string
+            let body = metrics().await;
+            assert!(body.contains("LingShu Metrics"));
+            body
+        });
+        assert!(!output.is_empty());
+    }
+}
