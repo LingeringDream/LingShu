@@ -115,6 +115,59 @@ fn validate_event_time(start: DateTime<Utc>, end: DateTime<Utc>) -> Result<(), A
     Ok(())
 }
 
+/// Parse an RFC 3339 time string into [`DateTime<Utc>`].
+fn parse_time(raw: &str) -> Result<DateTime<Utc>, AppError> {
+    DateTime::parse_from_rfc3339(raw)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| {
+            AppError::Validation(format!(
+                "Invalid time '{raw}': expected RFC 3339 format (e.g. 2026-06-06T15:00:00+08:00). {e}"
+            ))
+        })
+}
+
+/// Insert a calendar event and return the row. Shared by parse_calendar
+/// (auto-create after LLM parse) and create_event (manual / future flows).
+async fn insert_calendar_event(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    perms: &PermissionSettings,
+    req: CreateEventRequest,
+) -> Result<EventRow, AppError> {
+    validate_event_time(req.start_time, req.end_time)?;
+    let attendees = serde_json::to_value(&req.attendees).unwrap_or_default();
+
+    let status = if perms.l1_require_confirmation {
+        "pending_confirmation"
+    } else {
+        "confirmed"
+    };
+
+    let row: EventRow = sqlx::query_as(
+        "INSERT INTO calendar_events \
+         (user_id, title, description, location, start_time, end_time, \
+          attendees, calendar_name, parse_confidence, source_input, status) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
+         RETURNING id, title, description, location, start_time, end_time, \
+         attendees, status, calendar_name, parse_confidence, source_input, created_at",
+    )
+    .bind(user_id)
+    .bind(&req.title)
+    .bind(&req.description)
+    .bind(&req.location)
+    .bind(req.start_time)
+    .bind(req.end_time)
+    .bind(&attendees)
+    .bind(&req.calendar_name)
+    .bind(req.parse_confidence)
+    .bind(&req.source_input)
+    .bind(status)
+    .fetch_one(db)
+    .await?;
+
+    Ok(row)
+}
+
 /// Safe JSON extraction: find a pair of brackets { } or [ ] in LLM output,
 /// guarding against malformed responses.
 fn extract_json_slice(raw: &str) -> &str {
@@ -146,15 +199,15 @@ fn extract_json_slice(raw: &str) -> &str {
     post,
     path = "/api/v1/calendar/parse",
     request_body = ParseRequest,
-    responses((status = 200, body = ParsedEvent))
+    responses((status = 201, description = "Parsed and created calendar event", body = EventResponse))
 )]
 async fn parse_calendar(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
     Json(req): Json<ParseRequest>,
-) -> Result<Json<ParsedEvent>, AppError> {
+) -> Result<(axum::http::StatusCode, Json<EventResponse>), AppError> {
     let user_id = auth::require_user(auth).await?;
-    check_calendar_permission(&state, user_id).await?;
+    let perms = check_calendar_permission(&state, user_id).await?;
 
     let settings = llm_settings_for_user(&state, user_id).await;
     let model = settings.model.clone();
@@ -217,7 +270,22 @@ JSON："###,
     let slice = extract_json_slice(&response);
     let parsed: ParsedEvent = serde_json::from_str(slice)
         .map_err(|e| AppError::Validation(format!("Failed to parse calendar JSON: {e}")))?;
-    Ok(Json(parsed))
+
+    // Convert LLM output to a concrete event and persist immediately.
+    let create_req = CreateEventRequest {
+        title: parsed.title,
+        description: parsed.description,
+        location: parsed.location,
+        start_time: parse_time(&parsed.start_time)?,
+        end_time: parse_time(&parsed.end_time)?,
+        attendees: parsed.attendees,
+        calendar_name: parsed.calendar_name,
+        source_input: Some(req.text),
+        parse_confidence: Some(parsed.confidence),
+    };
+
+    let row = insert_calendar_event(&state.db, user_id, &perms, create_req).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(row.into_response())))
 }
 
 // ── Handler: list ──────────────────────────────────────────────────
@@ -281,37 +349,7 @@ async fn create_event(
 ) -> Result<(axum::http::StatusCode, Json<EventResponse>), AppError> {
     let user_id = auth::require_user(auth).await?;
     let perms = check_calendar_permission(&state, user_id).await?;
-    validate_event_time(req.start_time, req.end_time)?;
-    let attendees = serde_json::to_value(&req.attendees).unwrap_or_default();
-
-    let status = if perms.l1_require_confirmation {
-        "pending_confirmation"
-    } else {
-        "confirmed"
-    };
-
-    let row: EventRow = sqlx::query_as(
-        "INSERT INTO calendar_events \
-         (user_id, title, description, location, start_time, end_time, \
-          attendees, calendar_name, parse_confidence, source_input, status) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
-         RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at",
-    )
-    .bind(user_id)
-    .bind(&req.title)
-    .bind(&req.description)
-    .bind(&req.location)
-    .bind(req.start_time)
-    .bind(req.end_time)
-    .bind(&attendees)
-    .bind(&req.calendar_name)
-    .bind(req.parse_confidence)
-    .bind(&req.source_input)
-    .bind(status)
-    .fetch_one(&state.db)
-    .await?;
-
+    let row = insert_calendar_event(&state.db, user_id, &perms, req).await?;
     Ok((axum::http::StatusCode::CREATED, Json(row.into_response())))
 }
 
@@ -430,5 +468,70 @@ impl EventRow {
             source_input: self.source_input,
             created_at: self.created_at,
         }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_time_valid_rfc3339_succeeds() {
+        let result = parse_time("2026-06-06T15:00:00+08:00").expect("valid RFC 3339 should parse");
+        assert_eq!(result.to_rfc3339(), "2026-06-06T07:00:00+00:00");
+    }
+
+    #[test]
+    fn parse_time_valid_rfc3339_utc_succeeds() {
+        let result = parse_time("2026-12-01T09:30:00Z").expect("UTC RFC 3339 should parse");
+        assert_eq!(result.to_rfc3339(), "2026-12-01T09:30:00+00:00");
+    }
+
+    #[test]
+    fn parse_time_invalid_returns_validation() {
+        let err = parse_time("tomorrow 3pm").unwrap_err();
+        match err {
+            AppError::Validation(msg) => {
+                assert!(
+                    msg.contains("tomorrow 3pm"),
+                    "message should include the bad input"
+                );
+                assert!(
+                    msg.contains("RFC 3339"),
+                    "message should mention expected format"
+                );
+            }
+            other => panic!("expected Validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_time_empty_string_returns_validation() {
+        let err = parse_time("").unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_event_time_end_after_start_is_ok() {
+        let start = parse_time("2026-06-06T09:00:00Z").unwrap();
+        let end = parse_time("2026-06-06T10:00:00Z").unwrap();
+        assert!(validate_event_time(start, end).is_ok());
+    }
+
+    #[test]
+    fn validate_event_time_end_equals_start_is_err() {
+        let t = parse_time("2026-06-06T09:00:00Z").unwrap();
+        let err = validate_event_time(t, t).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn validate_event_time_end_before_start_is_err() {
+        let start = parse_time("2026-06-06T10:00:00Z").unwrap();
+        let end = parse_time("2026-06-06T09:00:00Z").unwrap();
+        let err = validate_event_time(start, end).unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 }
