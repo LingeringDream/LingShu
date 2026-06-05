@@ -178,6 +178,19 @@ pub async fn create_task(
     Ok((axum::http::StatusCode::CREATED, Json(task.into_response())))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{pid}/tasks/{tid}",
+    params(
+        ("pid" = Uuid, Path, description = "Project ID"),
+        ("tid" = Uuid, Path, description = "Task ID")
+    ),
+    responses(
+        (status = 200, description = "Task detail", body = TaskResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Project or task not found")
+    )
+)]
 pub async fn get_task(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
@@ -200,6 +213,20 @@ pub async fn get_task(
     Ok(Json(task.into_response()))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/v1/projects/{pid}/tasks/{tid}",
+    params(
+        ("pid" = Uuid, Path, description = "Project ID"),
+        ("tid" = Uuid, Path, description = "Task ID")
+    ),
+    request_body = UpdateTaskRequest,
+    responses(
+        (status = 200, description = "Task updated", body = TaskResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Project or task not found")
+    )
+)]
 pub async fn update_task(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
@@ -257,6 +284,19 @@ pub async fn update_task(
     Ok(Json(task.into_response()))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{pid}/tasks/{tid}",
+    params(
+        ("pid" = Uuid, Path, description = "Project ID"),
+        ("tid" = Uuid, Path, description = "Task ID")
+    ),
+    responses(
+        (status = 204, description = "Task deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Project or task not found")
+    )
+)]
 pub async fn delete_task(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,

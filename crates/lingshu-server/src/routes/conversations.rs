@@ -116,6 +116,15 @@ pub async fn create_conversation(
     Ok((axum::http::StatusCode::CREATED, Json(conv.into_response())))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/conversations/{id}",
+    responses(
+        (status = 200, description = "Conversation detail", body = ConversationResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Conversation not found")
+    )
+)]
 pub async fn get_conversation(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
@@ -136,6 +145,15 @@ pub async fn get_conversation(
     Ok(Json(conv.into_response()))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/conversations/{id}",
+    responses(
+        (status = 204, description = "Conversation deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Conversation not found")
+    )
+)]
 pub async fn delete_conversation(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,

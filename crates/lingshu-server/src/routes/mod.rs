@@ -36,10 +36,19 @@ use utoipa::OpenApi;
         settings::update_llm_settings,
         projects::list_projects,
         projects::create_project,
+        projects::get_project,
+        projects::update_project,
+        projects::delete_project,
+        projects::get_health,
         tasks::list_tasks,
         tasks::create_task,
+        tasks::get_task,
+        tasks::update_task,
+        tasks::delete_task,
         conversations::list_conversations,
         conversations::create_conversation,
+        conversations::get_conversation,
+        conversations::delete_conversation,
         memories::list_memories,
         memories::get_memory,
         memories::create_memory,
@@ -141,16 +150,15 @@ mod tests {
     fn openapi_spec_has_minimum_paths() {
         let spec = openapi_spec();
         let count = spec.paths.paths.len();
-        // Unique path patterns (utoipa groups methods on the same path):
-        // health(1) + metrics(1) + auth(1) + users(1) + settings(1) + calendar(3) +
-        // projects(1) + project-crud(1) + project-health(1) + tasks-list(1) +
-        // task-crud(1) + conversations(1) + sessions(2) + chat(1) +
-        // memories(3) + permissions(1) + project_members(2) +
-        // task_dependencies(2) + personality(3) + thoughts(2) +
-        // integrations(2) + audit(1) = 33 paths
+        // Unique path patterns: 34 unique URL patterns across all route groups.
+        // system(2) + auth(1) + users(1) + settings(1) + calendar(3) +
+        // projects(3) + project-health(1) + tasks(2) + conversations(2) +
+        // chat(1) + sessions(2) + memories(3) + permissions(1) +
+        // project_members(2) + task_dependencies(2) + personality(3) +
+        // thoughts(2) + integrations(2) + audit(1) = 34 paths
         assert!(
-            count >= 30,
-            "Expected at least 30 registered path items, got {count}"
+            count >= 32,
+            "Expected at least 32 registered path items, got {count}"
         );
     }
 }

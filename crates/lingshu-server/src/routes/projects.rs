@@ -123,6 +123,15 @@ pub async fn create_project(
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{id}",
+    responses(
+        (status = 200, description = "Project detail", body = ProjectResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Project not found")
+    )
+)]
 pub async fn get_project(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
@@ -143,6 +152,16 @@ pub async fn get_project(
     Ok(Json(project.into_response()))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/v1/projects/{id}",
+    request_body = CreateProjectRequest,
+    responses(
+        (status = 200, description = "Project updated", body = ProjectResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Project not found")
+    )
+)]
 pub async fn update_project(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
@@ -167,6 +186,15 @@ pub async fn update_project(
     Ok(Json(project.into_response()))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/projects/{id}",
+    responses(
+        (status = 204, description = "Project deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Project not found")
+    )
+)]
 pub async fn delete_project(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
@@ -188,6 +216,15 @@ pub async fn delete_project(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/projects/{id}/health",
+    responses(
+        (status = 200, description = "Project health indicators"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Project not found")
+    )
+)]
 pub async fn get_health(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
