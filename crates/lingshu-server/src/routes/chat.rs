@@ -6,6 +6,7 @@ use axum::{
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::convert::Infallible;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth;
@@ -18,7 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/api/v1/chat", post(chat))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ChatRequest {
     pub message: String,
     pub session_id: Option<Uuid>,
@@ -26,6 +27,15 @@ pub struct ChatRequest {
 
 // ── Handler ───────────────────────────────────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat",
+    request_body = ChatRequest,
+    responses(
+        (status = 200, description = "SSE stream of ChatChunk events", content_type = "text/event-stream"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 pub async fn chat(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<crate::auth::AuthUser>,

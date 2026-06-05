@@ -1,5 +1,6 @@
 use axum::{extract::State, routing::post, Json, Router};
 use serde::Serialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth;
@@ -14,13 +15,21 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/api/v1/auth/local-session", post(local_session))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct AuthResponse {
     pub user_id: Uuid,
     pub token: String,
     pub display_name: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/local-session",
+    responses(
+        (status = 200, description = "Local session created", body = AuthResponse),
+        (status = 500, description = "Internal server error")
+    )
+)]
 pub async fn local_session(State(state): State<AppState>) -> Result<Json<AuthResponse>, AppError> {
     let user_id = ensure_local_user(&state).await?;
     let token = auth::sign_token(user_id, &state.config.security.jwt_secret)

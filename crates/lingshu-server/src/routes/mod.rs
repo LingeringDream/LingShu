@@ -29,6 +29,9 @@ use utoipa::OpenApi;
     paths(
         system::health_check,
         system::metrics,
+        auth::local_session,
+        users::get_me,
+        users::update_me,
         settings::get_llm_settings,
         settings::update_llm_settings,
         projects::list_projects,
@@ -69,9 +72,16 @@ use utoipa::OpenApi;
         integrations::get_integration,
         integrations::delete_integration,
         audit::list_entries,
+        chat::chat,
+        sessions::list_sessions,
+        sessions::get_session,
+        sessions::delete_session,
     ),
     components(schemas(
         system::HealthResponse,
+        auth::AuthResponse,
+        users::UserResponse,
+        users::UpdateUserRequest,
         settings::LlmSettings,
         settings::LlmSettingsPatch,
         projects::CreateProjectRequest,
@@ -99,6 +109,8 @@ use utoipa::OpenApi;
         thoughts::ThoughtResponse,
         integrations::IntegrationResponse,
         audit::AuditEntryResponse,
+        chat::ChatRequest,
+        sessions::SessionResponse,
     ))
 )]
 pub struct ApiDoc;
@@ -130,14 +142,15 @@ mod tests {
         let spec = openapi_spec();
         let count = spec.paths.paths.len();
         // Unique path patterns (utoipa groups methods on the same path):
-        // health(1) + metrics(1) + settings(1) + calendar(3) + projects(1) +
-        // project-crud(1) + project-health(1) + tasks-list(1) + task-crud(1) +
-        // conversations(1) + memories(3) + permissions(1) +
-        // project_members(2) + task_dependencies(2) + personality(3) +
-        // thoughts(2) + integrations(2) + audit(1) = 28 paths
+        // health(1) + metrics(1) + auth(1) + users(1) + settings(1) + calendar(3) +
+        // projects(1) + project-crud(1) + project-health(1) + tasks-list(1) +
+        // task-crud(1) + conversations(1) + sessions(2) + chat(1) +
+        // memories(3) + permissions(1) + project_members(2) +
+        // task_dependencies(2) + personality(3) + thoughts(2) +
+        // integrations(2) + audit(1) = 33 paths
         assert!(
-            count >= 25,
-            "Expected at least 25 registered path items, got {count}"
+            count >= 30,
+            "Expected at least 30 registered path items, got {count}"
         );
     }
 }

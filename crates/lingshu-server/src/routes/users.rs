@@ -1,5 +1,6 @@
 use axum::{routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::{self, AuthUser};
@@ -10,7 +11,7 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/api/v1/users/me", get(get_me).patch(update_me))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct UserResponse {
     pub id: Uuid,
     pub email: String,
@@ -18,12 +19,20 @@ pub struct UserResponse {
     pub role: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateUserRequest {
     pub display_name: Option<String>,
     pub preferences: Option<serde_json::Value>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/users/me",
+    responses(
+        (status = 200, description = "Current user profile", body = UserResponse),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 pub async fn get_me(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
@@ -45,6 +54,15 @@ pub async fn get_me(
     }))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/v1/users/me",
+    request_body = UpdateUserRequest,
+    responses(
+        (status = 200, description = "Updated user profile", body = UserResponse),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 pub async fn update_me(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,

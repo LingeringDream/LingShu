@@ -1,5 +1,6 @@
 use axum::{extract::Path, routing::get, Json, Router};
 use serde::Serialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::{self, AuthUser};
@@ -15,7 +16,7 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SessionResponse {
     pub id: Uuid,
     pub title: Option<String>,
@@ -23,6 +24,14 @@ pub struct SessionResponse {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions",
+    responses(
+        (status = 200, description = "List of chat sessions", body = Vec<SessionResponse>),
+        (status = 401, description = "Unauthorized")
+    )
+)]
 pub async fn list_sessions(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
@@ -49,6 +58,15 @@ pub async fn list_sessions(
     ))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions/{id}",
+    responses(
+        (status = 200, description = "Chat session detail", body = SessionResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Session not found")
+    )
+)]
 pub async fn get_session(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
@@ -73,6 +91,15 @@ pub async fn get_session(
     }))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/v1/chat/sessions/{id}",
+    responses(
+        (status = 204, description = "Session deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Session not found")
+    )
+)]
 pub async fn delete_session(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<AuthUser>,
