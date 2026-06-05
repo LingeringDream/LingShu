@@ -50,6 +50,7 @@ pub async fn chat(
         )));
     }
 
+    let session_id = req.session_id;
     let user_message = req.message.clone();
 
     // Fetch relevant memories and build the system prompt
@@ -59,10 +60,31 @@ pub async fn chat(
         role: "system".to_string(),
         content: system_prompt,
     }];
+
+    // Load chat history if session_id provided (verify ownership first)
+    if let Some(sid) = session_id {
+        let history = load_chat_history(&state.db, sid, user_id).await?;
+        for (role, content) in history {
+            messages.push(ChatMessage { role, content });
+        }
+    }
+
+    // Current user message
     messages.push(ChatMessage {
         role: "user".to_string(),
-        content: req.message,
+        content: user_message.clone(),
     });
+
+    // Persist user message to DB before streaming (only when session_id is set)
+    if let Some(sid) = session_id {
+        sqlx::query(
+            "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)",
+        )
+        .bind(sid)
+        .bind(&user_message)
+        .execute(&state.db)
+        .await?;
+    }
 
     let options = ChatOptions {
         temperature: Some(settings.temperature),
@@ -153,6 +175,42 @@ fn build_system_prompt(memory_context: &str) -> String {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
+
+/// Verify the conversation belongs to user_id and is not deleted,
+/// then load the most recent N messages in chronological order.
+async fn load_chat_history(
+    db: &sqlx::PgPool,
+    conversation_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<(String, String)>, AppError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM conversations \
+         WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    if !exists {
+        return Err(AppError::NotFound("Session not found".to_string()));
+    }
+
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT role, content FROM ( \
+             SELECT role, content, created_at FROM messages \
+             WHERE conversation_id = $1 \
+             ORDER BY created_at DESC \
+             LIMIT 20 \
+         ) recent_messages \
+         ORDER BY created_at ASC",
+    )
+    .bind(conversation_id)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows)
+}
 
 /// Fetch top-N high-importance memories to inject as chat context.
 /// Phase 0: simple recency + importance query (no vector search yet).
