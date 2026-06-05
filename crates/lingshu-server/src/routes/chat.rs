@@ -12,6 +12,8 @@ use uuid::Uuid;
 use crate::auth;
 use crate::error::AppError;
 use crate::llm::client::{ChatChunk, ChatMessage, ChatOptions};
+use crate::llm::prompts::{personality_prompt, PersonalityValues};
+use crate::models::personality::PersonalityTraits;
 use crate::routes::settings::llm_settings_for_user;
 use crate::state::AppState;
 
@@ -53,9 +55,11 @@ pub async fn chat(
     let session_id = req.session_id;
     let user_message = req.message.clone();
 
-    // Fetch relevant memories and build the system prompt
+    // Fetch relevant memories, active personality, and build the system prompt
     let memory_context = fetch_memory_context(&state.db, user_id, &user_message).await;
-    let system_prompt = build_system_prompt(&memory_context);
+    let personality_values = load_active_personality(&state.db, user_id).await;
+    let personality_snippet = personality_prompt(&personality_values);
+    let system_prompt = build_system_prompt(&personality_snippet, &memory_context);
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
         content: system_prompt,
@@ -121,9 +125,10 @@ pub async fn chat(
 // ── System prompt ────────────────────────────────────────────────────
 
 /// Build the system prompt with identity, personality, capabilities,
-/// memory context, and safety rules. Without memory context, the prompt
-/// still establishes LingShu's core identity.
-fn build_system_prompt(memory_context: &str) -> String {
+/// memory context, and safety rules. Personality snippet is always
+/// included (default values when no active snapshot exists); memory
+/// context is only appended when non-empty.
+fn build_system_prompt(personality_snippet: &str, memory_context: &str) -> String {
     let base = r#"你是灵枢（LingShu），一个运行在 macOS 桌面上的 AI 个人助理。
 
 ## 身份
@@ -165,16 +170,65 @@ fn build_system_prompt(memory_context: &str) -> String {
 - 对话内容仅用于改进助理体验，用户可随时查看和删除记忆
 - 你是一个 AI 助手，不是真正的意识体。你记住的是「用户说过什么」，而非「你经历过什么」"#;
 
-    if memory_context.is_empty() {
-        return base.to_string();
+    let mut parts = vec![base.to_string(), personality_snippet.to_string()];
+
+    if !memory_context.is_empty() {
+        parts.push(format!(
+            "## 用户档案与记忆\n以下是你在长期陪伴中记录的关于这位用户的信息。请自然地运用它们来个性化你的回复，但不要逐条复述——只在与当前对话直接相关时才引用。\n\n{memory_context}"
+        ));
     }
 
-    format!(
-        "{base}\n\n## 用户档案与记忆\n以下是你在长期陪伴中记录的关于这位用户的信息。请自然地运用它们来个性化你的回复，但不要逐条复述——只在与当前对话直接相关时才引用。\n\n{memory_context}"
-    )
+    parts.join("\n\n")
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
+
+/// Load the active personality snapshot for a user and convert to
+/// [`PersonalityValues`]. Missing snapshots use defaults quietly; database
+/// and malformed JSON failures are logged but never break chat.
+async fn load_active_personality(db: &sqlx::PgPool, user_id: Uuid) -> PersonalityValues {
+    let row: Option<(serde_json::Value,)> = match sqlx::query_as(
+        "SELECT trait_values FROM personality_snapshots \
+         WHERE user_id = $1 AND is_active = true LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Failed to load active personality snapshot");
+            return PersonalityValues::default();
+        }
+    };
+
+    let Some((trait_values,)) = row else {
+        return PersonalityValues::default();
+    };
+
+    let traits: PersonalityTraits = match serde_json::from_value(trait_values) {
+        Ok(traits) => traits,
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Failed to parse active personality snapshot");
+            return PersonalityValues::default();
+        }
+    };
+
+    traits_to_personality_values(traits)
+}
+
+/// Map the 7 fields from the DB/model type to the LLM prompt type.
+fn traits_to_personality_values(t: PersonalityTraits) -> PersonalityValues {
+    PersonalityValues {
+        directness: t.directness,
+        warmth: t.warmth,
+        proactivity: t.proactivity,
+        risk_tolerance: t.risk_tolerance,
+        verbosity: t.verbosity,
+        formality: t.formality,
+        humor: t.humor,
+    }
+}
 
 /// Verify the conversation belongs to user_id and is not deleted,
 /// then load the most recent N messages in chronological order.
@@ -247,4 +301,91 @@ async fn fetch_memory_context(db: &sqlx::PgPool, user_id: Uuid, _user_message: &
         ctx.push_str(&format!("- [{label}] {content}\n"));
     }
     ctx
+}
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_system_prompt_includes_personality_snippet() {
+        let snippet = "## 当前人格参数\n测试人格";
+        let prompt = build_system_prompt(snippet, "");
+        assert!(
+            prompt.contains("当前人格参数"),
+            "System prompt should include personality snippet. Got:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("测试人格"),
+            "System prompt should contain the personality content"
+        );
+    }
+
+    #[test]
+    fn build_system_prompt_skips_memory_when_empty() {
+        let snippet = "## 当前人格参数\n- 直接度：中";
+        let prompt = build_system_prompt(snippet, "");
+        assert!(
+            !prompt.contains("用户档案与记忆"),
+            "System prompt should NOT include memory section when memory is empty"
+        );
+    }
+
+    #[test]
+    fn build_system_prompt_includes_memory_when_present() {
+        let snippet = "## 当前人格参数\n- 直接度：中";
+        let memories = "- [偏好] 喜欢安静的环境\n- [事实] 住在北京";
+        let prompt = build_system_prompt(snippet, memories);
+        assert!(
+            prompt.contains("用户档案与记忆"),
+            "System prompt should include memory section when memories exist"
+        );
+        assert!(
+            prompt.contains("喜欢安静的环境"),
+            "System prompt should include memory content"
+        );
+        assert!(
+            prompt.contains("当前人格参数"),
+            "System prompt should include personality before memory section"
+        );
+        // Personality section should appear before memory section
+        let personality_pos = prompt.find("当前人格参数").unwrap();
+        let memory_pos = prompt.find("用户档案与记忆").unwrap();
+        assert!(
+            personality_pos < memory_pos,
+            "Personality section ({personality_pos}) should come before memory section ({memory_pos})"
+        );
+    }
+
+    #[test]
+    fn build_system_prompt_contains_base_identity() {
+        let snippet = "## 当前人格参数\n- 直接度：中";
+        let prompt = build_system_prompt(snippet, "");
+        assert!(prompt.contains("灵枢"));
+        assert!(prompt.contains("LingShu"));
+        assert!(prompt.contains("权限边界"));
+    }
+
+    #[test]
+    fn traits_to_personality_values_maps_all_fields() {
+        let traits = PersonalityTraits {
+            directness: 0.1,
+            warmth: 0.2,
+            proactivity: 0.3,
+            risk_tolerance: 0.4,
+            verbosity: 0.6,
+            formality: 0.7,
+            humor: 0.8,
+        };
+        let values = traits_to_personality_values(traits);
+        assert!((values.directness - 0.1).abs() < f32::EPSILON);
+        assert!((values.warmth - 0.2).abs() < f32::EPSILON);
+        assert!((values.proactivity - 0.3).abs() < f32::EPSILON);
+        assert!((values.risk_tolerance - 0.4).abs() < f32::EPSILON);
+        assert!((values.verbosity - 0.6).abs() < f32::EPSILON);
+        assert!((values.formality - 0.7).abs() < f32::EPSILON);
+        assert!((values.humor - 0.8).abs() < f32::EPSILON);
+    }
 }
