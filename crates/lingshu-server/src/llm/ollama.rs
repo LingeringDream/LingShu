@@ -17,7 +17,7 @@ pub struct OllamaResponse {
 /// Check if Ollama is available
 pub async fn health_check(client: &reqwest::Client, base_url: &str) -> bool {
     client
-        .get(format!("{}/api/tags", base_url))
+        .get(format!("{base_url}/api/tags"))
         .send()
         .await
         .map(|r| r.status().is_success())
@@ -27,7 +27,7 @@ pub async fn health_check(client: &reqwest::Client, base_url: &str) -> bool {
 /// List available models
 pub async fn list_models(client: &reqwest::Client, base_url: &str) -> anyhow::Result<Vec<String>> {
     let resp: serde_json::Value = client
-        .get(format!("{}/api/tags", base_url))
+        .get(format!("{base_url}/api/tags"))
         .send()
         .await?
         .json()

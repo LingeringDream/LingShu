@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -11,7 +12,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/projects", get(list_projects).post(create_project))
         .route(
             "/api/v1/projects/{id}",
-            get(get_project).patch(update_project).delete(delete_project),
+            get(get_project)
+                .patch(update_project)
+                .delete(delete_project),
         )
         .route("/api/v1/projects/{id}/health", get(get_health))
 }
@@ -32,33 +35,59 @@ pub struct ProjectResponse {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+// ── Row helper ──────────────────────────────────────────────────────
+
+#[derive(Debug, sqlx::FromRow)]
+struct ProjectRow {
+    id: Uuid,
+    name: String,
+    description: Option<String>,
+    status: String,
+    health_score: Option<f32>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl ProjectRow {
+    fn into_response(self) -> ProjectResponse {
+        ProjectResponse {
+            id: self.id,
+            name: self.name,
+            description: self.description,
+            status: self.status,
+            health_score: self.health_score,
+            created_at: self.created_at,
+        }
+    }
+}
+
+// ── Handlers ──────────────────────────────────────────────────────
+
 #[utoipa::path(
     get,
     path = "/api/v1/projects",
     responses(
-        (status = 200, description = "List of projects", body = Vec<ProjectResponse>)
+        (status = 200, description = "List of projects", body = Vec<ProjectResponse>),
+        (status = 401)
     )
 )]
 pub async fn list_projects(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
 ) -> Result<Json<Vec<ProjectResponse>>, AppError> {
-    let projects = sqlx::query_as::<_, (Uuid, String, Option<String>, String, Option<f32>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, description, status, health_score, created_at FROM projects WHERE deleted_at IS NULL ORDER BY created_at DESC"
+    let user_id = auth::require_user(auth).await?;
+
+    let projects = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id, name, description, status, health_score, created_at \
+         FROM projects WHERE owner_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC",
     )
+    .bind(user_id)
     .fetch_all(&state.db)
     .await?;
 
     Ok(Json(
         projects
             .into_iter()
-            .map(|p| ProjectResponse {
-                id: p.0,
-                name: p.1,
-                description: p.2,
-                status: p.3,
-                health_score: p.4,
-                created_at: p.5,
-            })
+            .map(ProjectRow::into_response)
             .collect(),
     ))
 }
@@ -73,17 +102,14 @@ pub async fn list_projects(
 )]
 pub async fn create_project(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Json(req): Json<CreateProjectRequest>,
 ) -> Result<(axum::http::StatusCode, Json<ProjectResponse>), AppError> {
-    // Phase 0: use first user as owner
-    let owner_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM users WHERE deleted_at IS NULL LIMIT 1"
-    )
-    .fetch_one(&state.db)
-    .await?;
+    let owner_id = auth::require_user(auth).await?;
 
-    let project = sqlx::query_as::<_, (Uuid, String, Option<String>, String, Option<f32>, chrono::DateTime<chrono::Utc>)>(
-        "INSERT INTO projects (name, description, owner_id) VALUES ($1, $2, $3) RETURNING id, name, description, status, health_score, created_at"
+    let project = sqlx::query_as::<_, ProjectRow>(
+        "INSERT INTO projects (name, description, owner_id) VALUES ($1, $2, $3) \
+         RETURNING id, name, description, status, health_score, created_at",
     )
     .bind(&req.name)
     .bind(&req.description)
@@ -93,74 +119,67 @@ pub async fn create_project(
 
     Ok((
         axum::http::StatusCode::CREATED,
-        Json(ProjectResponse {
-            id: project.0,
-            name: project.1,
-            description: project.2,
-            status: project.3,
-            health_score: project.4,
-            created_at: project.5,
-        }),
+        Json(project.into_response()),
     ))
 }
 
 pub async fn get_project(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ProjectResponse>, AppError> {
-    let project = sqlx::query_as::<_, (Uuid, String, Option<String>, String, Option<f32>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, description, status, health_score, created_at FROM projects WHERE id = $1 AND deleted_at IS NULL"
+    let user_id = auth::require_user(auth).await?;
+
+    let project = sqlx::query_as::<_, ProjectRow>(
+        "SELECT id, name, description, status, health_score, created_at \
+         FROM projects WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL",
     )
     .bind(id)
+    .bind(user_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    Ok(Json(ProjectResponse {
-        id: project.0,
-        name: project.1,
-        description: project.2,
-        status: project.3,
-        health_score: project.4,
-        created_at: project.5,
-    }))
+    Ok(Json(project.into_response()))
 }
 
 pub async fn update_project(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Path(id): Path<Uuid>,
     Json(req): Json<CreateProjectRequest>,
 ) -> Result<Json<ProjectResponse>, AppError> {
-    let project = sqlx::query_as::<_, (Uuid, String, Option<String>, String, Option<f32>, chrono::DateTime<chrono::Utc>)>(
-        "UPDATE projects SET name = $1, description = $2, updated_at = NOW() WHERE id = $3 AND deleted_at IS NULL RETURNING id, name, description, status, health_score, created_at"
+    let user_id = auth::require_user(auth).await?;
+
+    let project = sqlx::query_as::<_, ProjectRow>(
+        "UPDATE projects SET name = $1, description = $2, updated_at = NOW() \
+         WHERE id = $3 AND owner_id = $4 AND deleted_at IS NULL \
+         RETURNING id, name, description, status, health_score, created_at",
     )
     .bind(&req.name)
     .bind(&req.description)
     .bind(id)
+    .bind(user_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;
 
-    Ok(Json(ProjectResponse {
-        id: project.0,
-        name: project.1,
-        description: project.2,
-        status: project.3,
-        health_score: project.4,
-        created_at: project.5,
-    }))
+    Ok(Json(project.into_response()))
 }
 
 pub async fn delete_project(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
-    let result = sqlx::query(
-        "UPDATE projects SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
-    )
-    .bind(id)
-    .execute(&state.db)
-    .await?;
+    let user_id = auth::require_user(auth).await?;
+
+    let result =
+        sqlx::query("UPDATE projects SET deleted_at = NOW() WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL")
+            .bind(id)
+            .bind(user_id)
+            .execute(&state.db)
+            .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Project not found".to_string()));
@@ -171,12 +190,16 @@ pub async fn delete_project(
 
 pub async fn get_health(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+
     let project = sqlx::query_as::<_, (String, Option<f32>)>(
-        "SELECT status, health_score FROM projects WHERE id = $1 AND deleted_at IS NULL"
+        "SELECT status, health_score FROM projects WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL",
     )
     .bind(id)
+    .bind(user_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Project not found".to_string()))?;

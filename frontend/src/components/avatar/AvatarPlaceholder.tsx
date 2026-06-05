@@ -21,9 +21,7 @@ export function AvatarPlaceholder() {
         alignItems: 'center',
         justifyContent: 'center',
         fontSize: '48px',
-      }}>
-        L
-      </div>
+      }} />
       <div style={{
         fontSize: '16px',
         fontWeight: 500,

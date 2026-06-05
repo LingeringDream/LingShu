@@ -1,6 +1,13 @@
-pub mod user;
-pub mod project;
-pub mod task;
+pub mod audit_log;
+pub mod calendar;
 pub mod conversation;
-pub mod message;
+pub mod integration;
 pub mod memory;
+pub mod message;
+pub mod personality;
+pub mod project;
+pub mod project_member;
+pub mod task;
+pub mod task_dependency;
+pub mod thought;
+pub mod user;

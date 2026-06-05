@@ -24,7 +24,7 @@ pub async fn create(
     password_hash: &str,
 ) -> Result<User, sqlx::Error> {
     sqlx::query_as::<_, User>(
-        "INSERT INTO users (email, display_name, password_hash) VALUES ($1, $2, $3) RETURNING *"
+        "INSERT INTO users (email, display_name, password_hash) VALUES ($1, $2, $3) RETURNING *",
     )
     .bind(email)
     .bind(display_name)

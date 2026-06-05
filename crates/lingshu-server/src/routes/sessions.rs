@@ -2,13 +2,17 @@ use axum::{extract::Path, routing::get, Json, Router};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/chat/sessions", get(list_sessions))
-        .route("/api/v1/chat/sessions/{id}", get(get_session).delete(delete_session))
+        .route(
+            "/api/v1/chat/sessions/{id}",
+            get(get_session).delete(delete_session),
+        )
 }
 
 #[derive(Debug, Serialize)]
@@ -21,12 +25,9 @@ pub struct SessionResponse {
 
 pub async fn list_sessions(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
 ) -> Result<Json<Vec<SessionResponse>>, AppError> {
-    let user_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM users WHERE deleted_at IS NULL LIMIT 1"
-    )
-    .fetch_one(&state.db)
-    .await?;
+    let user_id = auth::require_user(auth).await?;
 
     let sessions = sqlx::query_as::<_, (Uuid, Option<String>, chrono::DateTime<chrono::Utc>)>(
         "SELECT id, title, created_at FROM conversations WHERE user_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC"
@@ -50,12 +51,16 @@ pub async fn list_sessions(
 
 pub async fn get_session(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<SessionResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+
     let session = sqlx::query_as::<_, (Uuid, Option<String>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, title, created_at FROM conversations WHERE id = $1 AND deleted_at IS NULL"
+        "SELECT id, title, created_at FROM conversations WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
     )
     .bind(id)
+    .bind(user_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Session not found".to_string()))?;
@@ -70,12 +75,16 @@ pub async fn get_session(
 
 pub async fn delete_session(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
+    let user_id = auth::require_user(auth).await?;
+
     let result = sqlx::query(
-        "UPDATE conversations SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
+        "UPDATE conversations SET deleted_at = NOW() WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
     )
     .bind(id)
+    .bind(user_id)
     .execute(&state.db)
     .await?;
 

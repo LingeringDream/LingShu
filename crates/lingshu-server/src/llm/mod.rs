@@ -1,3 +1,4 @@
 pub mod client;
+pub mod memory;
 pub mod ollama;
-pub mod router;
+pub mod prompts;

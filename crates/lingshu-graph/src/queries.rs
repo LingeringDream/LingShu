@@ -32,11 +32,10 @@ pub async fn query_dependency_chain(
     let query = format!(
         r#"
         SELECT * FROM cypher('project_knowledge', $$
-            MATCH (t:Task {{id: '{}'}})-[:DEPENDS_ON*1..{}]->(dep:Task)
+            MATCH (t:Task {{id: '{task_id}'}})-[:DEPENDS_ON*1..{max_depth}]->(dep:Task)
             RETURN dep.id, dep.title, dep.status
         $$) AS (task_id agtype, title agtype, status agtype)
-        "#,
-        task_id, max_depth
+        "#
     );
 
     let rows = sqlx::query_as::<_, GraphQueryRow>(&query)
@@ -55,12 +54,11 @@ pub async fn query_impact_analysis(
     let query = format!(
         r#"
         SELECT * FROM cypher('project_knowledge', $$
-            MATCH (t:Task {{id: '{}'}})<-[:DEPENDS_ON*1..{}]-(affected:Task)
+            MATCH (t:Task {{id: '{task_id}'}})<-[:DEPENDS_ON*1..{max_depth}]-(affected:Task)
             WHERE affected.status <> 'done'
             RETURN affected.id, affected.title, affected.status
         $$) AS (task_id agtype, title agtype, status agtype)
-        "#,
-        task_id, max_depth
+        "#
     );
 
     let rows = sqlx::query_as::<_, GraphQueryRow>(&query)

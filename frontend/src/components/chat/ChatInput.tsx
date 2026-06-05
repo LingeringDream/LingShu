@@ -25,7 +25,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   return (
     <div style={{
-      padding: '16px 20px',
+      padding: '16px 18px',
       borderTop: '1px solid var(--border)',
       display: 'flex',
       gap: '12px',
@@ -41,7 +41,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           flex: 1,
           background: 'var(--bg-tertiary)',
           border: '1px solid var(--border)',
-          borderRadius: '8px',
+          borderRadius: '6px',
           padding: '12px 16px',
           color: 'var(--text-primary)',
           fontSize: '14px',
@@ -56,7 +56,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         style={{
           background: 'var(--accent)',
           border: 'none',
-          borderRadius: '8px',
+          borderRadius: '6px',
           padding: '12px 24px',
           color: '#fff',
           fontSize: '14px',

@@ -29,11 +29,12 @@ utoipa = { workspace = true }
 utoipa-swagger-ui = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-argon2 = { workspace = true }
 jsonwebtoken = { workspace = true }
 prometheus-client = { workspace = true }
 futures = { workspace = true }
 bytes = { workspace = true }
+
+dotenvy = "0.15"
 
 # Internal crates
 lingshu-graph = { path = "../lingshu-graph" }

@@ -1,14 +1,21 @@
-use figment::{providers::{Env, Format, Toml}, Figment};
+use figment::{
+    providers::{Env, Format, Toml},
+    Figment,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
+    #[serde(default)]
     pub redis: RedisConfig,
+    #[serde(default)]
     pub qdrant: QdrantConfig,
     pub llm: LlmConfig,
     pub security: SecurityConfig,
+    #[serde(default)]
+    pub cors: CorsConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -26,23 +33,33 @@ pub struct DatabaseConfig {
     pub max_connections: u32,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct RedisConfig {
+    #[serde(default)]
     pub url: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct QdrantConfig {
+    #[serde(default)]
     pub url: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct LlmConfig {
     pub ollama_url: String,
+    #[serde(default = "default_model")]
+    pub default_model: String,
     #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
+}
+
+fn default_model() -> String {
+    // No default committed to the repo — set LLM_DEFAULT_MODEL in your local .env
+    // or add [llm] default_model = "..." to a local config.toml (gitignored).
+    String::new()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -51,8 +68,31 @@ pub struct SecurityConfig {
     pub encryption_key: String,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct CorsConfig {
+    #[serde(default = "default_cors_origins")]
+    pub allowed_origins: Vec<String>,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            allowed_origins: default_cors_origins(),
+        }
+    }
+}
+
+fn default_cors_origins() -> Vec<String> {
+    vec![
+        "http://localhost:5173".to_string(),
+        "http://localhost:8080".to_string(),
+        "http://127.0.0.1:5173".to_string(),
+        "http://127.0.0.1:8080".to_string(),
+    ]
+}
+
 fn default_host() -> String {
-    "0.0.0.0".to_string()
+    "127.0.0.1".to_string()
 }
 fn default_port() -> u16 {
     8080
@@ -72,12 +112,14 @@ impl AppConfig {
                 "REDIS_URL" => Some("redis.url".into()),
                 "QDRANT_URL" => Some("qdrant.url".into()),
                 "OLLAMA_URL" => Some("llm.ollama_url".into()),
+                "LLM_DEFAULT_MODEL" => Some("llm.default_model".into()),
                 "LLM_API_KEY" => Some("llm.api_key".into()),
                 "LLM_API_BASE_URL" => Some("llm.api_base_url".into()),
                 "SERVER_HOST" => Some("server.host".into()),
                 "SERVER_PORT" => Some("server.port".into()),
                 "JWT_SECRET" => Some("security.jwt_secret".into()),
                 "ENCRYPTION_KEY" => Some("security.encryption_key".into()),
+                "CORS_ALLOWED_ORIGINS" => Some("cors.allowed_origins".into()),
                 _ => None,
             }))
             .extract()?;
@@ -98,7 +140,10 @@ mod tests {
         let all_vars: &[(&str, &str)] = &[
             ("SERVER_HOST", "127.0.0.1"),
             ("SERVER_PORT", "9090"),
-            ("DATABASE_URL", "postgres://specified:specified@localhost/specified"),
+            (
+                "DATABASE_URL",
+                "postgres://specified:specified@localhost/specified",
+            ),
             ("DATABASE_MAX_CONNECTIONS", "10"),
             ("REDIS_URL", "redis://localhost:6379"),
             ("QDRANT_URL", "http://localhost:6333"),

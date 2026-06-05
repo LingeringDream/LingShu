@@ -15,15 +15,16 @@ export function ChatWindow() {
     <div style={{
       display: 'flex',
       flexDirection: 'column',
-      height: '100%',
+      flex: 1,
+      minHeight: 0,
       background: 'var(--bg-secondary)',
-      borderRadius: '12px',
+      borderRadius: '8px',
       border: '1px solid var(--border)',
       overflow: 'hidden',
     }}>
       {/* Header */}
       <div style={{
-        padding: '16px 20px',
+        padding: '14px 18px',
         borderBottom: '1px solid var(--border)',
         display: 'flex',
         alignItems: 'center',
@@ -45,10 +46,10 @@ export function ChatWindow() {
       <div style={{
         flex: 1,
         overflow: 'auto',
-        padding: '20px',
+        padding: '24px 28px',
         display: 'flex',
         flexDirection: 'column',
-        gap: '16px',
+        gap: '18px',
       }}>
         {messages.length === 0 && (
           <div style={{

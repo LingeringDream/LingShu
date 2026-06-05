@@ -16,11 +16,7 @@ impl QdrantClient {
     }
 
     /// Create a collection with HNSW index
-    pub async fn create_collection(
-        &self,
-        name: &str,
-        vector_size: u64,
-    ) -> anyhow::Result<()> {
+    pub async fn create_collection(&self, name: &str, vector_size: u64) -> anyhow::Result<()> {
         let url = format!("{}/collections/{}", self.base_url, name);
         let body = serde_json::json!({
             "vectors": {
@@ -75,10 +71,7 @@ impl QdrantClient {
         limit: u32,
         filter: Option<serde_json::Value>,
     ) -> anyhow::Result<Vec<SearchResult>> {
-        let url = format!(
-            "{}/collections/{}/points/search",
-            self.base_url, collection
-        );
+        let url = format!("{}/collections/{}/points/search", self.base_url, collection);
         let mut body = serde_json::json!({
             "vector": vector,
             "limit": limit,

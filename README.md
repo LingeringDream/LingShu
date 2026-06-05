@@ -81,6 +81,7 @@ DATABASE_URL=postgres://lingshu:lingshu@localhost:5432/lingshu
 REDIS_URL=redis://localhost:6379
 QDRANT_URL=http://localhost:6333
 OLLAMA_URL=http://localhost:11434
+SERVER_HOST=127.0.0.1
 ```
 
 ### 4. Run database migrations
@@ -127,11 +128,17 @@ Key environment variables (see [`.env.example`](./.env.example)):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgres://lingshu:lingshu@localhost:5432/lingshu` | PostgreSQL connection |
+| `DATABASE_MAX_CONNECTIONS` | `20` | DB connection pool size |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant connection |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama LLM endpoint |
+| `LLM_DEFAULT_MODEL` | — | Ollama model for chat. Set in your local `.env`, e.g. `gemma4:e4b`, `qwen2.5:7b`, `llama3.2` |
+| `LLM_API_KEY` | — | Cloud LLM API key (Phase 1+ — not yet used; all calls go to Ollama) |
+| `LLM_API_BASE_URL` | `https://api.openai.com/v1` | Cloud LLM base URL (Phase 1+ — not yet used) |
+| `SERVER_HOST` | `127.0.0.1` | Backend bind address for the local management interface |
 | `SERVER_PORT` | `8080` | Backend listen port |
 | `JWT_SECRET` | — | JWT signing secret (change in production) |
+| `ENCRYPTION_KEY` | — | 64-char hex key for encrypted fields |
 | `RUST_LOG` | `info,lingshu_server=debug` | Logging verbosity |
 
 ## Project Structure

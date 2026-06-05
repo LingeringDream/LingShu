@@ -13,8 +13,8 @@ pub async fn handle_socket(mut socket: WebSocket) {
         match msg {
             Message::Text(text) => {
                 // Phase 0: echo back
-                let response = format!("灵枢收到: {}", text);
-                if socket.send(Message::Text(response.into())).await.is_err() {
+                let response = format!("灵枢收到: {text}");
+                if socket.send(Message::Text(response)).await.is_err() {
                     break;
                 }
             }

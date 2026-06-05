@@ -3,12 +3,16 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/conversations", get(list_conversations).post(create_conversation))
+        .route(
+            "/api/v1/conversations",
+            get(list_conversations).post(create_conversation),
+        )
         .route(
             "/api/v1/conversations/{id}",
             get(get_conversation).delete(delete_conversation),
@@ -30,6 +34,31 @@ pub struct ConversationResponse {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+// ── Row helper ──────────────────────────────────────────────────────
+
+#[derive(Debug, sqlx::FromRow)]
+struct ConversationRow {
+    id: Uuid,
+    user_id: Uuid,
+    project_id: Option<Uuid>,
+    title: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl ConversationRow {
+    fn into_response(self) -> ConversationResponse {
+        ConversationResponse {
+            id: self.id,
+            user_id: self.user_id,
+            project_id: self.project_id,
+            title: self.title,
+            created_at: self.created_at,
+        }
+    }
+}
+
+// ── Handlers ──────────────────────────────────────────────────────
+
 #[utoipa::path(
     get,
     path = "/api/v1/conversations",
@@ -39,16 +68,13 @@ pub struct ConversationResponse {
 )]
 pub async fn list_conversations(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
 ) -> Result<Json<Vec<ConversationResponse>>, AppError> {
-    // Phase 0: use first user
-    let user_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM users WHERE deleted_at IS NULL LIMIT 1"
-    )
-    .fetch_one(&state.db)
-    .await?;
+    let user_id = auth::require_user(auth).await?;
 
-    let convs = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Option<String>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, user_id, project_id, title, created_at FROM conversations WHERE user_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+    let convs = sqlx::query_as::<_, ConversationRow>(
+        "SELECT id, user_id, project_id, title, created_at \
+         FROM conversations WHERE user_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC",
     )
     .bind(user_id)
     .fetch_all(&state.db)
@@ -57,13 +83,7 @@ pub async fn list_conversations(
     Ok(Json(
         convs
             .into_iter()
-            .map(|c| ConversationResponse {
-                id: c.0,
-                user_id: c.1,
-                project_id: c.2,
-                title: c.3,
-                created_at: c.4,
-            })
+            .map(ConversationRow::into_response)
             .collect(),
     ))
 }
@@ -78,16 +98,14 @@ pub async fn list_conversations(
 )]
 pub async fn create_conversation(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Json(req): Json<CreateConversationRequest>,
 ) -> Result<(axum::http::StatusCode, Json<ConversationResponse>), AppError> {
-    let user_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM users WHERE deleted_at IS NULL LIMIT 1"
-    )
-    .fetch_one(&state.db)
-    .await?;
+    let user_id = auth::require_user(auth).await?;
 
-    let conv = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Option<String>, chrono::DateTime<chrono::Utc>)>(
-        "INSERT INTO conversations (user_id, project_id, title) VALUES ($1, $2, $3) RETURNING id, user_id, project_id, title, created_at"
+    let conv = sqlx::query_as::<_, ConversationRow>(
+        "INSERT INTO conversations (user_id, project_id, title) VALUES ($1, $2, $3) \
+         RETURNING id, user_id, project_id, title, created_at",
     )
     .bind(user_id)
     .bind(req.project_id)
@@ -95,47 +113,41 @@ pub async fn create_conversation(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((
-        axum::http::StatusCode::CREATED,
-        Json(ConversationResponse {
-            id: conv.0,
-            user_id: conv.1,
-            project_id: conv.2,
-            title: conv.3,
-            created_at: conv.4,
-        }),
-    ))
+    Ok((axum::http::StatusCode::CREATED, Json(conv.into_response())))
 }
 
 pub async fn get_conversation(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ConversationResponse>, AppError> {
-    let conv = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Option<String>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, user_id, project_id, title, created_at FROM conversations WHERE id = $1 AND deleted_at IS NULL"
+    let user_id = auth::require_user(auth).await?;
+
+    let conv = sqlx::query_as::<_, ConversationRow>(
+        "SELECT id, user_id, project_id, title, created_at \
+         FROM conversations WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
     )
     .bind(id)
+    .bind(user_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Conversation not found".to_string()))?;
 
-    Ok(Json(ConversationResponse {
-        id: conv.0,
-        user_id: conv.1,
-        project_id: conv.2,
-        title: conv.3,
-        created_at: conv.4,
-    }))
+    Ok(Json(conv.into_response()))
 }
 
 pub async fn delete_conversation(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
+    let user_id = auth::require_user(auth).await?;
+
     let result = sqlx::query(
-        "UPDATE conversations SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
+        "UPDATE conversations SET deleted_at = NOW() WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
     )
     .bind(id)
+    .bind(user_id)
     .execute(&state.db)
     .await?;
 

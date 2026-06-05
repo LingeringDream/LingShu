@@ -917,12 +917,11 @@ GET    /api/v1/system/health                 — 健康检查
 GET    /api/v1/system/metrics                — Prometheus 指标占位
 ```
 
-#### 认证与用户 API
+#### 本地会话与用户 API
 
 ```
-POST   /api/v1/auth/register                 — 注册（Phase 0 占位 token）
-POST   /api/v1/auth/login                    — 登录（Phase 0 占位 token）
-GET    /api/v1/users/me                      — 当前用户信息（Phase 0 使用首个用户）
+POST   /api/v1/auth/local-session            — 获取本地默认用户会话 token
+GET    /api/v1/users/me                      — 当前本地用户信息
 PATCH  /api/v1/users/me                      — 更新当前用户信息
 ```
 

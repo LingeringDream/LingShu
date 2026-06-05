@@ -2,12 +2,12 @@ use axum::{routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/v1/users/me", get(get_me).patch(update_me))
+    Router::new().route("/api/v1/users/me", get(get_me).patch(update_me))
 }
 
 #[derive(Debug, Serialize)]
@@ -26,11 +26,13 @@ pub struct UpdateUserRequest {
 
 pub async fn get_me(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
 ) -> Result<Json<UserResponse>, AppError> {
-    // Phase 0: return first user (no auth middleware yet)
+    let user_id = auth::require_user(auth).await?;
     let user = sqlx::query_as::<_, (Uuid, String, String, String)>(
-        "SELECT id, email, display_name, role FROM users WHERE deleted_at IS NULL LIMIT 1"
+        "SELECT id, email, display_name, role FROM users WHERE id = $1 AND deleted_at IS NULL",
     )
+    .bind(user_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("No users found".to_string()))?;
@@ -45,19 +47,36 @@ pub async fn get_me(
 
 pub async fn update_me(
     axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
     Json(req): Json<UpdateUserRequest>,
 ) -> Result<Json<UserResponse>, AppError> {
-    // Phase 0: update first user
-    let user = sqlx::query_as::<_, (Uuid, String, String, String)>(
-        "UPDATE users SET display_name = COALESCE($1, display_name), preferences = COALESCE($2, preferences), updated_at = NOW()
-         WHERE id = (SELECT id FROM users WHERE deleted_at IS NULL LIMIT 1)
-         RETURNING id, email, display_name, role"
+    let user_id = auth::require_user(auth).await?;
+
+    // Fetch current values so we can PATCH correctly
+    let current = sqlx::query_as::<_, (Uuid, String, String, String, serde_json::Value)>(
+        "SELECT id, email, display_name, role, preferences \
+         FROM users WHERE id = $1 AND deleted_at IS NULL",
     )
-    .bind(&req.display_name)
-    .bind(&req.preferences)
+    .bind(user_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("No users found".to_string()))?;
+
+    let display_name = req.display_name.unwrap_or(current.2);
+    // preferences is NOT NULL DEFAULT '{}' — cannot be set to NULL,
+    // so unwrap_or works correctly (omitted = keep current).
+    let preferences = req.preferences.unwrap_or(current.4);
+
+    let user = sqlx::query_as::<_, (Uuid, String, String, String)>(
+        "UPDATE users SET display_name = $1, preferences = $2, updated_at = NOW()
+         WHERE id = $3 AND deleted_at IS NULL
+         RETURNING id, email, display_name, role",
+    )
+    .bind(&display_name)
+    .bind(&preferences)
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await?;
 
     Ok(Json(UserResponse {
         id: user.0,
