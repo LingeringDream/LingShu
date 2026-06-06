@@ -113,6 +113,19 @@ pub async fn chat(
         crate::routes::sessions::invalidate_session_cache(&state, user_id).await;
     }
 
+    // Signal: detect explicit memory-storage request
+    if crate::telemetry::detect_explicit_memory_request(&user_message) {
+        crate::telemetry::record(
+            &state.db,
+            user_id,
+            crate::telemetry::SignalEventType::MemoryExplicitRequest,
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+    }
+
     let options = ChatOptions {
         temperature: Some(settings.temperature),
         num_predict: Some(settings.max_tokens),
@@ -627,6 +640,20 @@ async fn fetch_memory_context(
 
     // Bump access metadata
     let ids: Vec<Uuid> = rows.iter().map(|(id, _, _)| *id).collect();
+
+    // Signal: memory_retrieval_hit for each memory injected into context
+    for memory_id in &ids {
+        crate::telemetry::record(
+            db,
+            user_id,
+            crate::telemetry::SignalEventType::MemoryRetrievalHit,
+            Some("memory"),
+            Some(*memory_id),
+            serde_json::json!({}),
+        )
+        .await;
+    }
+
     if let Err(error) = sqlx::query(
         "UPDATE memories SET access_count = access_count + 1, last_accessed_at = NOW() \
          WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL",

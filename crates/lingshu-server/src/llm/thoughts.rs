@@ -126,6 +126,20 @@ pub async fn generate_and_save_thoughts(
             c.requires_confirmation,
         )
         .await?;
+
+        // Signal: memory_referenced for each source memory
+        for memory_id in &c.source_memory_ids {
+            crate::telemetry::record(
+                db,
+                user_id,
+                crate::telemetry::SignalEventType::MemoryReferenced,
+                Some("memory"),
+                Some(*memory_id),
+                serde_json::json!({"source": "thought"}),
+            )
+            .await;
+        }
+
         inserted += 1;
     }
 

@@ -158,10 +158,12 @@ async fn update_thought(
 
     // Only allow specific status transitions
     let new_status = match req.status.as_deref() {
-        Some("confirmed") | Some("dismissed") => req.status.unwrap(),
+        Some("shown" | "accepted" | "dismissed" | "snoozed" | "confirmed") => {
+            req.status.as_deref().unwrap().to_string()
+        }
         Some(other) => {
             return Err(AppError::Validation(format!(
-                "Invalid status '{other}'. Allowed: confirmed, dismissed"
+                "Invalid status '{other}'. Allowed: shown, accepted, dismissed, snoozed (confirmed is an alias for accepted)"
             )))
         }
         None => return Err(AppError::BadRequest("status field is required".to_string())),
@@ -180,7 +182,7 @@ async fn update_thought(
     let current_status = current.status.as_str();
     if current_status != "pending" && current_status != "shown" {
         return Err(AppError::Validation(format!(
-            "Cannot transition thought from '{current_status}' status. Only pending or shown thoughts can be confirmed/dismissed."
+            "Cannot transition thought from '{current_status}' status. Only pending or shown thoughts can be updated."
         )));
     }
 
@@ -194,6 +196,28 @@ async fn update_thought(
     .bind(user_id)
     .fetch_one(&state.db)
     .await?;
+
+    // Signal: map status to thought lifecycle event
+    let event_type = match new_status.as_str() {
+        "shown" => crate::telemetry::SignalEventType::ThoughtShown,
+        "accepted" | "confirmed" => crate::telemetry::SignalEventType::ThoughtAccepted,
+        "dismissed" => crate::telemetry::SignalEventType::ThoughtDismissed,
+        "snoozed" => crate::telemetry::SignalEventType::ThoughtSnoozed,
+        _ => {
+            // unreachable — validated above
+            return Ok(Json(ThoughtResponse::from(thought)));
+        }
+    };
+
+    crate::telemetry::record(
+        &state.db,
+        user_id,
+        event_type,
+        Some("thought"),
+        Some(thought.id),
+        serde_json::json!({"previous_status": current_status}),
+    )
+    .await;
 
     Ok(Json(ThoughtResponse::from(thought)))
 }

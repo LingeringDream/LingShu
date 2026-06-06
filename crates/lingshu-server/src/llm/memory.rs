@@ -135,6 +135,17 @@ pub async fn save_memory(
             "Skipped duplicate memory, bumped importance"
         );
 
+        // Signal: dedup hit
+        crate::telemetry::record(
+            db,
+            user_id,
+            crate::telemetry::SignalEventType::MemoryDedupHit,
+            Some("memory"),
+            Some(existing_id),
+            serde_json::json!({"importance": importance, "memory_type": memory_type}),
+        )
+        .await;
+
         return Ok(SaveMemoryOutcome {
             memory: updated,
             created: false,
@@ -155,6 +166,17 @@ pub async fn save_memory(
     .await?;
 
     tx.commit().await?;
+
+    // Signal: new memory created
+    crate::telemetry::record(
+        db,
+        user_id,
+        crate::telemetry::SignalEventType::MemoryCreated,
+        Some("memory"),
+        Some(inserted.id),
+        serde_json::json!({"importance": importance, "memory_type": memory_type}),
+    )
+    .await;
 
     // 3. Best-effort vector upsert (outside transaction — fire-and-forget)
     // Clone everything needed by the spawned task so nothing borrows from this scope.

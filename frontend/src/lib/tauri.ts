@@ -27,7 +27,7 @@ export async function getWindowLabel(): Promise<string> {
 
   try {
     const { getCurrentWindow } = await import(
-      /* webpackIgnore: true */ '@tauri-apps/api/window'
+      '@tauri-apps/api/window'
     );
     return getCurrentWindow().label;
   } catch {
@@ -47,7 +47,7 @@ export async function invokeTauri<T>(
 
   try {
     const { invoke } = await import(
-      /* webpackIgnore: true */ '@tauri-apps/api/core'
+      '@tauri-apps/api/core'
     );
     return await invoke<T>(cmd, args);
   } catch (err) {
@@ -65,7 +65,7 @@ export async function showMainWindow(): Promise<void> {
 
   try {
     const { getAllWebviewWindows } = await import(
-      /* webpackIgnore: true */ '@tauri-apps/api/webviewWindow'
+      '@tauri-apps/api/webviewWindow'
     );
     const windows = await getAllWebviewWindows();
     const main = windows.find((w) => w.label === 'main');
