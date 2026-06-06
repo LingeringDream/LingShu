@@ -28,6 +28,8 @@ port = 8080
 ollama_url = "http://localhost:11434"
 # Set to an Ollama model installed on your machine, e.g. "<your-local-model>"
 default_model = ""
+# Ollama embedding model used for semantic memory search
+embed_model = "nomic-embed-text"
 # OpenAI-compatible cloud provider (optional; leave blank when using local Ollama)
 api_key = ""
 api_base_url = ""

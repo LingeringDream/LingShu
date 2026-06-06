@@ -148,6 +148,7 @@ LingShu loads configuration in layers. `config.toml` is loaded first, then envir
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant 连接 · connection |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama LLM 端点 · endpoint |
 | `LLM_DEFAULT_MODEL` | — | Ollama 聊天模型。设置为本机已安装的模型。· Ollama model for chat. Set this to a model installed on your machine. |
+| `LLM_EMBED_MODEL` | `nomic-embed-text` | Ollama 嵌入模型，用于语义记忆检索。· Ollama embedding model for semantic memory search. |
 | `LLM_API_KEY` | — | 云端 LLM API 密钥（Phase 1+ — 尚未使用；所有调用走 Ollama）· Cloud LLM API key (Phase 1+ — not yet used; all calls go to Ollama) |
 | `LLM_API_BASE_URL` | `https://api.openai.com/v1` | 云端 LLM 基础 URL（Phase 1+ — 尚未使用）· Cloud LLM base URL (Phase 1+ — not yet used) |
 | `SERVER_HOST` | `127.0.0.1` | 后端绑定地址 · Backend bind address for the local management interface |

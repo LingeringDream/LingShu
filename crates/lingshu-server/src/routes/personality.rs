@@ -221,7 +221,7 @@ async fn evolve_personality(
         user_id,
     )
     .await
-    .map_err(|e| AppError::Internal(e))?;
+    .map_err(AppError::Internal)?;
 
     Ok(Json(EvolvePersonalityResponse {
         created: outcome.created,

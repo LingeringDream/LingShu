@@ -140,15 +140,9 @@ pub async fn evolve_and_save_personality(
     // 6. Gate: confidence too low or no meaningful change
     if !should_create_snapshot(confidence, max_delta) {
         let reason = if confidence < MIN_CONFIDENCE {
-            format!(
-                "confidence {:.3} below threshold {MIN_CONFIDENCE}",
-                confidence
-            )
+            format!("confidence {confidence:.3} below threshold {MIN_CONFIDENCE}")
         } else {
-            format!(
-                "max trait delta {:.3} below threshold {MIN_MEANINGFUL_DELTA}",
-                max_delta
-            )
+            format!("max trait delta {max_delta:.3} below threshold {MIN_MEANINGFUL_DELTA}")
         };
         return Ok(PersonalityEvolutionOutcome {
             created: false,

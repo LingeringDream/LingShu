@@ -62,7 +62,15 @@ pub async fn chat(
     let user_message = req.message.clone();
 
     // Fetch relevant memories, active personality, and build the system prompt
-    let memory_context = fetch_memory_context(&state.db, user_id, &user_message).await;
+    let memory_context = fetch_memory_context(
+        &state.db,
+        &state.vector,
+        &state.llm,
+        &state.config.llm.embed_model,
+        user_id,
+        &user_message,
+    )
+    .await;
     let personality_values = load_active_personality(&state.db, user_id).await;
     let personality_snippet = personality_prompt(&personality_values);
     let system_prompt = build_system_prompt(&personality_snippet, &memory_context);
@@ -124,7 +132,9 @@ pub async fn chat(
     let db_clone = state.db.clone();
     let llm_clone = state.llm.clone();
     let redis_clone = state.redis.clone();
+    let vector_clone = state.vector.clone();
     let model_name = settings.model.clone();
+    let embed_model_name = state.config.llm.embed_model.clone();
     let um_clone = user_message.clone();
 
     let sse_stream = chunk_stream.then(move |result| {
@@ -133,7 +143,9 @@ pub async fn chat(
         let db = db_clone.clone();
         let llm = llm_clone.clone();
         let redis = redis_clone.clone();
+        let vector = vector_clone.clone();
         let model = model_name.clone();
+        let embed_model = embed_model_name.clone();
         let user_message = um_clone.clone();
 
         async move {
@@ -166,6 +178,8 @@ pub async fn chat(
                             db,
                             llm,
                             model,
+                            embed_model,
+                            vector,
                             user_id,
                             user_message,
                             assistant_response,
@@ -180,7 +194,17 @@ pub async fn chat(
                         acc.mark_error();
                     }
                     if mark_stream_finalized(&stream_finalized) {
-                        spawn_post_stream_tasks(db, llm, model, user_id, user_message, None, false);
+                        spawn_post_stream_tasks(
+                            db,
+                            llm,
+                            model,
+                            embed_model,
+                            vector,
+                            user_id,
+                            user_message,
+                            None,
+                            false,
+                        );
                     }
                     Ok(Event::default().data(
                         serde_json::to_string(&ChatChunk {
@@ -420,6 +444,8 @@ fn spawn_post_stream_tasks(
     db: sqlx::PgPool,
     llm: crate::llm::client::LlmClient,
     model: String,
+    embed_model: String,
+    vector: crate::state::OptionalVector,
     user_id: Uuid,
     user_message: String,
     assistant_response: Option<String>,
@@ -430,8 +456,10 @@ fn spawn_post_stream_tasks(
         let assistant_for_memory = assistant_response.unwrap_or_default();
         crate::llm::memory::extract_and_save(
             &db,
+            &vector,
             &llm,
             &model,
+            &embed_model,
             user_id,
             &user_message,
             &assistant_for_memory,
@@ -560,21 +588,36 @@ async fn load_chat_history(
 /// Fetch top-N high-importance memories to inject as chat context, and mark
 /// them as "reviewed" (bumping `access_count` / `last_accessed_at`) so the
 /// forgetting sweep sees them as freshly accessed.
-/// Phase 0: simple recency + importance query (no vector search yet).
-async fn fetch_memory_context(db: &sqlx::PgPool, user_id: Uuid, _user_message: &str) -> String {
-    let rows: Vec<(Uuid, String, String)> = match sqlx::query_as(
-        "SELECT id, memory_type, content FROM memories \
-         WHERE user_id = $1 AND deleted_at IS NULL AND importance >= 0.5 \
-         ORDER BY importance DESC, updated_at DESC LIMIT 5",
-    )
-    .bind(user_id)
-    .fetch_all(db)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::warn!(%user_id, %error, "Failed to fetch chat memory context");
-            return String::new();
+///
+/// When Qdrant is available and `user_message` is non-empty, this function
+/// performs semantic retrieval: embed the user message, search Qdrant for
+/// similar memories (user-scoped), then load those rows from PG. On any
+/// vector-path failure or when Qdrant is unavailable, it falls back to the
+/// legacy SQL ordering (`importance DESC, updated_at DESC LIMIT 5`).
+async fn fetch_memory_context(
+    db: &sqlx::PgPool,
+    vector: &Option<lingshu_vector::search::QdrantClient>,
+    llm: &crate::llm::client::LlmClient,
+    embed_model: &str,
+    user_id: Uuid,
+    user_message: &str,
+) -> String {
+    // ── Semantic path ────────────────────────────────────────────
+    let rows = if let Some(qdrant) = vector {
+        try_semantic_fetch(db, qdrant, llm, embed_model, user_id, user_message).await
+    } else {
+        None
+    };
+
+    // ── Fallback path ────────────────────────────────────────────
+    let rows = match rows {
+        Some(ids) if !ids.is_empty() => {
+            // Load the specific rows from PG, preserving Qdrant rank order
+            load_memories_by_ids(db, user_id, &ids).await
+        }
+        _ => {
+            // No semantic results — use legacy importance+recency query
+            legacy_fetch_memories(db, user_id).await
         }
     };
 
@@ -582,6 +625,7 @@ async fn fetch_memory_context(db: &sqlx::PgPool, user_id: Uuid, _user_message: &
         return String::new();
     }
 
+    // Bump access metadata
     let ids: Vec<Uuid> = rows.iter().map(|(id, _, _)| *id).collect();
     if let Err(error) = sqlx::query(
         "UPDATE memories SET access_count = access_count + 1, last_accessed_at = NOW() \
@@ -607,6 +651,94 @@ async fn fetch_memory_context(db: &sqlx::PgPool, user_id: Uuid, _user_message: &
         ctx.push_str(&format!("- [{label}] {content}\n"));
     }
     ctx
+}
+
+/// Try the semantic path: embed → Qdrant search → return `memory_id` UUIDs.
+/// Returns `None` on any failure so the caller can fall back gracefully.
+async fn try_semantic_fetch(
+    _db: &sqlx::PgPool,
+    qdrant: &lingshu_vector::search::QdrantClient,
+    llm: &crate::llm::client::LlmClient,
+    embed_model: &str,
+    user_id: Uuid,
+    user_message: &str,
+) -> Option<Vec<Uuid>> {
+    if user_message.trim().is_empty() {
+        return None;
+    }
+
+    let embedding = llm
+        .embed(embed_model, user_message)
+        .await
+        .map_err(|e| {
+            tracing::warn!(%user_id, %e, "Embedding failed, falling back to SQL memory fetch");
+        })
+        .ok()?;
+
+    let filter = crate::llm::memory::build_user_filter(user_id);
+    let results = qdrant
+        .search("memories", embedding, 20, Some(filter))
+        .await
+        .map_err(|e| {
+            tracing::warn!(%user_id, %e, "Qdrant search failed, falling back to SQL memory fetch");
+        })
+        .ok()?;
+
+    let ids = crate::llm::memory::extract_memory_ids(&results);
+    if ids.is_empty() {
+        return None; // triggers fallback
+    }
+    Some(ids)
+}
+
+/// Load memories from PG by a set of IDs, preserving the given ID order and
+/// enforcing the `user_id` / `deleted_at IS NULL` / `importance >= 0.5` gates.
+async fn load_memories_by_ids(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    ids: &[Uuid],
+) -> Vec<(Uuid, String, String)> {
+    match sqlx::query_as(
+        "SELECT id, memory_type, content FROM memories \
+         WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL AND importance >= 0.5",
+    )
+    .bind(ids)
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => {
+            // Reorder rows to match the original Qdrant rank order
+            let mut row_map: std::collections::HashMap<Uuid, (String, String)> =
+                rows.into_iter().map(|(id, mt, c)| (id, (mt, c))).collect();
+            ids.iter()
+                .filter_map(|id| row_map.remove(id).map(|(mt, c)| (*id, mt, c)))
+                .collect()
+        }
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Failed to load memories by IDs from semantic search");
+            Vec::new()
+        }
+    }
+}
+
+/// Legacy fallback: top-N memories by importance + recency.
+async fn legacy_fetch_memories(db: &sqlx::PgPool, user_id: Uuid) -> Vec<(Uuid, String, String)> {
+    match sqlx::query_as(
+        "SELECT id, memory_type, content FROM memories \
+         WHERE user_id = $1 AND deleted_at IS NULL AND importance >= 0.5 \
+         ORDER BY importance DESC, updated_at DESC LIMIT 5",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Failed to fetch chat memory context (legacy)");
+            Vec::new()
+        }
+    }
 }
 
 // ── Stream accumulator ─────────────────────────────────────────────

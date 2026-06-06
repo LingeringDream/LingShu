@@ -232,7 +232,7 @@ async fn generate_thoughts(
         user_id,
     )
     .await
-    .map_err(|e| AppError::Internal(e))?;
+    .map_err(AppError::Internal)?;
 
     Ok(Json(GenerateThoughtsResponse { created }))
 }

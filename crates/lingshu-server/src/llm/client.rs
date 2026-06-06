@@ -49,6 +49,11 @@ struct OllamaChatResponse {
     message: Option<ChatMessage>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OllamaEmbedResponse {
+    embedding: Vec<f32>,
+}
+
 // ── OpenAI-compatible types ─────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -114,6 +119,29 @@ impl LlmClient {
 
     fn is_openai(&self) -> bool {
         self.api_base_url.is_some()
+    }
+
+    // ── Embeddings ─────────────────────────────────────────────
+
+    /// Generate an embedding vector for `text` via Ollama's `/api/embeddings`.
+    /// Returns the embedding as `Vec<f32>`. This method does NOT support
+    /// OpenAI-compatible providers — local Ollama only.
+    pub async fn embed(&self, model: &str, text: &str) -> anyhow::Result<Vec<f32>> {
+        let url = format!("{}/api/embeddings", self.ollama_url);
+        let body = serde_json::json!({
+            "model": model,
+            "prompt": text,
+        });
+        let resp: OllamaEmbedResponse = self
+            .http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(resp.embedding)
     }
 
     // ── Non-streaming chat ──────────────────────────────────────

@@ -50,6 +50,8 @@ pub struct LlmConfig {
     pub ollama_url: String,
     #[serde(default = "default_model")]
     pub default_model: String,
+    #[serde(default = "default_embed_model")]
+    pub embed_model: String,
     #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]
@@ -60,6 +62,10 @@ fn default_model() -> String {
     // No default committed to the repo — set LLM_DEFAULT_MODEL in your local .env
     // or add [llm] default_model = "..." to a local config.toml (gitignored).
     String::new()
+}
+
+fn default_embed_model() -> String {
+    "nomic-embed-text".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -121,6 +127,7 @@ impl AppConfig {
                 "QDRANT_URL" => Some("qdrant.url".into()),
                 "OLLAMA_URL" => Some("llm.ollama_url".into()),
                 "LLM_DEFAULT_MODEL" => Some("llm.default_model".into()),
+                "LLM_EMBED_MODEL" => Some("llm.embed_model".into()),
                 "LLM_API_KEY" => Some("llm.api_key".into()),
                 "LLM_API_BASE_URL" => Some("llm.api_base_url".into()),
                 "SERVER_HOST" => Some("server.host".into()),
@@ -156,6 +163,7 @@ mod tests {
             ("REDIS_URL", "redis://localhost:6379"),
             ("QDRANT_URL", "http://localhost:6333"),
             ("OLLAMA_URL", "http://localhost:11434"),
+            ("LLM_EMBED_MODEL", "test-embed-model"),
             ("JWT_SECRET", "test-jwt-secret"),
             ("ENCRYPTION_KEY", "test-encryption-key"),
         ];
@@ -166,6 +174,7 @@ mod tests {
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 9090);
         assert_eq!(config.database.max_connections, 10);
+        assert_eq!(config.llm.embed_model, "test-embed-model");
         assert!(config.llm.api_key.is_none());
         assert_eq!(
             config.security.encryption_key.as_deref(),
@@ -207,5 +216,16 @@ mod tests {
 
         assert_eq!(config.jwt_secret, "test-jwt-secret");
         assert!(config.encryption_key.is_none());
+    }
+
+    #[test]
+    fn llm_config_defaults_embed_model() {
+        let config: LlmConfig = serde_json::from_value(serde_json::json!({
+            "ollama_url": "http://localhost:11434"
+        }))
+        .expect("embed_model should have a default");
+
+        assert_eq!(config.default_model, "");
+        assert_eq!(config.embed_model, "nomic-embed-text");
     }
 }

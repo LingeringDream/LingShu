@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::llm::client::{ChatMessage, LlmClient};
 use crate::llm::dedup::{is_duplicate, DEDUP_SIMILARITY_THRESHOLD};
 use crate::models::memory::Memory;
+use lingshu_vector::search::{QdrantClient, SearchResult};
 use sqlx::PgPool;
 
 /// Minimum seconds between memory extraction calls to avoid overwhelming the LLM.
@@ -62,10 +63,19 @@ async fn find_duplicate_memory(
 /// `GREATEST(importance, new)` and `updated_at` refreshed. Otherwise a new
 /// row is inserted.
 ///
+/// After a new insert, this function *best-effort* computes an embedding
+/// via `llm.embed()`, upserts a point into Qdrant, and writes `vector_id`
+/// back to the row.  When Qdrant or the embedding model is unavailable
+/// the failure is logged and the memory is still saved — the vector path
+/// is never allowed to fail the caller.
+///
 /// This is the canonical write path for memories — used by both automatic
 /// extraction and the manual `POST /api/v1/memories` endpoint.
 pub async fn save_memory(
     db: &PgPool,
+    vector: &Option<QdrantClient>,
+    llm: &LlmClient,
+    embed_model: &str,
     user_id: Uuid,
     memory_type: &str,
     content: &str,
@@ -111,17 +121,110 @@ pub async fn save_memory(
     .fetch_one(db)
     .await?;
 
+    // 3. Best-effort vector upsert
+    // Clone everything needed by the spawned task so nothing borrows from this scope.
+    if vector.is_some() {
+        let memory_id = inserted.id;
+        let content_owned = content.to_string();
+        let db_clone = db.clone();
+        let user_id_val = user_id;
+        let embed_model = embed_model.to_string();
+        let qdrant_opt: Option<QdrantClient> = vector.clone();
+        let llm_clone = llm.clone();
+
+        tokio::spawn(async move {
+            let Some(qdrant) = qdrant_opt else { return };
+            if let Err(e) = upsert_memory_vector(
+                &db_clone,
+                &qdrant,
+                &llm_clone,
+                &embed_model,
+                user_id_val,
+                memory_id,
+                &content_owned,
+            )
+            .await
+            {
+                tracing::warn!(%memory_id, %e, "Failed to upsert memory vector (non-fatal)");
+            }
+        });
+    }
+
     Ok(SaveMemoryOutcome {
         memory: inserted,
         created: true,
     })
 }
 
+/// Best-effort: embed content → upsert Qdrant point → write vector_id back to PG.
+/// Failures at any step are returned as `Err` and logged by the caller.
+async fn upsert_memory_vector(
+    db: &PgPool,
+    qdrant: &QdrantClient,
+    llm: &LlmClient,
+    embed_model: &str,
+    user_id: Uuid,
+    memory_id: Uuid,
+    content: &str,
+) -> anyhow::Result<()> {
+    // 3a. Compute embedding
+    let embedding = llm.embed(embed_model, content).await?;
+
+    // 3b. Upsert point into Qdrant
+    let payload = serde_json::json!({
+        "memory_id": memory_id.to_string(),
+        "user_id": user_id.to_string(),
+    });
+    qdrant
+        .upsert_point("memories", memory_id, embedding, payload)
+        .await?;
+
+    // 3c. Write vector_id back to PG (use memory_id as vector_id)
+    sqlx::query("UPDATE memories SET vector_id = $1 WHERE id = $2 AND user_id = $3")
+        .bind(memory_id.to_string())
+        .bind(memory_id)
+        .bind(user_id)
+        .execute(db)
+        .await?;
+
+    Ok(())
+}
+
+/// Build a Qdrant filter that restricts results to a single user.
+/// The filter matches on the `user_id` payload field.
+pub fn build_user_filter(user_id: Uuid) -> serde_json::Value {
+    serde_json::json!({
+        "must": [{
+            "key": "user_id",
+            "match": {
+                "value": user_id.to_string()
+            }
+        }]
+    })
+}
+
+/// Extract unique memory UUIDs from Qdrant search results.
+/// Invalid UUIDs are silently skipped.
+pub fn extract_memory_ids(results: &[SearchResult]) -> Vec<Uuid> {
+    let mut seen = std::collections::HashSet::new();
+    let mut ids = Vec::new();
+    for r in results {
+        if let Ok(id) = Uuid::parse_str(&r.id) {
+            if seen.insert(id) {
+                ids.push(id);
+            }
+        }
+    }
+    ids
+}
+
 /// Extract memorable facts from a user↔assistant exchange and persist high-value ones.
 pub async fn extract_and_save(
     db: &PgPool,
+    vector: &Option<QdrantClient>,
     llm: &LlmClient,
     model: &str,
+    embed_model: &str,
     user_id: Uuid,
     user_message: &str,
     assistant_response: &str,
@@ -169,7 +272,18 @@ pub async fn extract_and_save(
         if c.importance < 0.5 {
             continue; // below retention threshold
         }
-        match save_memory(db, user_id, &c.memory_type, &c.content, c.importance).await {
+        match save_memory(
+            db,
+            vector,
+            llm,
+            embed_model,
+            user_id,
+            &c.memory_type,
+            &c.content,
+            c.importance,
+        )
+        .await
+        {
             Ok(outcome) => {
                 if outcome.created {
                     saved += 1;
@@ -365,5 +479,93 @@ mod tests {
         assert!(prompt.contains("记住：VPN 是 10.0.0.1"));
         assert!(prompt.contains("JSON 数组"));
         assert!(!prompt.contains("助手回复"));
+    }
+
+    // ── Vector helper tests ────────────────────────────────────────
+
+    #[test]
+    fn user_filter_contains_user_id() {
+        let uid = Uuid::parse_str("a1b2c3d4-e5f6-7890-abcd-ef1234567890").unwrap();
+        let filter = build_user_filter(uid);
+        let expected = uid.to_string();
+        // Check the filter structure matches Qdrant's must-match format
+        assert!(
+            filter.to_string().contains(&expected),
+            "filter must contain the user_id value: {filter}"
+        );
+        assert!(
+            filter.to_string().contains("user_id"),
+            "filter must key on user_id: {filter}"
+        );
+    }
+
+    #[test]
+    fn extract_memory_ids_parses_valid_uuids() {
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let results = vec![
+            SearchResult {
+                id: id1.to_string(),
+                score: 0.9,
+                payload: None,
+            },
+            SearchResult {
+                id: id2.to_string(),
+                score: 0.8,
+                payload: None,
+            },
+        ];
+        let ids = extract_memory_ids(&results);
+        assert_eq!(ids, vec![id1, id2]);
+    }
+
+    #[test]
+    fn extract_memory_ids_deduplicates() {
+        let id = Uuid::new_v4();
+        let results = vec![
+            SearchResult {
+                id: id.to_string(),
+                score: 0.9,
+                payload: None,
+            },
+            SearchResult {
+                id: id.to_string(),
+                score: 0.7,
+                payload: None,
+            },
+        ];
+        let ids = extract_memory_ids(&results);
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], id);
+    }
+
+    #[test]
+    fn extract_memory_ids_skips_invalid_uuids() {
+        let valid = Uuid::new_v4();
+        let results = vec![
+            SearchResult {
+                id: "not-a-uuid".to_string(),
+                score: 0.9,
+                payload: None,
+            },
+            SearchResult {
+                id: valid.to_string(),
+                score: 0.8,
+                payload: None,
+            },
+            SearchResult {
+                id: "".to_string(),
+                score: 0.7,
+                payload: None,
+            },
+        ];
+        let ids = extract_memory_ids(&results);
+        assert_eq!(ids, vec![valid]);
+    }
+
+    #[test]
+    fn extract_memory_ids_empty_input() {
+        let ids = extract_memory_ids(&[]);
+        assert!(ids.is_empty());
     }
 }

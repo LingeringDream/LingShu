@@ -70,6 +70,10 @@ pub struct UpdateMemoryRequest {
 pub struct SearchParams {
     pub q: String,
     pub limit: Option<i64>,
+    /// When `true`, use semantic vector search via Qdrant instead of ILIKE
+    /// keyword matching. Falls back to ILIKE when Qdrant is unavailable.
+    #[serde(default)]
+    pub semantic: bool,
 }
 
 // ── Handler: list ──────────────────────────────────────────────────
@@ -168,6 +172,9 @@ async fn create_memory(
 
     let outcome = save_memory(
         &state.db,
+        &state.vector,
+        &state.llm,
+        &state.config.llm.embed_model,
         user_id,
         &req.memory_type,
         &req.content,
@@ -268,7 +275,8 @@ async fn delete_memory(
     path = "/api/v1/memories/search",
     params(
         ("q" = String, Query),
-        ("limit" = Option<i64>, Query)
+        ("limit" = Option<i64>, Query),
+        ("semantic" = Option<bool>, Query)
     ),
     responses((status = 200, body = Vec<MemoryResponse>))
 )]
@@ -279,22 +287,91 @@ async fn search_memories(
 ) -> Result<Json<Vec<MemoryResponse>>, AppError> {
     let user_id = auth::require_user(auth).await?;
     let limit = params.limit.unwrap_or(20).min(100);
-    let pattern = format!("%{}%", params.q);
 
-    let rows: Vec<MemoryRow> = sqlx::query_as(
-        "SELECT id, memory_type, content, importance, metadata, created_at, updated_at \
-         FROM memories WHERE user_id = $1 AND content ILIKE $2 AND deleted_at IS NULL \
-         ORDER BY importance DESC LIMIT $3",
-    )
-    .bind(user_id)
-    .bind(&pattern)
-    .bind(limit)
-    .fetch_all(&state.db)
-    .await?;
+    // ── Semantic path ──────────────────────────────────────────
+    let rows = if params.semantic {
+        try_semantic_search_memories(&state, user_id, &params.q, limit).await
+    } else {
+        None
+    };
+
+    // ── Fallback / default: ILIKE ──────────────────────────────
+    let rows = match rows {
+        Some(rows) if !rows.is_empty() => rows,
+        _ => {
+            let pattern = format!("%{}%", params.q);
+            sqlx::query_as(
+                "SELECT id, memory_type, content, importance, metadata, created_at, updated_at \
+                 FROM memories WHERE user_id = $1 AND content ILIKE $2 AND deleted_at IS NULL \
+                 ORDER BY importance DESC LIMIT $3",
+            )
+            .bind(user_id)
+            .bind(&pattern)
+            .bind(limit)
+            .fetch_all(&state.db)
+            .await?
+        }
+    };
 
     Ok(Json(
         rows.into_iter().map(MemoryRow::into_response).collect(),
     ))
+}
+
+/// Try semantic search via Qdrant. Returns `None` on any failure or when
+/// Qdrant is unavailable, so the caller falls back to ILIKE.
+async fn try_semantic_search_memories(
+    state: &AppState,
+    user_id: Uuid,
+    query: &str,
+    limit: i64,
+) -> Option<Vec<MemoryRow>> {
+    let qdrant = state.vector.as_ref()?;
+    let embed_model = &state.config.llm.embed_model;
+
+    let embedding = state
+        .llm
+        .embed(embed_model, query)
+        .await
+        .map_err(|e| {
+            tracing::warn!(%user_id, %e, "Embedding failed for memory search, falling back to ILIKE");
+        })
+        .ok()?;
+
+    let filter = crate::llm::memory::build_user_filter(user_id);
+    let results = qdrant
+        .search("memories", embedding, limit as u32, Some(filter))
+        .await
+        .map_err(|e| {
+            tracing::warn!(%user_id, %e, "Qdrant search failed for memory search, falling back to ILIKE");
+        })
+        .ok()?;
+
+    let ids = crate::llm::memory::extract_memory_ids(&results);
+    if ids.is_empty() {
+        return None;
+    }
+
+    // Load from PG and preserve Qdrant rank order
+    let rows: Vec<MemoryRow> = sqlx::query_as(
+        "SELECT id, memory_type, content, importance, metadata, created_at, updated_at \
+         FROM memories WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(&ids)
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| {
+        tracing::warn!(%user_id, %e, "Failed to load semantic search results from PG");
+    })
+    .ok()?;
+
+    // Reorder to match Qdrant rank
+    let mut row_map: std::collections::HashMap<Uuid, MemoryRow> =
+        rows.into_iter().map(|r: MemoryRow| (r.id, r)).collect();
+    let ordered: Vec<MemoryRow> = ids.iter().filter_map(|id| row_map.remove(id)).collect();
+
+    Some(ordered)
 }
 
 // ── FromRow helper ─────────────────────────────────────────────────

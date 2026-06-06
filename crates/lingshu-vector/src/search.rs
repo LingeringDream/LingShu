@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Qdrant vector search client
+#[derive(Clone)]
 pub struct QdrantClient {
     base_url: String,
     http: reqwest::Client,
@@ -12,6 +13,15 @@ impl QdrantClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             http: reqwest::Client::new(),
+        }
+    }
+
+    /// Create a QdrantClient that uses a pre-configured HTTP client (shared
+    /// connection pool, timeouts, etc.).
+    pub fn with_client(base_url: &str, http: reqwest::Client) -> Self {
+        Self {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            http,
         }
     }
 
