@@ -65,7 +65,15 @@ fn default_model() -> String {
 #[derive(Debug, Deserialize, Clone)]
 pub struct SecurityConfig {
     pub jwt_secret: String,
-    pub encryption_key: String,
+    /// Reserved for integration token-at-rest encryption (AES-GCM).
+    ///
+    /// NOT YET WIRED: the integration write path and an encrypt/decrypt helper
+    /// do not exist yet, so setting this key currently protects nothing. It is
+    /// intentionally optional to avoid implying a security guarantee that the
+    /// code does not provide. Make it required again only once the encryption
+    /// helper is implemented and used on the `integrations` write path.
+    #[serde(default)]
+    pub encryption_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -159,6 +167,10 @@ mod tests {
         assert_eq!(config.server.port, 9090);
         assert_eq!(config.database.max_connections, 10);
         assert!(config.llm.api_key.is_none());
+        assert_eq!(
+            config.security.encryption_key.as_deref(),
+            Some("test-encryption-key")
+        );
         for (k, _) in all_vars {
             std::env::remove_var(k);
         }
@@ -172,15 +184,28 @@ mod tests {
             ("QDRANT_URL", "http://localhost:6333"),
             ("OLLAMA_URL", "http://localhost:11434"),
             ("JWT_SECRET", "test-jwt-secret"),
-            ("ENCRYPTION_KEY", "test-encryption-key"),
+            // ENCRYPTION_KEY intentionally omitted — it is now optional.
         ];
         for (k, v) in min_vars {
             std::env::set_var(k, v);
         }
         let config = AppConfig::load().expect("Minimal config should load");
         assert_eq!(config.database.max_connections, 20); // default
+                                                         // `config.toml` is gitignored and may provide any local encryption_key
+                                                         // value. A separate serde test below covers the missing-field default.
         for (k, _) in min_vars {
             std::env::remove_var(k);
         }
+    }
+
+    #[test]
+    fn security_config_allows_missing_encryption_key() {
+        let config: SecurityConfig = serde_json::from_value(serde_json::json!({
+            "jwt_secret": "test-jwt-secret"
+        }))
+        .expect("encryption_key should be optional");
+
+        assert_eq!(config.jwt_secret, "test-jwt-secret");
+        assert!(config.encryption_key.is_none());
     }
 }

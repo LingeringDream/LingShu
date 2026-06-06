@@ -33,9 +33,12 @@ api_key = ""
 api_base_url = ""
 
 [security]
-# Change these for any non-local deployment
+# Change this for any non-local deployment
 jwt_secret = "change-me-dev-jwt-secret"
-encryption_key = "change-me-dev-encryption-key"
+# encryption_key is OPTIONAL and currently RESERVED — integration token
+# encryption is not yet implemented, so this key does not protect anything yet.
+# Leave it unset until the encryption helper lands.
+# encryption_key = "change-me-dev-encryption-key"
 
 [cors]
 # Allowed origins for browser requests

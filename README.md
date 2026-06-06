@@ -153,7 +153,7 @@ LingShu loads configuration in layers. `config.toml` is loaded first, then envir
 | `SERVER_HOST` | `127.0.0.1` | 后端绑定地址 · Backend bind address for the local management interface |
 | `SERVER_PORT` | `8080` | 后端监听端口 · Backend listen port |
 | `JWT_SECRET` | — | JWT 签名密钥（生产环境请更换）· JWT signing secret (change in production) |
-| `ENCRYPTION_KEY` | — | 64 位十六进制加密密钥 · 64-char hex key for encrypted fields |
+| `ENCRYPTION_KEY` | — | 可选预留字段；集成 token 加密尚未接入 · Optional reserved field; token encryption is not wired yet |
 | `RUST_LOG` | `info,lingshu_server=debug` | 日志级别 · Logging verbosity |
 
 ## 项目结构 · Project Structure
