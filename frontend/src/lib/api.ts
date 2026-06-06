@@ -47,6 +47,27 @@ interface ApiFetchInit {
   body?: string;
 }
 
+/** Payload shape for POST /api/v1/signals. */
+export interface SignalPayload {
+  event_type: string;
+  entity_type?: string;
+  entity_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Fire-and-forget signal ingestion. Never throws. */
+export async function postSignal(payload: SignalPayload): Promise<void> {
+  try {
+    await apiFetch('/api/v1/signals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // best-effort only
+  }
+}
+
 export async function apiFetch(input: string, init: ApiFetchInit = {}) {
   const headers = { ...(init.headers ?? {}) };
   const session = await ensureLocalSession();

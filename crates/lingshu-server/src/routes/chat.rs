@@ -71,9 +71,14 @@ pub async fn chat(
         &user_message,
     )
     .await;
+    let style_exemplar_snippet = load_style_exemplar_snippet(&state.db, user_id).await;
     let personality_values = load_active_personality(&state.db, user_id).await;
     let personality_snippet = personality_prompt(&personality_values);
-    let system_prompt = build_system_prompt(&personality_snippet, &memory_context);
+    let system_prompt = build_system_prompt(
+        &personality_snippet,
+        &memory_context,
+        &style_exemplar_snippet,
+    );
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
         content: system_prompt,
@@ -178,15 +183,17 @@ pub async fn chat(
                             .lock()
                             .ok()
                             .and_then(|acc| acc.finalize());
-                        let mut assistant_persisted = false;
-                        if let (Some(sid), Some(content)) =
+                        let assistant_message_id: Option<Uuid> = if let (Some(sid), Some(content)) =
                             (sid_for_stream, assistant_response.as_ref())
                         {
-                            assistant_persisted = persist_assistant_message(
+                            persist_assistant_message(
                                 &db, &redis, sid, user_id, content, &model,
                             )
-                            .await;
-                        }
+                            .await
+                        } else {
+                            None
+                        };
+                        let assistant_persisted = assistant_message_id.is_some();
                         spawn_post_stream_tasks(
                             db,
                             llm,
@@ -198,6 +205,16 @@ pub async fn chat(
                             assistant_response,
                             assistant_persisted,
                         );
+                        // Emit the final chunk with the persisted message id so the
+                        // frontend can anchor feedback to this specific message.
+                        return Ok(Event::default().data(
+                            serde_json::to_string(&ChatChunk {
+                                content: String::new(),
+                                done: true,
+                                assistant_message_id,
+                            })
+                            .unwrap_or_default(),
+                        ));
                     }
 
                     event
@@ -223,6 +240,7 @@ pub async fn chat(
                         serde_json::to_string(&ChatChunk {
                             content: format!("[stream error: {e}]"),
                             done: true,
+                            assistant_message_id: None,
                         })
                         .unwrap_or_default(),
                     ))
@@ -237,10 +255,15 @@ pub async fn chat(
 // ── System prompt ────────────────────────────────────────────────────
 
 /// Build the system prompt with identity, personality, capabilities,
-/// memory context, and safety rules. Personality snippet is always
-/// included (default values when no active snapshot exists); memory
-/// context is only appended when non-empty.
-fn build_system_prompt(personality_snippet: &str, memory_context: &str) -> String {
+/// memory context, safety rules, and optional style exemplars.
+/// Personality snippet is always included (default values when no active
+/// snapshot exists); memory context and style exemplars are only appended
+/// when non-empty.
+fn build_system_prompt(
+    personality_snippet: &str,
+    memory_context: &str,
+    style_exemplar_snippet: &str,
+) -> String {
     let base = r#"你是灵枢（LingShu），一个运行在 macOS 桌面上的 AI 个人助理。
 
 ## 身份
@@ -290,13 +313,19 @@ fn build_system_prompt(personality_snippet: &str, memory_context: &str) -> Strin
         ));
     }
 
+    if !style_exemplar_snippet.is_empty() {
+        parts.push(style_exemplar_snippet.to_string());
+    }
+
     parts.join("\n\n")
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
 
 /// Persist an assistant message to the database, bump session metadata,
-/// and invalidate the cached session list. Errors are logged only.
+/// and invalidate the cached session list. Returns the inserted message's
+/// UUID so the frontend can attach it to feedback signals.
+/// Errors are logged and return `None`.
 async fn persist_assistant_message(
     db: &sqlx::PgPool,
     redis: &crate::state::OptionalRedis,
@@ -304,20 +333,24 @@ async fn persist_assistant_message(
     user_id: Uuid,
     content: &str,
     model: &str,
-) -> bool {
-    if let Err(e) = sqlx::query(
+) -> Option<Uuid> {
+    let row: (Uuid,) = match sqlx::query_as(
         "INSERT INTO messages (conversation_id, role, content, model_id) \
-         VALUES ($1, 'assistant', $2, $3)",
+         VALUES ($1, 'assistant', $2, $3) \
+         RETURNING id",
     )
     .bind(conversation_id)
     .bind(content)
     .bind(model)
-    .execute(db)
+    .fetch_one(db)
     .await
     {
-        tracing::warn!(%conversation_id, %e, "Failed to persist assistant message");
-        return false;
-    }
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(%conversation_id, %e, "Failed to persist assistant message");
+            return None;
+        }
+    };
 
     // Bump updated_at only for the owning active conversation.
     if let Err(e) = sqlx::query(
@@ -335,7 +368,7 @@ async fn persist_assistant_message(
     // Invalidate cached session list
     crate::cache::del(redis, &crate::cache::chat_sessions_cache_key(user_id)).await;
 
-    true
+    Some(row.0)
 }
 
 fn mark_stream_finalized(finalized: &Arc<Mutex<bool>>) -> bool {
@@ -563,6 +596,80 @@ fn spawn_post_stream_tasks(
             run_forgetting_sweep(&db, user_id).await;
         }
     });
+}
+
+/// Load recent style exemplars from user feedback signals.
+///
+/// Queries `reply_thumb_up` events (positive examples) and `reply_style_tag`
+/// events (user-expressed preferences like "too_long"), joins with the
+/// `messages` table via `entity_id` to get the assistant response text,
+/// and builds a prompt snippet via [`style_exemplar_prompt`].
+///
+/// Best-effort: failures are logged only and an empty string is returned.
+async fn load_style_exemplar_snippet(db: &sqlx::PgPool, user_id: Uuid) -> String {
+    use crate::llm::prompts::{style_exemplar_prompt, StyleExemplar};
+
+    // Load recent thumb-up exemplars with message content.
+    // LIMIT 5 → style_exemplar_prompt caps at 3.
+    let liked: Vec<(Option<String>, String)> = match sqlx::query_as(
+        "SELECT se.metadata->>'tag' AS tag, m.content \
+         FROM signal_events se \
+         JOIN messages m ON m.id = se.entity_id \
+         WHERE se.user_id = $1 \
+           AND se.event_type = 'reply_thumb_up' \
+           AND se.entity_type = 'message' \
+           AND se.entity_id IS NOT NULL \
+         ORDER BY se.created_at DESC \
+         LIMIT 5",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(%user_id, %e, "Failed to load style exemplars");
+            return String::new();
+        }
+    };
+
+    // Load recent style tags
+    let tags: Vec<Option<String>> = match sqlx::query_scalar(
+        "SELECT se.metadata->>'tag' \
+         FROM signal_events se \
+         WHERE se.user_id = $1 \
+           AND se.event_type = 'reply_style_tag' \
+         ORDER BY se.created_at DESC \
+         LIMIT 10",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(%user_id, %e, "Failed to load style tags for exemplars");
+            Vec::new()
+        }
+    };
+
+    let mut exemplars: Vec<StyleExemplar> = liked
+        .into_iter()
+        .map(|(tag, content)| StyleExemplar {
+            content,
+            style_tag: tag,
+        })
+        .collect();
+
+    // Append pure style tags (may duplicate, but aggregation in prompt handles this)
+    for tag in tags.into_iter().flatten() {
+        exemplars.push(StyleExemplar {
+            content: String::new(),
+            style_tag: Some(tag),
+        });
+    }
+
+    style_exemplar_prompt(&exemplars)
 }
 
 /// Load the active personality snapshot for a user and convert to
@@ -852,7 +959,7 @@ mod tests {
     #[test]
     fn build_system_prompt_includes_personality_snippet() {
         let snippet = "## 当前人格参数\n测试人格";
-        let prompt = build_system_prompt(snippet, "");
+        let prompt = build_system_prompt(snippet, "", "");
         assert!(
             prompt.contains("当前人格参数"),
             "System prompt should include personality snippet. Got:\n{prompt}"
@@ -866,7 +973,7 @@ mod tests {
     #[test]
     fn build_system_prompt_skips_memory_when_empty() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "");
+        let prompt = build_system_prompt(snippet, "", "");
         assert!(
             !prompt.contains("用户档案与记忆"),
             "System prompt should NOT include memory section when memory is empty"
@@ -877,7 +984,7 @@ mod tests {
     fn build_system_prompt_includes_memory_when_present() {
         let snippet = "## 当前人格参数\n- 直接度：中";
         let memories = "- [偏好] 喜欢安静的环境\n- [事实] 住在北京";
-        let prompt = build_system_prompt(snippet, memories);
+        let prompt = build_system_prompt(snippet, memories, "");
         assert!(
             prompt.contains("用户档案与记忆"),
             "System prompt should include memory section when memories exist"
@@ -902,7 +1009,7 @@ mod tests {
     #[test]
     fn build_system_prompt_contains_base_identity() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "");
+        let prompt = build_system_prompt(snippet, "", "");
         assert!(prompt.contains("灵枢"));
         assert!(prompt.contains("LingShu"));
         assert!(prompt.contains("权限边界"));

@@ -208,6 +208,95 @@ impl Default for PersonalityValues {
     }
 }
 
+// ── Style Exemplar Injection ──────────────────────────────────────────
+
+/// A style exemplar extracted from user feedback — a previously-liked
+/// assistant response (or one tagged with a style preference).
+#[derive(Debug, Clone)]
+pub struct StyleExemplar {
+    /// A snippet of the assistant response the user liked/tagged.
+    pub content: String,
+    /// Optional style tag: `"too_long"`, `"too_short"`, `"too_formal"`.
+    pub style_tag: Option<String>,
+}
+
+/// Maximum number of style exemplars injected into the system prompt.
+const MAX_EXEMPLARS: usize = 3;
+
+/// Maximum character length of a single exemplar snippet.
+const MAX_EXEMPLAR_LEN: usize = 200;
+
+/// Build a system-prompt snippet from a list of [`StyleExemplar`]s.
+///
+/// - At most [`MAX_EXEMPLARS`] exemplars are included.
+/// - Each exemplar is truncated to [`MAX_EXEMPLAR_LEN`] characters.
+/// - `style_tag` entries are aggregated into a one-line summary
+///   (e.g. "用户曾反馈:偏好更简洁的回复").
+/// - Returns an empty string when the input list is empty.
+///
+/// This function is pure and side-effect free so it can be unit tested
+/// without any database or I/O.
+pub fn style_exemplar_prompt(exemplars: &[StyleExemplar]) -> String {
+    if exemplars.is_empty() {
+        return String::new();
+    }
+
+    let mut lines: Vec<String> = Vec::with_capacity(5);
+
+    // Aggregate style tags into a summary sentence
+    let tags: Vec<&str> = exemplars
+        .iter()
+        .filter_map(|e| e.style_tag.as_deref())
+        .collect();
+
+    if !tags.is_empty() {
+        let mut tag_summary = Vec::new();
+        if tags.contains(&"too_long") {
+            tag_summary.push("更简洁");
+        }
+        if tags.contains(&"too_short") {
+            tag_summary.push("更详细");
+        }
+        if tags.contains(&"too_formal") {
+            tag_summary.push("更口语化");
+        }
+        if !tag_summary.is_empty() {
+            lines.push(format!(
+                "用户曾反馈：偏好{}的回复。",
+                tag_summary.join("、")
+            ));
+        }
+    }
+
+    // Thumb-up exemplars (positive examples)
+    let liked: Vec<&StyleExemplar> = exemplars
+        .iter()
+        .filter(|e| e.style_tag.is_none() && !e.content.is_empty())
+        .take(MAX_EXEMPLARS)
+        .collect();
+
+    if !liked.is_empty() {
+        lines.push("以下是用户曾点赞的回复风格示例（请参考其详略度与语气，但不要复述内容）：".to_string());
+        for (i, ex) in liked.iter().enumerate() {
+            let snippet = if ex.content.chars().count() > MAX_EXEMPLAR_LEN {
+                let truncated: String = ex.content.chars().take(MAX_EXEMPLAR_LEN).collect();
+                format!("{truncated}…")
+            } else {
+                ex.content.clone()
+            };
+            lines.push(format!("  {}. {}", i + 1, snippet));
+        }
+    }
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    // Prepend a header when we have content
+    lines.insert(0, "## 风格参考".to_string());
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,6 +340,92 @@ mod tests {
         };
         let prompt = personality_prompt(&values);
         assert!(prompt.contains("直截了当"));
+    }
+
+    // ── style_exemplar_prompt ─────────────────────────────────────
+
+    #[test]
+    fn exemplar_empty_input_returns_empty_string() {
+        let prompt = style_exemplar_prompt(&[]);
+        assert!(prompt.is_empty());
+    }
+
+    #[test]
+    fn exemplar_single_liked() {
+        let exemplars = [StyleExemplar {
+            content: "好的，我来帮你梳理一下这个问题的几个关键点。".into(),
+            style_tag: None,
+        }];
+        let prompt = style_exemplar_prompt(&exemplars);
+        assert!(prompt.contains("风格参考"));
+        assert!(prompt.contains("点赞"));
+        assert!(prompt.contains("关键点"));
+    }
+
+    #[test]
+    fn exemplar_truncates_at_3() {
+        let exemplars: Vec<_> = (0..6)
+            .map(|i| StyleExemplar {
+                content: format!("回复内容 {}", i),
+                style_tag: None,
+            })
+            .collect();
+        let prompt = style_exemplar_prompt(&exemplars);
+        // Count numbered items (1./2./3.) — should have max 3
+        let count = prompt.matches("  ").count();
+        assert!(count <= 6, "at most 3 exemplar entries (but found more)");
+    }
+
+    #[test]
+    fn exemplar_long_content_truncated() {
+        let long = "a".repeat(300);
+        let exemplars = [StyleExemplar {
+            content: long,
+            style_tag: None,
+        }];
+        let prompt = style_exemplar_prompt(&exemplars);
+        // Truncated → ends with …
+        assert!(prompt.contains('…'), "long content should be truncated with ellipsis");
+        // Should not contain the full 300 chars
+        let after_ellipsis = prompt.split('…').nth(1).unwrap_or("");
+        assert!(after_ellipsis.trim().is_empty(), "nothing after truncation ellipsis");
+    }
+
+    #[test]
+    fn exemplar_style_tag_aggregation() {
+        let exemplars = [
+            StyleExemplar {
+                content: String::new(),
+                style_tag: Some("too_long".into()),
+            },
+            StyleExemplar {
+                content: String::new(),
+                style_tag: Some("too_formal".into()),
+            },
+        ];
+        let prompt = style_exemplar_prompt(&exemplars);
+        assert!(prompt.contains("更简洁"));
+        assert!(prompt.contains("更口语化"));
+        // No liked exemplars (empty content), just the style summary
+        assert!(!prompt.contains("点赞"), "empty-content exemplars should not appear in liked list");
+    }
+
+    #[test]
+    fn exemplar_mixed_tags_and_likes() {
+        let exemplars = [
+            StyleExemplar {
+                content: "这是一条被点赞的回复。".into(),
+                style_tag: None,
+            },
+            StyleExemplar {
+                content: String::new(),
+                style_tag: Some("too_short".into()),
+            },
+        ];
+        let prompt = style_exemplar_prompt(&exemplars);
+        assert!(prompt.contains("更详细"));
+        assert!(prompt.contains("点赞"));
+        assert!(prompt.contains("被点赞的回复"));
     }
 
     #[test]

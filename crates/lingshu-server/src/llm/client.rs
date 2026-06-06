@@ -31,6 +31,12 @@ pub struct ChatOptions {
 pub struct ChatChunk {
     pub content: String,
     pub done: bool,
+    /// The database id of the persisted assistant message, set only on the
+    /// final chunk after the message has been written to the `messages` table.
+    /// `None` when the stream ended without a valid assistant response,
+    /// when the session_id was not provided, or when persistence failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_message_id: Option<uuid::Uuid>,
 }
 
 // ── Ollama-specific types ───────────────────────────────────────────
@@ -342,6 +348,7 @@ fn parse_byte_stream(
                             Ok(maybe.unwrap_or(ChatChunk {
                                 content: String::new(),
                                 done: true,
+                                assistant_message_id: None,
                             })),
                             (stream, bytes::BytesMut::new(), true),
                         ));
@@ -350,6 +357,7 @@ fn parse_byte_stream(
                         Ok(ChatChunk {
                             content: String::new(),
                             done: true,
+                            assistant_message_id: None,
                         }),
                         (stream, buf, true),
                     ));
@@ -390,6 +398,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
         return Some(ChatChunk {
             content,
             done: true,
+            assistant_message_id: None,
         });
     }
     let content = parsed.message?.content;
@@ -399,6 +408,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
     Some(ChatChunk {
         content,
         done: false,
+        assistant_message_id: None,
     })
 }
 
@@ -413,6 +423,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
         return Some(ChatChunk {
             content: String::new(),
             done: true,
+            assistant_message_id: None,
         });
     }
     let json_str = line.strip_prefix("data: ")?;
@@ -423,7 +434,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
     if content.is_empty() && !done {
         return None;
     }
-    Some(ChatChunk { content, done })
+    Some(ChatChunk { content, done, assistant_message_id: None })
 }
 
 #[cfg(test)]

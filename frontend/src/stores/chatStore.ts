@@ -121,8 +121,17 @@ export const useChatStore = create<ChatState>()(
                       }));
                     }
                     if (data.done) {
-                      // Streaming complete
-                      set({ isLoading: false, streamingId: null });
+                      // Streaming complete — capture the backend message id for feedback
+                      const dbId: string | undefined = data.assistant_message_id;
+                      set((state) => ({
+                        isLoading: false,
+                        streamingId: null,
+                        messages: state.messages.map((m) =>
+                          m.id === assistantId
+                            ? { ...m, dbId }
+                            : m,
+                        ),
+                      }));
                       return;
                     }
                   } catch {
