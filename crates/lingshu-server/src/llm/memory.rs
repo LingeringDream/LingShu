@@ -124,7 +124,7 @@ pub async fn extract_and_save(
     model: &str,
     user_id: Uuid,
     user_message: &str,
-    _assistant_response: &str, // reserved for Phase 2 when streaming response is collected
+    assistant_response: &str,
 ) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -141,42 +141,7 @@ pub async fn extract_and_save(
         return;
     }
 
-    // For Phase 0: extract facts from the user message only (avoids a second LLM call).
-    // Phase 2+ will include the full assistant response for richer memory candidates.
-    let prompt = format!(
-        r###"你是 灵枢（LingShu）的记忆抽取系统。请从用户最新一条消息中提取值得长期记住的信息。
-
-## 你应该记住什么
-- **偏好 (preference)**：用户明确或隐含表达的习惯、喜好、厌恶。例如：「我习惯早上开会」「我不喜欢用飞书」「我偏好简洁的 UI」
-- **事实 (fact)**：用户透露的客观信息。例如：「我的团队有 5 个人」「我们用的是 Rust + React 技术栈」「公司 VPN 地址是 xxx」
-- **目标 (goal)**：用户提到的工作/生活目标或计划。例如：「这个季度要上线用户系统」「我计划年底前学会 SwiftUI」
-- **上下文 (context)**：用户的工作场景、所处环境、角色身份。例如：「我最近在负责前端重构项目」「我是 iOS 团队的 PM」
-
-## 不重要的事（跳过）
-- 闲聊、问候、感谢（「谢谢」「好的」「明白了」）
-- 一次性请求（「帮我查一下天气」）
-- 纯技术问答（「Rust 的 borrow checker 怎么用」）
-- 对助手行为的临场反馈（「回复太长了，短一点」）
-
-## 重要性评分指导
-- 0.9-1.0：用户明确说「记住这个」或「很重要」，或涉及核心身份认同
-- 0.7-0.8：反复出现、与长期目标/偏好相关、用户主动分享的个人信息
-- 0.5-0.6：一次性但有参考价值的信息
-- 0.0-0.4：不值得长期存储，跳过
-
-## 去重提醒
-如果用户说的内容与已有记忆高度重叠，降低 importance 或直接跳过。不要为同一事实创建多条重复记忆。
-
-## 输出格式
-严格返回 JSON 数组。每条对象包含：content（记忆内容，用中文概括）、importance（0.0-1.0）、memory_type（preference | fact | goal | context）。
-
-如果消息中没有任何值得记住的内容，返回 []。
-
-用户消息：{user_message}
-
-JSON 数组："###,
-        user_message = user_message
-    );
+    let prompt = build_memory_extraction_prompt(user_message, assistant_response);
 
     let messages = vec![ChatMessage {
         role: "user".to_string(),
@@ -217,6 +182,58 @@ JSON 数组："###,
     if saved > 0 {
         tracing::info!("Saved {} new memory candidates from chat", saved);
     }
+}
+
+/// Build the memory extraction prompt.
+///
+/// When `assistant_response` is non-empty it is included as disambiguation
+/// context only — the LLM is instructed NOT to treat assistant statements
+/// as user facts.  When empty the prompt degrades gracefully to user-only mode.
+pub fn build_memory_extraction_prompt(user_message: &str, assistant_response: &str) -> String {
+    let base = r###"你是 灵枢（LingShu）的记忆抽取系统。请从本轮用户-助手对话中提取值得长期记住的用户信息。
+
+## 你应该记住什么
+- **偏好 (preference)**：用户明确或隐含表达的习惯、喜好、厌恶。例如：「我习惯早上开会」「我不喜欢用飞书」「我偏好简洁的 UI」
+- **事实 (fact)**：用户透露的客观信息。例如：「我的团队有 5 个人」「我们用的是 Rust + React 技术栈」「公司 VPN 地址是 xxx」
+- **目标 (goal)**：用户提到的工作/生活目标或计划。例如：「这个季度要上线用户系统」「我计划年底前学会 SwiftUI」
+- **上下文 (context)**：用户的工作场景、所处环境、角色身份。例如：「我最近在负责前端重构项目」「我是 iOS 团队的 PM」
+
+## 不重要的事（跳过）
+- 闲聊、问候、感谢（「谢谢」「好的」「明白了」）
+- 一次性请求（「帮我查一下天气」）
+- 纯技术问答（「Rust 的 borrow checker 怎么用」）
+- 对助手行为的临场反馈（「回复太长了，短一点」）
+- 助手自身的建议、推测、总结或行动计划（这些不是用户事实）
+
+## 重要性评分指导
+- 0.9-1.0：用户明确说「记住这个」或「很重要」，或涉及核心身份认同
+- 0.7-0.8：反复出现、与长期目标/偏好相关、用户主动分享的个人信息
+- 0.5-0.6：一次性但有参考价值的信息
+- 0.0-0.4：不值得长期存储，跳过
+
+## 去重提醒
+如果用户说的内容与已有记忆高度重叠，降低 importance 或直接跳过。不要为同一事实创建多条重复记忆。
+
+## 输出格式
+严格返回 JSON 数组。每条对象包含：content（记忆内容，用中文概括）、importance（0.0-1.0）、memory_type（preference | fact | goal | context）。
+
+如果消息中没有任何值得记住的内容，返回 []。
+
+## 用户消息（主要事实来源）
+{user_message}"###;
+
+    let mut prompt = base.replace("{user_message}", user_message);
+
+    if !assistant_response.trim().is_empty() {
+        prompt.push_str("\n\n## 助手回复（仅作上下文，不作为事实来源）\n");
+        prompt.push_str("以下助手的回复只能用于消歧和理解对话上下文。");
+        prompt.push_str("不要把助手提出的建议、做出的推测、给出的总结或行动计划保存为用户事实。");
+        prompt.push_str("只有用户本人明确表达或确认的信息才可以被记为记忆。\n\n");
+        prompt.push_str(assistant_response);
+    }
+
+    prompt.push_str("\n\nJSON 数组：");
+    prompt
 }
 
 /// Parse the LLM response for a JSON array of memory candidates.
@@ -272,5 +289,81 @@ mod tests {
         assert!(should_extract_memory(&mut last_extractions, user_a, 100));
         assert!(!should_extract_memory(&mut last_extractions, user_a, 120));
         assert!(should_extract_memory(&mut last_extractions, user_b, 120));
+    }
+
+    // ── Prompt tests ──────────────────────────────────────────────
+
+    #[test]
+    fn prompt_contains_assistant_section_when_non_empty() {
+        let prompt = build_memory_extraction_prompt("我喜欢 Rust", "Rust 确实很适合系统编程！");
+        assert!(
+            prompt.contains("助手回复"),
+            "prompt should include assistant section when response is non-empty"
+        );
+        assert!(
+            prompt.contains("Rust 确实很适合系统编程"),
+            "prompt should include the assistant text"
+        );
+    }
+
+    #[test]
+    fn prompt_omits_assistant_section_when_empty() {
+        let prompt = build_memory_extraction_prompt("我喜欢 Rust", "");
+        assert!(
+            !prompt.contains("助手回复"),
+            "prompt should NOT include assistant section when response is empty"
+        );
+    }
+
+    #[test]
+    fn prompt_omits_assistant_section_when_whitespace_only() {
+        let prompt = build_memory_extraction_prompt("我喜欢 Rust", "   \n  ");
+        assert!(
+            !prompt.contains("助手回复"),
+            "prompt should treat whitespace-only response as empty"
+        );
+    }
+
+    #[test]
+    fn prompt_warns_assistant_is_not_fact_source() {
+        let prompt = build_memory_extraction_prompt("我喜欢 Rust", "好的，Rust 很不错");
+        assert!(
+            prompt.contains("不作为事实来源"),
+            "prompt must state assistant reply is not a fact source"
+        );
+        assert!(
+            prompt.contains("不要把助手提出的建议"),
+            "prompt must warn against treating assistant as fact source"
+        );
+    }
+
+    #[test]
+    fn prompt_contains_user_message() {
+        let prompt = build_memory_extraction_prompt("我的团队有5个人", "收到，已记录");
+        assert!(prompt.contains("我的团队有5个人"));
+        assert!(prompt.contains("主要事实来源"));
+    }
+
+    #[test]
+    fn prompt_requires_json_array_output() {
+        let prompt = build_memory_extraction_prompt("hello", "world");
+        assert!(
+            prompt.contains("JSON 数组"),
+            "prompt must require JSON array output format"
+        );
+        assert!(
+            prompt.contains("content")
+                && prompt.contains("importance")
+                && prompt.contains("memory_type"),
+            "prompt must specify output fields"
+        );
+    }
+
+    #[test]
+    fn prompt_degraded_to_user_only_is_still_valid() {
+        let prompt = build_memory_extraction_prompt("记住：VPN 是 10.0.0.1", "");
+        assert!(prompt.contains("记住：VPN 是 10.0.0.1"));
+        assert!(prompt.contains("JSON 数组"));
+        assert!(!prompt.contains("助手回复"));
     }
 }
