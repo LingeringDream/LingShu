@@ -5,10 +5,13 @@
 //! active [`PersonalitySnapshot`] only when the LLM is sufficiently confident
 //! and at least one trait shifts by a meaningful amount.
 //!
-//! This is a *manual-trigger* engine in Phase 1 — no background worker
-//! or automatic trigger from chat yet.
+//! This engine can be manually triggered through the personality route, and
+//! the chat post-stream path may trigger it automatically behind a per-user
+//! cooldown.
 
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
 use crate::llm::client::{ChatMessage, LlmClient};
@@ -25,6 +28,47 @@ const MAX_TRAIT_DELTA: f32 = 0.10;
 
 /// Minimum absolute delta on any trait to consider the round meaningful.
 const MIN_MEANINGFUL_DELTA: f32 = 0.03;
+
+/// Minimum seconds between automatic personality evolution triggers.
+/// Manual `POST /api/v1/personality/evolve` bypasses this cooldown.
+const PERSONALITY_EVOLUTION_COOLDOWN_SECS: u64 = 24 * 60 * 60; // 24 hours
+
+// ── Cooldown (auto-trigger only) ──────────────────────────────────
+
+static LAST_EVOLUTIONS: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
+
+/// Check whether the per-user cooldown allows an automatic evolution
+/// trigger. Used by the chat post-stream path; the manual endpoint
+/// (`POST /api/v1/personality/evolve`) does **not** call this.
+pub fn should_evolve_personality(user_id: Uuid) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut map = last_evolutions()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    should_evolve_personality_at(&mut map, user_id, now)
+}
+
+/// Pure helper — testable without real system clock.
+pub fn should_evolve_personality_at(
+    last: &mut HashMap<Uuid, u64>,
+    user_id: Uuid,
+    now: u64,
+) -> bool {
+    if let Some(prev) = last.get(&user_id) {
+        if now.saturating_sub(*prev) < PERSONALITY_EVOLUTION_COOLDOWN_SECS {
+            return false;
+        }
+    }
+    last.insert(user_id, now);
+    true
+}
+
+fn last_evolutions() -> &'static Mutex<HashMap<Uuid, u64>> {
+    LAST_EVOLUTIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 // ── Public types ──────────────────────────────────────────────────
 
@@ -594,5 +638,56 @@ mod tests {
         let out = parse_evolution_output(raw).expect("should parse");
         assert!((out.trait_values.warmth - 0.55).abs() < f32::EPSILON);
         assert!(out.confidence >= 0.0 && out.confidence <= 1.0);
+    }
+
+    // ── Cooldown tests ──────────────────────────────────────────
+
+    #[test]
+    fn cooldown_allows_first_call() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_evolve_personality_at(&mut map, user, 100));
+    }
+
+    #[test]
+    fn cooldown_blocks_second_call_within_window() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_evolve_personality_at(&mut map, user, 100));
+        assert!(!should_evolve_personality_at(&mut map, user, 100 + 3600)); // 1h < 24h
+    }
+
+    #[test]
+    fn cooldown_is_per_user() {
+        let user_a = Uuid::new_v4();
+        let user_b = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_evolve_personality_at(&mut map, user_a, 100));
+        assert!(should_evolve_personality_at(&mut map, user_b, 100));
+        assert!(!should_evolve_personality_at(&mut map, user_a, 200));
+    }
+
+    #[test]
+    fn cooldown_allows_after_window_expires() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_evolve_personality_at(&mut map, user, 100));
+        let after_cooldown = 100 + PERSONALITY_EVOLUTION_COOLDOWN_SECS;
+        assert!(should_evolve_personality_at(&mut map, user, after_cooldown));
+    }
+
+    #[test]
+    fn cooldown_allows_exactly_at_boundary() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_evolve_personality_at(&mut map, user, 100));
+        let before_boundary = 100 + PERSONALITY_EVOLUTION_COOLDOWN_SECS - 1;
+        let at_boundary = 100 + PERSONALITY_EVOLUTION_COOLDOWN_SECS;
+        assert!(!should_evolve_personality_at(
+            &mut map,
+            user,
+            before_boundary
+        ));
+        assert!(should_evolve_personality_at(&mut map, user, at_boundary));
     }
 }

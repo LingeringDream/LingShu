@@ -300,6 +300,15 @@ fn mark_stream_finalized(finalized: &Arc<Mutex<bool>>) -> bool {
     }
 }
 
+/// Whether the chat stream produced a valid assistant response that should
+/// be considered for background personality evolution.
+fn has_assistant_response(assistant_response: &Option<String>) -> bool {
+    match assistant_response {
+        Some(content) => !content.trim().is_empty(),
+        None => false,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_post_stream_tasks(
     db: sqlx::PgPool,
@@ -318,6 +327,7 @@ fn spawn_post_stream_tasks(
                 persist_assistant_message(&db, &redis, sid, user_id, content, &model).await;
         }
 
+        let had_assistant_response = has_assistant_response(&assistant_response);
         let assistant_for_memory = assistant_response.unwrap_or_default();
         crate::llm::memory::extract_and_save(
             &db,
@@ -328,6 +338,26 @@ fn spawn_post_stream_tasks(
             &assistant_for_memory,
         )
         .await;
+
+        // Personality evolution (auto-trigger): requires a normal assistant
+        // response and must pass the per-user 24h cooldown.
+        if had_assistant_response && crate::llm::personality::should_evolve_personality(user_id) {
+            match crate::llm::personality::evolve_and_save_personality(&db, &llm, &model, user_id)
+                .await
+            {
+                Ok(outcome) if outcome.created => {
+                    if let Some(snap) = &outcome.snapshot {
+                        tracing::info!(%user_id, snapshot_id = %snap.id, "Auto-evolved personality");
+                    }
+                }
+                Ok(outcome) => {
+                    tracing::debug!(%user_id, reason = %outcome.reason, "Personality evolution skipped");
+                }
+                Err(e) => {
+                    tracing::warn!(%user_id, %e, "Personality evolution failed");
+                }
+            }
+        }
 
         if assistant_persisted && crate::llm::thoughts::should_generate_thoughts(user_id) {
             if let Err(e) =
@@ -637,5 +667,22 @@ mod tests {
         acc.push_chunk(""); // empty is ignored
         let result = acc.finalize();
         assert!(result.is_none());
+    }
+
+    // ── Post-stream helper tests ──────────────────────────────────
+
+    #[test]
+    fn has_assistant_response_none_returns_false() {
+        assert!(!has_assistant_response(&None));
+    }
+
+    #[test]
+    fn has_assistant_response_some_returns_true() {
+        assert!(has_assistant_response(&Some("hello".to_string())));
+    }
+
+    #[test]
+    fn has_assistant_response_whitespace_returns_false() {
+        assert!(!has_assistant_response(&Some("   \n\t".to_string())));
     }
 }
