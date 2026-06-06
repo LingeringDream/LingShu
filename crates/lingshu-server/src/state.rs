@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::config::AppConfig;
+use crate::crypto::TokenCipher;
 use crate::llm::client::LlmClient;
 use crate::routes::permissions::PermissionSettings;
 use crate::routes::settings::LlmSettings;
@@ -32,10 +33,12 @@ pub struct AppState {
     pub llm_settings: Arc<RwLock<HashMap<Uuid, LlmSettings>>>,
     /// L0-L4 permission tiers. In-memory, defaults to L0 only.
     pub permissions: Arc<RwLock<HashMap<Uuid, PermissionSettings>>>,
-    /// Key for integration token-at-rest encryption (AES-256-GCM), derived from
-    /// `ENCRYPTION_KEY`. `None` when unconfigured — integration writes that would
-    /// need to encrypt a token must then be rejected rather than stored in the clear.
-    pub encryption_key: Option<String>,
+    /// Pre-initialised AES-256-GCM cipher for integration token encryption.
+    /// The expensive 100k-round KDF runs once at startup. `None` when
+    /// `ENCRYPTION_KEY` is unconfigured — integration writes that would need to
+    /// encrypt a token must then be rejected rather than stored in the clear.
+    /// Wrapped in `Arc` because `TokenCipher` wraps `Aes256Gcm` which is not `Clone`.
+    pub token_cipher: Option<Arc<TokenCipher>>,
 }
 
 impl AppState {
@@ -85,6 +88,22 @@ impl AppState {
             }
         };
 
+        // Pre-derive the encryption cipher once at startup (100k-round KDF)
+        let token_cipher: Option<Arc<TokenCipher>> =
+            match config.security.encryption_key.as_deref() {
+                Some(key) if !key.is_empty() => match TokenCipher::from_key_str(key) {
+                    Ok(cipher) => {
+                        tracing::info!("TokenCipher initialised");
+                        Some(Arc::new(cipher))
+                    }
+                    Err(e) => {
+                        tracing::warn!("TokenCipher initialisation failed (non-fatal): {e}");
+                        None
+                    }
+                },
+                _ => None,
+            };
+
         Ok(Self {
             db,
             config: config.clone(),
@@ -99,7 +118,7 @@ impl AppState {
             vector,
             llm_settings: Arc::new(RwLock::new(HashMap::new())),
             permissions: Arc::new(RwLock::new(HashMap::new())),
-            encryption_key: config.security.encryption_key.clone(),
+            token_cipher,
         })
     }
 

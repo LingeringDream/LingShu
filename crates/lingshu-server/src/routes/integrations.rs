@@ -4,7 +4,6 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::{self, AuthUser};
-use crate::crypto;
 use crate::error::AppError;
 use crate::models::integration::Integration;
 use crate::state::AppState;
@@ -127,6 +126,11 @@ async fn create_integration(
             "access_token must not be empty".into(),
         ));
     }
+    if req.refresh_token.as_deref().is_some_and(|t| t.trim().is_empty()) {
+        return Err(AppError::Validation(
+            "refresh_token must not be empty when present".into(),
+        ));
+    }
     if let Some(project_id) = req.project_id {
         let owns_project: bool = sqlx::query_scalar(
             "SELECT EXISTS(\
@@ -166,17 +170,17 @@ async fn create_integration(
 
     // Tokens must never be stored in the clear — refuse writes until an operator
     // configures ENCRYPTION_KEY rather than silently persisting plaintext.
-    let encryption_key = state.encryption_key.as_deref().ok_or_else(|| {
+    let cipher = state.token_cipher.clone().ok_or_else(|| {
         AppError::Internal(anyhow::anyhow!(
             "ENCRYPTION_KEY is not configured; set it before creating integrations"
         ))
     })?;
 
-    let access_token_encrypted = crypto::encrypt(&req.access_token, encryption_key)?;
+    let access_token_encrypted = cipher.encrypt(&req.access_token)?;
     let refresh_token_encrypted = req
         .refresh_token
         .as_deref()
-        .map(|token| crypto::encrypt(token, encryption_key))
+        .map(|token| cipher.encrypt(token))
         .transpose()?;
     let config = req.config.clone().unwrap_or_else(|| serde_json::json!({}));
 
@@ -194,12 +198,11 @@ async fn create_integration(
     .bind(config)
     .fetch_one(&state.db)
     .await
-    .map_err(|e: sqlx::Error| {
-        if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
+    .map_err(|e: sqlx::Error| match &e {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => {
             AppError::Conflict("An integration for this platform already exists".to_string())
-        } else {
-            AppError::Database(e)
         }
+        _ => AppError::Database(e),
     })?;
 
     Ok((
@@ -273,33 +276,40 @@ async fn delete_integration(
 // fields entirely).
 
 pub(crate) fn decrypt_token(
-    encryption_key: Option<&str>,
+    cipher: Option<&std::sync::Arc<crate::crypto::TokenCipher>>,
     encrypted: &[u8],
 ) -> anyhow::Result<String> {
-    let key = encryption_key.ok_or_else(|| {
+    let cipher = cipher.ok_or_else(|| {
         anyhow::anyhow!("ENCRYPTION_KEY is not configured; cannot decrypt stored token")
     })?;
-    crypto::decrypt(encrypted, key)
+    cipher.decrypt(encrypted)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const KEY: &str = "test-integration-key";
+    fn test_cipher() -> std::sync::Arc<crate::crypto::TokenCipher> {
+        std::sync::Arc::new(
+            crate::crypto::TokenCipher::from_key_str("test-integration-key")
+                .expect("test cipher"),
+        )
+    }
 
     #[test]
     fn decrypt_token_round_trips_with_correct_key() {
-        let blob = crypto::encrypt("super-secret-access-token", KEY).expect("encrypt");
+        let cipher = test_cipher();
+        let blob = cipher.encrypt("super-secret-access-token").expect("encrypt");
         assert_eq!(
-            decrypt_token(Some(KEY), &blob).expect("decrypt"),
+            decrypt_token(Some(&cipher), &blob).expect("decrypt"),
             "super-secret-access-token"
         );
     }
 
     #[test]
     fn decrypt_token_errors_when_key_unconfigured() {
-        let blob = crypto::encrypt("super-secret-access-token", KEY).expect("encrypt");
+        let cipher = test_cipher();
+        let blob = cipher.encrypt("super-secret-access-token").expect("encrypt");
         assert!(decrypt_token(None, &blob).is_err());
     }
 }
