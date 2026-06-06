@@ -5,7 +5,10 @@ use axum::{
 };
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
-use std::convert::Infallible;
+use std::{
+    convert::Infallible,
+    sync::{Arc, Mutex},
+};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -109,39 +112,74 @@ pub async fn chat(
         .llm
         .chat_stream(&settings.model, messages, Some(options));
 
-    let sse_stream = chunk_stream.map(|result| match result {
-        Ok(chunk) => Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())),
-        Err(e) => Ok(Event::default().data(
-            serde_json::to_string(&ChatChunk {
-                content: format!("[stream error: {e}]"),
-                done: true,
-            })
-            .unwrap_or_default(),
-        )),
-    });
+    // ── Build the SSE stream with optional assistant collection ──────
+    let assistant_accumulator: Arc<Mutex<AssistantStreamAccumulator>> =
+        Arc::new(Mutex::new(AssistantStreamAccumulator::new()));
+    let stream_finalized = Arc::new(Mutex::new(false));
 
-    // Spawn background memory extraction (fire-and-forget, does not block response)
-    let db = state.db.clone();
-    let llm = state.llm.clone();
-    let model = settings.model.clone();
-    tokio::spawn(async move {
-        crate::llm::memory::extract_and_save(&db, &llm, &model, user_id, &user_message, "").await;
-    });
+    let sid_for_stream = session_id;
+    let db_clone = state.db.clone();
+    let llm_clone = state.llm.clone();
+    let redis_clone = state.redis.clone();
+    let model_name = settings.model.clone();
+    let um_clone = user_message.clone();
 
-    // Spawn background thought generation only after this request has persisted
-    // a session message. Fire-and-forget; failures must not affect SSE.
-    if session_id.is_some() && crate::llm::thoughts::should_generate_thoughts(user_id) {
-        let db = state.db.clone();
-        let llm = state.llm.clone();
-        let model = settings.model.clone();
-        tokio::spawn(async move {
-            if let Err(e) =
-                crate::llm::thoughts::generate_and_save_thoughts(&db, &llm, &model, user_id).await
-            {
-                tracing::warn!(%user_id, %e, "Thought generation failed");
+    let sse_stream = chunk_stream.map(move |result| {
+        match result {
+            Ok(chunk) => {
+                if let Ok(mut acc) = assistant_accumulator.lock() {
+                    acc.push_chunk(&chunk.content);
+                }
+
+                let event =
+                    Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+
+                // On the final chunk, spawn persistence + memory + thoughts
+                if chunk.done && mark_stream_finalized(&stream_finalized) {
+                    let assistant_response = assistant_accumulator
+                        .lock()
+                        .ok()
+                        .and_then(|acc| acc.finalize());
+                    spawn_post_stream_tasks(
+                        db_clone.clone(),
+                        llm_clone.clone(),
+                        redis_clone.clone(),
+                        model_name.clone(),
+                        user_id,
+                        sid_for_stream,
+                        um_clone.clone(),
+                        assistant_response,
+                    );
+                }
+
+                event
             }
-        });
-    }
+            Err(e) => {
+                if let Ok(mut acc) = assistant_accumulator.lock() {
+                    acc.mark_error();
+                }
+                if mark_stream_finalized(&stream_finalized) {
+                    spawn_post_stream_tasks(
+                        db_clone.clone(),
+                        llm_clone.clone(),
+                        redis_clone.clone(),
+                        model_name.clone(),
+                        user_id,
+                        sid_for_stream,
+                        um_clone.clone(),
+                        None,
+                    );
+                }
+                Ok(Event::default().data(
+                    serde_json::to_string(&ChatChunk {
+                        content: format!("[stream error: {e}]"),
+                        done: true,
+                    })
+                    .unwrap_or_default(),
+                ))
+            }
+        }
+    });
 
     Ok(Sse::new(sse_stream))
 }
@@ -206,6 +244,100 @@ fn build_system_prompt(personality_snippet: &str, memory_context: &str) -> Strin
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
+
+/// Persist an assistant message to the database, bump session metadata,
+/// and invalidate the cached session list. Errors are logged only.
+async fn persist_assistant_message(
+    db: &sqlx::PgPool,
+    redis: &crate::state::OptionalRedis,
+    conversation_id: Uuid,
+    user_id: Uuid,
+    content: &str,
+    model: &str,
+) -> bool {
+    if let Err(e) = sqlx::query(
+        "INSERT INTO messages (conversation_id, role, content, model_id) \
+         VALUES ($1, 'assistant', $2, $3)",
+    )
+    .bind(conversation_id)
+    .bind(content)
+    .bind(model)
+    .execute(db)
+    .await
+    {
+        tracing::warn!(%conversation_id, %e, "Failed to persist assistant message");
+        return false;
+    }
+
+    // Bump updated_at only for the owning active conversation.
+    if let Err(e) = sqlx::query(
+        "UPDATE conversations SET updated_at = NOW() \
+         WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .execute(db)
+    .await
+    {
+        tracing::warn!(%conversation_id, %e, "Failed to bump conversation updated_at");
+    }
+
+    // Invalidate cached session list
+    crate::cache::del(redis, &crate::cache::chat_sessions_cache_key(user_id)).await;
+
+    true
+}
+
+fn mark_stream_finalized(finalized: &Arc<Mutex<bool>>) -> bool {
+    let Ok(mut done) = finalized.lock() else {
+        return false;
+    };
+    if *done {
+        false
+    } else {
+        *done = true;
+        true
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_post_stream_tasks(
+    db: sqlx::PgPool,
+    llm: crate::llm::client::LlmClient,
+    redis: crate::state::OptionalRedis,
+    model: String,
+    user_id: Uuid,
+    session_id: Option<Uuid>,
+    user_message: String,
+    assistant_response: Option<String>,
+) {
+    tokio::spawn(async move {
+        let mut assistant_persisted = false;
+        if let (Some(sid), Some(content)) = (session_id, assistant_response.as_ref()) {
+            assistant_persisted =
+                persist_assistant_message(&db, &redis, sid, user_id, content, &model).await;
+        }
+
+        let assistant_for_memory = assistant_response.unwrap_or_default();
+        crate::llm::memory::extract_and_save(
+            &db,
+            &llm,
+            &model,
+            user_id,
+            &user_message,
+            &assistant_for_memory,
+        )
+        .await;
+
+        if assistant_persisted && crate::llm::thoughts::should_generate_thoughts(user_id) {
+            if let Err(e) =
+                crate::llm::thoughts::generate_and_save_thoughts(&db, &llm, &model, user_id).await
+            {
+                tracing::warn!(%user_id, %e, "Thought generation failed");
+            }
+        }
+    });
+}
 
 /// Load the active personality snapshot for a user and convert to
 /// [`PersonalityValues`]. Missing snapshots use defaults quietly; database
@@ -327,6 +459,49 @@ async fn fetch_memory_context(db: &sqlx::PgPool, user_id: Uuid, _user_message: &
     ctx
 }
 
+// ── Stream accumulator ─────────────────────────────────────────────
+
+/// Collects streaming assistant chunks and tracks whether any error occurred.
+/// Pure data holder — testable without any I/O.
+#[derive(Debug, Clone)]
+struct AssistantStreamAccumulator {
+    buffer: String,
+    had_error: bool,
+}
+
+impl AssistantStreamAccumulator {
+    fn new() -> Self {
+        Self {
+            buffer: String::new(),
+            had_error: false,
+        }
+    }
+
+    /// Append a successful chunk's content. Empty content is ignored.
+    fn push_chunk(&mut self, content: &str) {
+        if !content.is_empty() {
+            self.buffer.push_str(content);
+        }
+    }
+
+    /// Mark that a stream error occurred (the accumulated content should not
+    /// be persisted even if non-empty).
+    fn mark_error(&mut self) {
+        self.had_error = true;
+    }
+
+    /// Nominate the content for persistence.
+    /// Returns `Some(content)` when the response is non-empty and error-free;
+    /// returns `None` for empty or errored streams.
+    fn finalize(&self) -> Option<String> {
+        if self.had_error || self.buffer.is_empty() {
+            None
+        } else {
+            Some(self.buffer.clone())
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -411,5 +586,56 @@ mod tests {
         assert!((values.verbosity - 0.6).abs() < f32::EPSILON);
         assert!((values.formality - 0.7).abs() < f32::EPSILON);
         assert!((values.humor - 0.8).abs() < f32::EPSILON);
+    }
+
+    // ── Stream accumulator tests ─────────────────────────────────
+
+    #[test]
+    fn accumulator_collects_chunks() {
+        let mut acc = AssistantStreamAccumulator::new();
+        acc.push_chunk("你好");
+        acc.push_chunk("，世界");
+        assert_eq!(acc.buffer, "你好，世界");
+    }
+
+    #[test]
+    fn accumulator_ignores_empty_content() {
+        let mut acc = AssistantStreamAccumulator::new();
+        acc.push_chunk("hello");
+        acc.push_chunk("");
+        acc.push_chunk(" world");
+        assert_eq!(acc.buffer, "hello world");
+    }
+
+    #[test]
+    fn accumulator_finalize_returns_content_when_clean() {
+        let mut acc = AssistantStreamAccumulator::new();
+        acc.push_chunk("assistant response");
+        let result = acc.finalize();
+        assert_eq!(result, Some("assistant response".to_string()));
+    }
+
+    #[test]
+    fn accumulator_finalize_returns_none_after_error() {
+        let mut acc = AssistantStreamAccumulator::new();
+        acc.push_chunk("some content");
+        acc.mark_error();
+        let result = acc.finalize();
+        assert!(result.is_none(), "error flag should prevent persistence");
+    }
+
+    #[test]
+    fn accumulator_finalize_returns_none_when_empty() {
+        let acc = AssistantStreamAccumulator::new();
+        let result = acc.finalize();
+        assert!(result.is_none(), "empty buffer should not be persisted");
+    }
+
+    #[test]
+    fn accumulator_finalize_none_on_empty_even_without_error() {
+        let mut acc = AssistantStreamAccumulator::new();
+        acc.push_chunk(""); // empty is ignored
+        let result = acc.finalize();
+        assert!(result.is_none());
     }
 }
