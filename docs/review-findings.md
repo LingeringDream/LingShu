@@ -1,7 +1,7 @@
 # Documentation & Code Review Findings — 待办清单
 
 > 2026-06-06 · 三轮独立审查 + 两次代码审查（Phase 1 / Phase 2）
-> 总计 56 项发现：30 项已修复 ✅，26 项待处理。
+> 总计 56 项发现：31 项已修复 ✅，25 项待处理。
 
 ---
 
@@ -24,7 +24,7 @@
 - [x] **LLM 路由器死代码** — ✅ 2026-06-04：删除 `llm/router.rs`、`ModelRouter` 字段，模型名直接从 `LlmSettings` 读取。
 - [x] **`state.http` 死字段** — ✅ 2026-06-04：移除未被任何路由使用的 `http: reqwest::Client` 字段。
 - [x] **Redis 已初始化但零引用** — ✅ 2026-06-06：Redis 缓存层已全面接入路由处理器。`settings.rs`：LLM 配置 read-through + write-through 缓存；`sessions.rs`：会话列表缓存（TTL 30s）+ 创建/删除时主动失效；`conversations.rs`：会话变更时调用 `invalidate_session_cache` 失效缓存。`state.rs` 在启动时自动连接 Redis，不可用时优雅降级。详见 `cache.rs`。
-- [ ] **lingshu-graph crate 死代码** — 有 `lib.rs` + `queries.rs` 但无图数据库 provision。
+- [x] **lingshu-graph crate 死代码** — ✅ 2026-06-06：从 workspace members、`lingshu-server` 依赖、Dockerfile 缓存占位和 `Cargo.lock` 中移除，并删除 `crates/lingshu-graph/` 目录。AGE PoC 仍保留在 `poc/` 下作为历史验证材料。
 - [x] **lingshu-vector crate 无 Qdrant 客户端** — ✅ 2026-06-06：`crates/lingshu-vector/src/search.rs` 已实现 `QdrantClient`（`new` / `create_collection` / `upsert_point` / `search`），基于 HTTP API 的轻量客户端。**注意：记忆检索仍未接入向量搜索（见 Phase 2 遗留）。**
 - [x] **chat/sessions 路由孤立** — ✅ 2026-06-06：`main.rs` 已 `.merge(routes::sessions::router())`，`routes/sessions.rs` 提供 `list_sessions` / `get_session` / `delete_session` 三个端点。
 - [ ] **WebSocket 处理器孤立** — `ws/handler.rs` 存在（实现 echo 逻辑），`main.rs` 有 `mod ws;` 声明，但**未注册任何 WebSocket 路由**（无 `.route()` 或 `.merge()` 挂载 handler）。
@@ -113,11 +113,11 @@
 
 | 优先级 | 数量 | 变化 |
 |--------|------|------|
-| ✅ 已修复 | 30 | +12（P1+5: Redis/Qdrant/sessions/VITE_API_URL/config.toml、P2 产品+1: Thought Queue 引擎、DevEx+1: cargo test --workspace、Phase 2 遗留+4: 去重/限流/人格/Thought Queue 接入、OpenAPI 描述修正） |
-| 🔴 P1 | 4 | -6（lingshu-graph、WebSocket、Three.js、无基准） |
+| ✅ 已修复 | 31 | +13（P1+6: Redis/Qdrant/sessions/VITE_API_URL/config.toml/lingshu-graph、P2 产品+1: Thought Queue 引擎、DevEx+1: cargo test --workspace、Phase 2 遗留+4: 去重/限流/人格/Thought Queue 接入、OpenAPI 描述修正） |
+| 🔴 P1 | 3 | -7（WebSocket、Three.js、无基准） |
 | 🟡 P2 | 15 | -2（产品设计 9 + 开发者体验 5 + Phase 2 遗留 1） |
 | 🟢 P3 | 7 | 0（无变化） |
-| **合计待处理** | **26** | -8 |
+| **合计待处理** | **25** | -9 |
 
 ---
 

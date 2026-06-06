@@ -37,7 +37,6 @@ bytes = { workspace = true }
 dotenvy = "0.15"
 
 # Internal crates
-lingshu-graph = { path = "../lingshu-graph" }
 lingshu-vector = { path = "../lingshu-vector" }
 
 [dev-dependencies]

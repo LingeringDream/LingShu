@@ -155,7 +155,6 @@ Key environment variables:
 ```
 crates/
   lingshu-server/      Rust Axum backend (API routes, DB, WebSocket, LLM client)
-  lingshu-graph/       Future graph-query candidate (AGE PoC failed; not an MVP dependency)
   lingshu-vector/      Vector search capabilities (Qdrant client)
 frontend/              React + TypeScript + Vite SPA
 docker/                Docker Compose dev environment and configs

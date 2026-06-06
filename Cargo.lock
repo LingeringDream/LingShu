@@ -1398,19 +1398,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lingshu-graph"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "serde",
- "serde_json",
- "sqlx",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "lingshu-server"
 version = "0.1.0"
 dependencies = [
@@ -1424,7 +1411,6 @@ dependencies = [
  "fred",
  "futures",
  "jsonwebtoken",
- "lingshu-graph",
  "lingshu-vector",
  "prometheus-client",
  "reqwest",

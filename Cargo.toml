@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/lingshu-server",
-    "crates/lingshu-graph",
     "crates/lingshu-vector",
 ]
 

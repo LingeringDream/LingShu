@@ -10,7 +10,6 @@ macOS desktop pet AI assistant. MVP: floating desktop avatar, Apple Calendar sch
 |------|---------|
 | `crates/lingshu-server/src/main.rs` | Backend entry point |
 | `crates/lingshu-server/migrations/` | Database migrations |
-| `crates/lingshu-graph/src/` | Future graph query candidate; not part of MVP |
 | `crates/lingshu-vector/src/` | Vector search (Qdrant) |
 | `frontend/src/main.tsx` | Frontend entry point |
 | `docker/docker-compose.dev.yml` | Dev environment orchestration |

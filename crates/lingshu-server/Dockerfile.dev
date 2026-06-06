@@ -7,14 +7,12 @@ WORKDIR /app
 # Copy workspace root and all crate manifests first for caching
 COPY Cargo.toml rust-toolchain.toml ./
 COPY crates/lingshu-server/Cargo.toml crates/lingshu-server/Cargo.toml
-COPY crates/lingshu-graph/Cargo.toml crates/lingshu-graph/Cargo.toml
 COPY crates/lingshu-vector/Cargo.toml crates/lingshu-vector/Cargo.toml
 
 # Create dummy src files to pre-build dependencies
-RUN mkdir -p crates/lingshu-server/src crates/lingshu-graph/src crates/lingshu-vector/src && \
+RUN mkdir -p crates/lingshu-server/src crates/lingshu-vector/src && \
     echo "fn main() {}" > crates/lingshu-server/src/main.rs && \
     echo "" > crates/lingshu-server/src/lib.rs && \
-    echo "" > crates/lingshu-graph/src/lib.rs && \
     echo "" > crates/lingshu-vector/src/lib.rs && \
     cargo build --workspace 2>/dev/null || true && \
     rm -rf crates/*/src
