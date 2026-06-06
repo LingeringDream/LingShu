@@ -43,7 +43,7 @@ All Rust code must pass CI checks:
 ```bash
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
-cargo test --all
+cargo test --workspace
 ```
 
 Configuration: [`clippy.toml`](./clippy.toml) and [`rustfmt.toml`](./rustfmt.toml)
@@ -85,7 +85,7 @@ Scope is optional but encouraged: `feat(chat): add streaming response`.
 
 ```bash
 # Backend
-cargo test --all
+cargo test --workspace
 
 # Frontend
 cd frontend && npm run type-check && npm run build

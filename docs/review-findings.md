@@ -1,7 +1,7 @@
 # Documentation & Code Review Findings — 待办清单
 
 > 2026-06-06 · 三轮独立审查 + 两次代码审查（Phase 1 / Phase 2）
-> 总计 56 项发现：29 项已修复 ✅，27 项待处理。
+> 总计 56 项发现：30 项已修复 ✅，26 项待处理。
 
 ---
 
@@ -64,7 +64,7 @@
 - [x] **ESLint 状态不一致** — ✅ 2026-06-04：创建 `eslint.config.js` 扁平配置（TypeScript + 浏览器全局变量），`npm run lint` 零错误通过。
 - [x] **README 配置表缺失变量** — ✅ 2026-06-04：从 7 变量扩展到 14 变量，补齐 `DATABASE_MAX_CONNECTIONS`、`SERVER_HOST`、`LLM_API_KEY`、`LLM_API_BASE_URL`、`ENCRYPTION_KEY`、`LLM_DEFAULT_MODEL`。
 - [x] **README 快速入门 OLLAMA_URL 缺失** — ✅ 2026-06-04：步骤 3 的 env 块中补上 `OLLAMA_URL=http://localhost:11434`。
-- [ ] **`cargo test --all` 已弃用** — `CLAUDE.md`、`README.md` 和 `CONTRIBUTING.md` 仍使用 `cargo test --all`，应全局替换为 `cargo test --workspace`。
+- [x] **旧 workspace 测试命令已弃用** — ✅ 2026-06-06：`CLAUDE.md`、`README.md`、`CONTRIBUTING.md` 全部统一为 `cargo test --workspace`。
 - [ ] **CI 使用 Node.js 26，README 要求 22+** — 统一基线版本。
 - [ ] **`cargo-watch` 依赖未说明** — README 未提及需 `cargo install cargo-watch`。
 - [ ] **测试需要基础设施但未说明** — 集成测试需 PostgreSQL/Redis 运行。
@@ -113,11 +113,11 @@
 
 | 优先级 | 数量 | 变化 |
 |--------|------|------|
-| ✅ 已修复 | 29 | +11（P1+5: Redis/Qdrant/sessions/VITE_API_URL/config.toml、P2 产品+1: Thought Queue 引擎、Phase 2 遗留+4: 去重/限流/人格/Thought Queue 接入、OpenAPI 描述修正） |
+| ✅ 已修复 | 30 | +12（P1+5: Redis/Qdrant/sessions/VITE_API_URL/config.toml、P2 产品+1: Thought Queue 引擎、DevEx+1: cargo test --workspace、Phase 2 遗留+4: 去重/限流/人格/Thought Queue 接入、OpenAPI 描述修正） |
 | 🔴 P1 | 4 | -6（lingshu-graph、WebSocket、Three.js、无基准） |
-| 🟡 P2 | 16 | -1（产品设计 9 + 开发者体验 6 + Phase 2 遗留 1） |
+| 🟡 P2 | 15 | -2（产品设计 9 + 开发者体验 5 + Phase 2 遗留 1） |
 | 🟢 P3 | 7 | 0（无变化） |
-| **合计待处理** | **27** | -7 |
+| **合计待处理** | **26** | -8 |
 
 ---
 

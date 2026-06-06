@@ -169,7 +169,7 @@ poc/                   Technology proofs of concept
 
 ```bash
 # Backend unit + integration tests
-cargo test --all
+cargo test --workspace
 
 # Frontend type check
 cd frontend && npm run type-check

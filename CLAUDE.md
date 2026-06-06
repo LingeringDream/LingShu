@@ -46,7 +46,7 @@ cd frontend && npm ci && npm run dev
 sqlx migrate run --source crates/lingshu-server/migrations
 
 # Test
-cargo test --all
+cargo test --workspace
 cd frontend && npm run type-check && npm run build
 
 # Health check
