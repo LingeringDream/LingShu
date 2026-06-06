@@ -1,7 +1,7 @@
 # Documentation & Code Review Findings — 待办清单
 
-> 2026-06-04 · 三轮独立审查 + 两次代码审查（Phase 1 / Phase 2）
-> 总计 56 项发现：18 项已修复 ✅，38 项待处理。
+> 2026-06-06 · 三轮独立审查 + 两次代码审查（Phase 1 / Phase 2）
+> 总计 56 项发现：28 项已修复 ✅，28 项待处理。
 
 ---
 
@@ -19,20 +19,20 @@
 ## 一、代码质量（P1）
 
 - [x] **账号密码注册不符合本地产品定位** — ✅ 2026-06-05：移除对外注册/登录路由，改为本地默认会话签发 JWT；前端不再展示注册、登录、退出入口。
-- [x] **OpenAPI 覆盖仅 ~55%** — ✅ 2026-06-04：新增 settings (GET/PATCH)、memories CRUD (6 handlers)，当前 9 paths / 18 endpoints = ~50% 端点注册。auth/users/chat 仍未纳入 utoipa。
+- [x] **OpenAPI 覆盖仅 ~55%** — ✅ 2026-06-04→2026-06-06：初期仅 ~50% 端点注册（9 paths），现已覆盖全部 18 个路由模块共 60 个 handler（system, auth, users, settings, projects, tasks, conversations, chat, sessions, memories, calendar, permissions, project_members, task_dependencies, personality, thoughts, integrations, audit）。所有 HTTP handler 均已在 `routes/mod.rs` 的 `#[derive(OpenApi)]` 中注册。
 - [x] **无认证中间件** — ✅ 2026-06-04：`AuthUser` 从请求状态读取 `jwt_secret` 验证 JWT；缺失 token 不再回退到「第一个用户」。
 - [x] **LLM 路由器死代码** — ✅ 2026-06-04：删除 `llm/router.rs`、`ModelRouter` 字段，模型名直接从 `LlmSettings` 读取。
 - [x] **`state.http` 死字段** — ✅ 2026-06-04：移除未被任何路由使用的 `http: reqwest::Client` 字段。
-- [ ] **Redis 已初始化但零引用** — `state.rs` 连接 Redis 后，没有任何路由处理器使用它。
+- [x] **Redis 已初始化但零引用** — ✅ 2026-06-06：Redis 缓存层已全面接入路由处理器。`settings.rs`：LLM 配置 read-through + write-through 缓存；`sessions.rs`：会话列表缓存（TTL 30s）+ 创建/删除时主动失效；`conversations.rs`：会话变更时调用 `invalidate_session_cache` 失效缓存。`state.rs` 在启动时自动连接 Redis，不可用时优雅降级。详见 `cache.rs`。
 - [ ] **lingshu-graph crate 死代码** — 有 `lib.rs` + `queries.rs` 但无图数据库 provision。
-- [ ] **lingshu-vector crate 无 Qdrant 客户端** — 仅依赖 `reqwest` + `serde`。
-- [ ] **chat/sessions 路由孤立** — `routes/sessions.rs` 未合并到 `main.rs` 路由表。
-- [ ] **WebSocket 处理器孤立** — `ws/handler.rs` 存在但未注册路由。
-- [ ] **前端 Three.js 依赖无引用** — `three`、`@react-three/fiber`、`@react-three/drei` 已安装但零 import。
+- [x] **lingshu-vector crate 无 Qdrant 客户端** — ✅ 2026-06-06：`crates/lingshu-vector/src/search.rs` 已实现 `QdrantClient`（`new` / `create_collection` / `upsert_point` / `search`），基于 HTTP API 的轻量客户端。**注意：记忆检索仍未接入向量搜索（见 Phase 2 遗留）。**
+- [x] **chat/sessions 路由孤立** — ✅ 2026-06-06：`main.rs` 已 `.merge(routes::sessions::router())`，`routes/sessions.rs` 提供 `list_sessions` / `get_session` / `delete_session` 三个端点。
+- [ ] **WebSocket 处理器孤立** — `ws/handler.rs` 存在（实现 echo 逻辑），`main.rs` 有 `mod ws;` 声明，但**未注册任何 WebSocket 路由**（无 `.route()` 或 `.merge()` 挂载 handler）。
+- [ ] **前端 Three.js 依赖无引用** — `three`、`@react-three/fiber`、`@react-three/drei` 在 `package.json` 中已安装，但前端源码中 **零 import**。
 - [x] **前端 `index.html` title 过期** — ✅ 2026-06-04：改为「macOS 桌面 AI 个人助理」。
-- [ ] **Docker Compose `VITE_API_URL` 死配置** — 前端无任何引用。
+- [x] **Docker Compose `VITE_API_URL` 死配置** — ✅ 2026-06-06：`docker-compose.dev.yml` 设置 `VITE_API_URL: http://backend:8080`，`frontend/vite.config.ts` 通过 `loadEnv()` 读取并用于 Vite dev proxy 的 `/api` target，同时派生 `/ws` proxy target。
 - [ ] **无基准测试代码** — 性能 checklist 在 CI 中无一实现。
-- [ ] **`config.toml` 被 figment 引用但不存在** — `config.rs` merge `Toml::file("config.toml")`。
+- [ ] **`config.toml` 被 figment 引用但不存在** — 当前工作区本地有 `config.toml`，但该文件被 `.gitignore` 忽略且未被 git 跟踪；新克隆仍不会获得默认配置。应补充可提交的 `config.example.toml` 或调整启动文档。
 
 ### 代码审查发现的额外项（已修复）
 
@@ -53,8 +53,8 @@
 - [ ] **Swift sidecar 架构未定义** — XPC service 还是 CLI bridge？通信协议？打包方式？
 - [ ] **成本模型盈亏不符** — ¥199/月 vs ¥170-480/月，重度用户亏损。
 - [ ] **竞品分析补缺** — Apple Intelligence/Siri、Rewind AI、Notion AI、Raycast AI。
-- [ ] **Thought Queue 触发引擎无实现路径** — 跨会话推理无启发式规则可兜底。
-- [ ] **人格参数跨模型不可移植** — 同组 trait 值在不同 LLM 上表现差异显著。
+- [x] **Thought Queue 触发引擎无实现路径** — ✅ 2026-06-06：`llm/thoughts.rs` 实现完整生成管线（LLM 生成 → 去重 → 插入 `thought_queue`）；`POST /api/v1/thoughts/generate` 提供手动触发；`chat.rs` 在每条消息结束后自动调用 `should_generate_thoughts()` + `generate_and_save_thoughts()` 后台生成。**注意：仍无定时 worker 定期为沉默用户生成思考。**
+- [ ] **人格参数跨模型不可移植** — 同组 trait 值在不同 LLM 上表现差异显著，尚无模型校准方案或映射表。
 - [ ] **附录 A 应拆分为独立技术文档** — ~950 行占 PRD 45%。
 
 ---
@@ -64,7 +64,7 @@
 - [x] **ESLint 状态不一致** — ✅ 2026-06-04：创建 `eslint.config.js` 扁平配置（TypeScript + 浏览器全局变量），`npm run lint` 零错误通过。
 - [x] **README 配置表缺失变量** — ✅ 2026-06-04：从 7 变量扩展到 14 变量，补齐 `DATABASE_MAX_CONNECTIONS`、`SERVER_HOST`、`LLM_API_KEY`、`LLM_API_BASE_URL`、`ENCRYPTION_KEY`、`LLM_DEFAULT_MODEL`。
 - [x] **README 快速入门 OLLAMA_URL 缺失** — ✅ 2026-06-04：步骤 3 的 env 块中补上 `OLLAMA_URL=http://localhost:11434`。
-- [ ] **`cargo test --all` 已弃用** — 应全局替换为 `cargo test --workspace`。
+- [ ] **`cargo test --all` 已弃用** — `CLAUDE.md`、`README.md` 和 `CONTRIBUTING.md` 仍使用 `cargo test --all`，应全局替换为 `cargo test --workspace`。
 - [ ] **CI 使用 Node.js 26，README 要求 22+** — 统一基线版本。
 - [ ] **`cargo-watch` 依赖未说明** — README 未提及需 `cargo install cargo-watch`。
 - [ ] **测试需要基础设施但未说明** — 集成测试需 PostgreSQL/Redis 运行。
@@ -99,23 +99,25 @@
 
 ### Phase 2 遗留
 
-- [ ] **记忆抽取无重复检测** — 用户重复说同一事实会产生多条相同记忆。
-- [ ] **记忆抽取无速率限制** — 每条消息 spawn 一个后台 LLM 调用，高频使用会压垮 Ollama。
-- [ ] **记忆检索无向量搜索** — 当前用 `importance + updated_at` 排序，无 Qdrant 语义召回。
-- [ ] **人格引擎未接入** — `personality_snapshots` 表已建，但无自动演化或 API。
-- [ ] **Thought Queue 未接入** — `thought_queue` 表已建，但无触发逻辑或 API。
+- [x] **记忆抽取无重复检测** — ✅ 2026-06-06：`llm/dedup.rs` 实现 Jaccard 相似度去重（`DEDUP_SIMILARITY_THRESHOLD = 0.82`），`memory.rs` 的 `save_memory()` 在插入前调用 `find_duplicate_memory()`，命中则提升 importance 而非重复插入。Thought Queue 生成同样使用该去重逻辑。
+- [x] **记忆抽取无速率限制** — ✅ 2026-06-06：`memory.rs` 实现 `EXTRACTION_COOLDOWN_SECS = 60`（per-user cooldown），`should_extract_memory()` 在冷却期内跳过抽取，附 `extraction_cooldown_is_scoped_per_user` 单元测试。
+- [ ] **记忆检索无向量搜索** — `search_memories` 仍使用 PostgreSQL `ILIKE` 关键词匹配，按 `importance` 排序。Qdrant 客户端已在 `lingshu-vector` 中就绪，但记忆的 embedding 生成和向量索引尚未集成。
+- [x] **人格引擎未接入** — ✅ 2026-06-06：`llm/personality.rs` 实现 `evolve_and_save_personality()` 自动演化引擎；`routes/personality.rs` 提供 5 个端点（list/create/get-active/activate/evolve）；`chat.rs` 每条消息结束后调用 `should_evolve_personality()` + `evolve_and_save_personality()` 自动触发人格演化；激活的人格快照注入聊天 system prompt。
+- [x] **Thought Queue 未接入** — ✅ 2026-06-06：`llm/thoughts.rs` 实现 `generate_and_save_thoughts()` 及去重逻辑；`routes/thoughts.rs` 提供 4 个端点（list/get/update/generate）；`chat.rs` 消息结束后调用 `should_generate_thoughts()` + `generate_and_save_thoughts()` 自动后台生成。
 
 ---
 
 ## 统计
 
+统计口径：所有 `- [x]` 条目和「Phase 2 已交付」表格中的 ✅ 计入已修复；所有 `- [ ]` 条目按所在章节归类为 P1/P2/P3（Phase 2 遗留计入 P2）。本文件共 56 项发现。
+
 | 优先级 | 数量 | 变化 |
 |--------|------|------|
-| ✅ 已修复 | 18 | +11（含代码审查发现的 5 项 + Phase 2 发现的 1 项） |
-| 🔴 P1 | 10 | -4（LLM router、state.http、title、辅助项已修复） |
-| 🟡 P2 | 17 | +4（Phase 2 遗留） |
-| 🟢 P3 | 7 | -1 |
-| **合计待处理** | **34** | |
+| ✅ 已修复 | 28 | +10（P1+4: Redis/Qdrant/sessions/VITE_API_URL、P2 产品+1: Thought Queue 引擎、Phase 2 遗留+4: 去重/限流/人格/Thought Queue 接入、OpenAPI 描述修正） |
+| 🔴 P1 | 5 | -5（lingshu-graph、WebSocket、Three.js、无基准、config.toml） |
+| 🟡 P2 | 16 | -1（产品设计 9 + 开发者体验 6 + Phase 2 遗留 1） |
+| 🟢 P3 | 7 | 0（无变化） |
+| **合计待处理** | **28** | -6 |
 
 ---
 
