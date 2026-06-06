@@ -37,13 +37,22 @@ impl Default for LlmSettings {
 }
 
 pub async fn llm_settings_for_user(state: &AppState, user_id: Uuid) -> LlmSettings {
-    state
-        .llm_settings
-        .read()
-        .await
-        .get(&user_id)
-        .cloned()
-        .unwrap_or_else(|| state.default_llm_settings())
+    // 1. In-memory (fast path)
+    {
+        let map = state.llm_settings.read().await;
+        if let Some(s) = map.get(&user_id) {
+            return s.clone();
+        }
+    }
+    // 2. Redis
+    let key = crate::cache::llm_settings_cache_key(user_id);
+    if let Some(cached) = crate::cache::get_json::<LlmSettings>(&state.redis, &key).await {
+        let mut map = state.llm_settings.write().await;
+        map.insert(user_id, cached.clone());
+        return cached;
+    }
+    // 3. Fallback: config defaults
+    state.default_llm_settings()
 }
 
 /// Partial update — all fields optional. Only provided fields are applied.
@@ -110,5 +119,17 @@ async fn update_llm_settings(
         settings.max_tokens = n;
     }
 
-    Ok(Json(settings.clone()))
+    let result = settings.clone();
+    drop(all_settings);
+
+    // Write-through to Redis (no TTL — config persists until explicitly changed)
+    crate::cache::set_json(
+        &state.redis,
+        &crate::cache::llm_settings_cache_key(user_id),
+        &result,
+        None,
+    )
+    .await;
+
+    Ok(Json(result))
 }

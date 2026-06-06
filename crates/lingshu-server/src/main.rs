@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 mod auth;
+mod cache;
 mod config;
 mod db;
 mod error;

@@ -10,14 +10,19 @@ use crate::llm::client::LlmClient;
 use crate::routes::permissions::PermissionSettings;
 use crate::routes::settings::LlmSettings;
 
+/// Type alias so callers can pattern-match on Redis availability.
+pub type OptionalRedis = Option<fred::clients::RedisClient>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: AppConfig,
     pub start_time: std::time::Instant,
     pub llm: LlmClient,
+    /// Redis client — `None` when the URL is empty or the connection failed.
+    pub redis: OptionalRedis,
     /// Runtime settings changeable via API (model, temperature, etc.).
-    /// In-memory only in Phase 0 — restart reverts to config file defaults.
+    /// Backed by memory (HashMap) with optional Redis cache layer.
     pub llm_settings: Arc<RwLock<HashMap<Uuid, LlmSettings>>>,
     /// L0-L4 permission tiers. In-memory, defaults to L0 only.
     pub permissions: Arc<RwLock<HashMap<Uuid, PermissionSettings>>>,
@@ -33,12 +38,20 @@ impl AppState {
             .await?;
 
         // Redis (optional — skip if URL is empty or connection fails)
-        if !config.redis.url.is_empty() {
+        let redis = if config.redis.url.is_empty() {
+            None
+        } else {
             match try_connect_redis(&config.redis.url).await {
-                Ok(_) => tracing::info!("Redis connected"),
-                Err(e) => tracing::warn!("Redis unavailable (non-fatal): {}", e),
+                Ok(client) => {
+                    tracing::info!("Redis connected");
+                    Some(client)
+                }
+                Err(e) => {
+                    tracing::warn!("Redis unavailable (non-fatal): {}", e);
+                    None
+                }
             }
-        }
+        };
 
         // HTTP client for LLM
         let http = reqwest::Client::builder()
@@ -56,6 +69,7 @@ impl AppState {
                 config.llm.api_key.clone(),
                 config.llm.api_base_url.clone(),
             ),
+            redis,
             llm_settings: Arc::new(RwLock::new(HashMap::new())),
             permissions: Arc::new(RwLock::new(HashMap::new())),
         })
@@ -69,10 +83,10 @@ impl AppState {
     }
 }
 
-async fn try_connect_redis(url: &str) -> anyhow::Result<()> {
+async fn try_connect_redis(url: &str) -> anyhow::Result<fred::clients::RedisClient> {
     let redis_config = fred::types::RedisConfig::from_url(url)?;
     let client = fred::clients::RedisClient::new(redis_config, None, None, None);
     client.connect();
     client.wait_for_connect().await?;
-    Ok(())
+    Ok(client)
 }

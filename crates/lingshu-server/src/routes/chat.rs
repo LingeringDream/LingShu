@@ -88,6 +88,15 @@ pub async fn chat(
         .bind(&user_message)
         .execute(&state.db)
         .await?;
+
+        // Bump updated_at so the session list order reflects latest activity
+        sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1")
+            .bind(sid)
+            .execute(&state.db)
+            .await?;
+
+        // Invalidate cached session list
+        crate::routes::sessions::invalidate_session_cache(&state, user_id).await;
     }
 
     let options = ChatOptions {

@@ -1,5 +1,5 @@
 use axum::{extract::Path, routing::get, Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -16,12 +16,21 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
 pub struct SessionResponse {
     pub id: Uuid,
     pub title: Option<String>,
     pub message_count: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Invalidate the cached session list for a user. Best-effort.
+pub async fn invalidate_session_cache(state: &AppState, user_id: Uuid) {
+    crate::cache::del(
+        &state.redis,
+        &crate::cache::chat_sessions_cache_key(user_id),
+    )
+    .await;
 }
 
 #[utoipa::path(
@@ -38,24 +47,32 @@ pub async fn list_sessions(
 ) -> Result<Json<Vec<SessionResponse>>, AppError> {
     let user_id = auth::require_user(auth).await?;
 
-    let sessions = sqlx::query_as::<_, (Uuid, Option<String>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, title, created_at FROM conversations WHERE user_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC"
+    // 1. Redis cache
+    let cache_key = crate::cache::chat_sessions_cache_key(user_id);
+    if let Some(cached) =
+        crate::cache::get_json::<Vec<SessionResponse>>(&state.redis, &cache_key).await
+    {
+        return Ok(Json(cached));
+    }
+
+    // 2. PostgreSQL with real message count
+    let sessions: Vec<SessionResponse> = sqlx::query_as(
+        "SELECT c.id, c.title, c.created_at, \
+         CAST(COUNT(m.id) AS BIGINT) AS message_count \
+         FROM conversations c \
+         LEFT JOIN messages m ON m.conversation_id = c.id \
+         WHERE c.user_id = $1 AND c.deleted_at IS NULL \
+         GROUP BY c.id, c.title, c.created_at \
+         ORDER BY MAX(c.updated_at) DESC",
     )
     .bind(user_id)
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(
-        sessions
-            .into_iter()
-            .map(|s| SessionResponse {
-                id: s.0,
-                title: s.1,
-                message_count: 0, // TODO: count messages
-                created_at: s.2,
-            })
-            .collect(),
-    ))
+    // 3. Write-through to Redis (TTL 30s)
+    crate::cache::set_json(&state.redis, &cache_key, &sessions, Some(30)).await;
+
+    Ok(Json(sessions))
 }
 
 #[utoipa::path(
@@ -74,8 +91,12 @@ pub async fn get_session(
 ) -> Result<Json<SessionResponse>, AppError> {
     let user_id = auth::require_user(auth).await?;
 
-    let session = sqlx::query_as::<_, (Uuid, Option<String>, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, title, created_at FROM conversations WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+    let session: SessionResponse = sqlx::query_as(
+        "SELECT c.id, c.title, c.created_at, CAST(COUNT(m.id) AS BIGINT) AS message_count \
+         FROM conversations c \
+         LEFT JOIN messages m ON m.conversation_id = c.id \
+         WHERE c.id = $1 AND c.user_id = $2 AND c.deleted_at IS NULL \
+         GROUP BY c.id, c.title, c.created_at",
     )
     .bind(id)
     .bind(user_id)
@@ -83,12 +104,7 @@ pub async fn get_session(
     .await?
     .ok_or_else(|| AppError::NotFound("Session not found".to_string()))?;
 
-    Ok(Json(SessionResponse {
-        id: session.0,
-        title: session.1,
-        message_count: 0,
-        created_at: session.2,
-    }))
+    Ok(Json(session))
 }
 
 #[utoipa::path(
@@ -118,6 +134,9 @@ pub async fn delete_session(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Session not found".to_string()));
     }
+
+    // Invalidate cached session list
+    invalidate_session_cache(&state, user_id).await;
 
     Ok(axum::http::StatusCode::NO_CONTENT)
 }

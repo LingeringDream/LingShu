@@ -113,6 +113,9 @@ pub async fn create_conversation(
     .fetch_one(&state.db)
     .await?;
 
+    // Invalidate cached session list
+    crate::routes::sessions::invalidate_session_cache(&state, user_id).await;
+
     Ok((axum::http::StatusCode::CREATED, Json(conv.into_response())))
 }
 
@@ -172,6 +175,9 @@ pub async fn delete_conversation(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Conversation not found".to_string()));
     }
+
+    // Invalidate cached session list
+    crate::routes::sessions::invalidate_session_cache(&state, user_id).await;
 
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
