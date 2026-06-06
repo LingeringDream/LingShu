@@ -25,6 +25,10 @@ pub fn router() -> Router<AppState> {
             "/api/v1/calendar/events/{id}",
             routing::patch(update_event).delete(delete_event),
         )
+        .route(
+            "/api/v1/calendar/events/{id}/confirm",
+            routing::post(confirm_event),
+        )
 }
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -397,6 +401,48 @@ async fn update_event(
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Event not found".into()))?;
+
+    Ok(Json(row.into_response()))
+}
+
+// ── Handler: confirm ───────────────────────────────────────────────
+
+/// Confirm a `pending_confirmation` event, flipping it to `confirmed`.
+///
+/// This closes the L1 confirmation loop: when `l1_require_confirmation` is on
+/// (the default), `parse`/`create` persist events as `pending_confirmation`,
+/// and this endpoint is the explicit, user-driven approval step that activates
+/// them. Idempotency: only rows currently in `pending_confirmation` are
+/// affected, so a second call returns 404 rather than silently re-confirming.
+#[utoipa::path(
+    post,
+    path = "/api/v1/calendar/events/{id}/confirm",
+    params(("id" = Uuid, Path, description = "Event ID")),
+    responses(
+        (status = 200, body = EventResponse),
+        (status = 403, description = "Calendar access (L1) not enabled"),
+        (status = 404, description = "Event not found or not pending confirmation")
+    )
+)]
+async fn confirm_event(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<EventResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    check_calendar_permission(&state, user_id).await?;
+
+    let row: EventRow = sqlx::query_as(
+        "UPDATE calendar_events SET status = 'confirmed', updated_at = NOW() \
+         WHERE id = $1 AND user_id = $2 AND status = 'pending_confirmation' \
+         RETURNING id, title, description, location, start_time, end_time, \
+         attendees, status, calendar_name, parse_confidence, source_input, created_at",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Event not found or not pending confirmation".into()))?;
 
     Ok(Json(row.into_response()))
 }

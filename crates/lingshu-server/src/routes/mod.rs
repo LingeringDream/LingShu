@@ -60,6 +60,7 @@ use utoipa::OpenApi;
         calendar::create_event,
         calendar::update_event,
         calendar::delete_event,
+        calendar::confirm_event,
         permissions::get_permissions,
         permissions::update_permissions,
         project_members::list_members,
