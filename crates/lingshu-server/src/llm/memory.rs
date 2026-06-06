@@ -5,6 +5,8 @@ use tracing;
 use uuid::Uuid;
 
 use crate::llm::client::{ChatMessage, LlmClient};
+use crate::llm::dedup::{is_duplicate, DEDUP_SIMILARITY_THRESHOLD};
+use crate::models::memory::Memory;
 use sqlx::PgPool;
 
 /// Minimum seconds between memory extraction calls to avoid overwhelming the LLM.
@@ -17,6 +19,102 @@ struct MemoryCandidate {
     content: String,
     importance: f32,
     memory_type: String,
+}
+
+/// Outcome of [`save_memory`].
+pub struct SaveMemoryOutcome {
+    pub memory: Memory,
+    /// `true` when a new row was inserted; `false` when an existing row was updated.
+    pub created: bool,
+}
+
+/// Query recent / high-importance memories of the same type and check for
+/// near-duplicate content. Returns the `id` of the first duplicate found.
+async fn find_duplicate_memory(
+    db: &PgPool,
+    user_id: Uuid,
+    memory_type: &str,
+    content: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, content FROM memories \
+         WHERE user_id = $1 AND memory_type = $2 AND deleted_at IS NULL \
+         ORDER BY importance DESC, updated_at DESC \
+         LIMIT 50",
+    )
+    .bind(user_id)
+    .bind(memory_type)
+    .fetch_all(db)
+    .await?;
+
+    for (id, existing_content) in &rows {
+        if is_duplicate(existing_content, content, DEDUP_SIMILARITY_THRESHOLD) {
+            return Ok(Some(*id));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Save a memory to the database with near-duplicate detection.
+///
+/// If a duplicate is found, the existing row's `importance` is bumped to
+/// `GREATEST(importance, new)` and `updated_at` refreshed. Otherwise a new
+/// row is inserted.
+///
+/// This is the canonical write path for memories — used by both automatic
+/// extraction and the manual `POST /api/v1/memories` endpoint.
+pub async fn save_memory(
+    db: &PgPool,
+    user_id: Uuid,
+    memory_type: &str,
+    content: &str,
+    importance: f32,
+) -> Result<SaveMemoryOutcome, sqlx::Error> {
+    // 1. Check for duplicates
+    if let Some(existing_id) = find_duplicate_memory(db, user_id, memory_type, content).await? {
+        let updated: Memory = sqlx::query_as(
+            "UPDATE memories \
+             SET importance = GREATEST(importance, $1), updated_at = NOW() \
+             WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL \
+             RETURNING *",
+        )
+        .bind(importance)
+        .bind(existing_id)
+        .bind(user_id)
+        .fetch_one(db)
+        .await?;
+
+        tracing::info!(
+            memory_type = %memory_type,
+            existing_id = %existing_id,
+            new_importance = %importance,
+            "Skipped duplicate memory, bumped importance"
+        );
+
+        return Ok(SaveMemoryOutcome {
+            memory: updated,
+            created: false,
+        });
+    }
+
+    // 2. No duplicate — insert
+    let inserted: Memory = sqlx::query_as(
+        "INSERT INTO memories (user_id, memory_type, content, importance) \
+         VALUES ($1, $2, $3, $4) \
+         RETURNING *",
+    )
+    .bind(user_id)
+    .bind(memory_type)
+    .bind(content)
+    .bind(importance)
+    .fetch_one(db)
+    .await?;
+
+    Ok(SaveMemoryOutcome {
+        memory: inserted,
+        created: true,
+    })
 }
 
 /// Extract memorable facts from a user↔assistant exchange and persist high-value ones.
@@ -106,25 +204,18 @@ JSON 数组："###,
         if c.importance < 0.5 {
             continue; // below retention threshold
         }
-        let result = sqlx::query(
-            "INSERT INTO memories (user_id, memory_type, content, importance) \
-             VALUES ($1, $2, $3, $4)",
-        )
-        .bind(user_id)
-        .bind(&c.memory_type)
-        .bind(&c.content)
-        .bind(c.importance)
-        .execute(db)
-        .await;
-
-        match result {
-            Ok(_) => saved += 1,
+        match save_memory(db, user_id, &c.memory_type, &c.content, c.importance).await {
+            Ok(outcome) => {
+                if outcome.created {
+                    saved += 1;
+                }
+            }
             Err(e) => tracing::warn!("Failed to save memory: {}", e),
         }
     }
 
     if saved > 0 {
-        tracing::info!("Saved {} memory candidates from chat", saved);
+        tracing::info!("Saved {} new memory candidates from chat", saved);
     }
 }
 

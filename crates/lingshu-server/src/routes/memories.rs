@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 use crate::auth::{self, AuthUser};
 use crate::error::AppError;
+use crate::llm::memory::save_memory;
+use crate::models::memory::Memory;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -152,7 +154,10 @@ async fn get_memory(
     post,
     path = "/api/v1/memories",
     request_body = CreateMemoryRequest,
-    responses((status = 201, body = MemoryResponse))
+    responses(
+        (status = 201, description = "Memory created", body = MemoryResponse),
+        (status = 200, description = "Duplicate memory updated", body = MemoryResponse)
+    )
 )]
 async fn create_memory(
     axum::extract::State(state): axum::extract::State<AppState>,
@@ -161,19 +166,22 @@ async fn create_memory(
 ) -> Result<(axum::http::StatusCode, Json<MemoryResponse>), AppError> {
     let user_id = auth::require_user(auth).await?;
 
-    let row: MemoryRow = sqlx::query_as(
-        "INSERT INTO memories (user_id, memory_type, content, importance) \
-         VALUES ($1, $2, $3, $4) \
-         RETURNING id, memory_type, content, importance, metadata, created_at, updated_at",
+    let outcome = save_memory(
+        &state.db,
+        user_id,
+        &req.memory_type,
+        &req.content,
+        req.importance,
     )
-    .bind(user_id)
-    .bind(&req.memory_type)
-    .bind(&req.content)
-    .bind(req.importance)
-    .fetch_one(&state.db)
     .await?;
 
-    Ok((axum::http::StatusCode::CREATED, Json(row.into_response())))
+    let status = if outcome.created {
+        axum::http::StatusCode::CREATED
+    } else {
+        axum::http::StatusCode::OK
+    };
+
+    Ok((status, Json(memory_to_response(outcome.memory))))
 }
 
 // ── Handler: update ────────────────────────────────────────────────
@@ -313,5 +321,18 @@ impl MemoryRow {
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
+    }
+}
+
+/// Convert a model-layer [`Memory`] to the route-layer [`MemoryResponse`].
+fn memory_to_response(m: Memory) -> MemoryResponse {
+    MemoryResponse {
+        id: m.id,
+        memory_type: m.memory_type,
+        content: m.content,
+        importance: m.importance,
+        metadata: m.metadata,
+        created_at: m.created_at,
+        updated_at: m.updated_at,
     }
 }
