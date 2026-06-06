@@ -29,6 +29,10 @@ pub fn router() -> Router<AppState> {
             "/api/v1/calendar/events/{id}/confirm",
             routing::post(confirm_event),
         )
+        .route(
+            "/api/v1/calendar/events/{id}/apple-event",
+            routing::post(save_apple_event_id),
+        )
 }
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -443,6 +447,80 @@ async fn confirm_event(
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Event not found or not pending confirmation".into()))?;
+
+    Ok(Json(row.into_response()))
+}
+
+// ── Handler: save apple_event_id ──────────────────────────────────────
+
+/// Store the EventKit `eventIdentifier` after syncing to Apple Calendar.
+///
+/// Called by the frontend after a successful EventKit `create_calendar_event`
+/// Tauri command. The `apple_event_id` is used for future update/delete
+/// sync and deduplication.
+///
+/// Only confirmed events can receive an apple_event_id; pending ones
+/// should be confirmed first.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SaveAppleEventRequest {
+    apple_event_id: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/calendar/events/{id}/apple-event",
+    request_body = SaveAppleEventRequest,
+    responses(
+        (status = 200, body = EventResponse),
+        (status = 404, description = "Event not found"),
+        (status = 409, description = "Event is not confirmed — confirm first"),
+        (status = 422, description = "Validation error")
+    )
+)]
+async fn save_apple_event_id(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<SaveAppleEventRequest>,
+) -> Result<Json<EventResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    check_calendar_permission(&state, user_id).await?;
+
+    let apple_event_id = req.apple_event_id.trim();
+    if apple_event_id.is_empty() {
+        return Err(AppError::Validation(
+            "apple_event_id must not be empty".into(),
+        ));
+    }
+
+    // Only save apple_event_id on confirmed events.
+    let row = sqlx::query_as::<_, EventRow>(
+        "UPDATE calendar_events SET apple_event_id = $1, updated_at = NOW() \
+         WHERE id = $2 AND user_id = $3 AND status = 'confirmed' \
+         RETURNING id, title, description, location, start_time, end_time, \
+         attendees, status, calendar_name, parse_confidence, source_input, created_at",
+    )
+    .bind(apple_event_id)
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let Some(row) = row else {
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM calendar_events WHERE id = $1 AND user_id = $2")
+                .bind(id)
+                .bind(user_id)
+                .fetch_optional(&state.db)
+                .await?;
+
+        return match status.as_deref() {
+            Some("confirmed") | None => Err(AppError::NotFound("Event not found".into())),
+            Some(_) => Err(AppError::Conflict(
+                "Confirm the event before syncing to Apple Calendar".into(),
+            )),
+        };
+    };
 
     Ok(Json(row.into_response()))
 }

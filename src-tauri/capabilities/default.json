@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "Default capability set for LingShu desktop app",
+  "windows": ["main", "pet"],
+  "permissions": [
+    "core:default",
+    "opener:default"
+  ]
+}

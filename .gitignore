@@ -63,6 +63,11 @@ tarpaulin-report.html
 # Benchmark artifacts
 .criterion/
 
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/icons/icon.iconset/
+
 # Misc
 *.tmp
 *.bak

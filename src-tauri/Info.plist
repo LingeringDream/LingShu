@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSCalendarsUsageDescription</key>
+	<string>灵枢 needs calendar access to sync events you've confirmed to Apple Calendar.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>灵枢 needs reminders access to create reminder items for your tasks.</string>
+</dict>
+</plist>
