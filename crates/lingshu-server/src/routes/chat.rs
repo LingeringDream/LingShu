@@ -127,59 +127,69 @@ pub async fn chat(
     let model_name = settings.model.clone();
     let um_clone = user_message.clone();
 
-    let sse_stream = chunk_stream.map(move |result| {
-        match result {
-            Ok(chunk) => {
-                if let Ok(mut acc) = assistant_accumulator.lock() {
-                    acc.push_chunk(&chunk.content);
-                }
+    let sse_stream = chunk_stream.then(move |result| {
+        let assistant_accumulator = Arc::clone(&assistant_accumulator);
+        let stream_finalized = Arc::clone(&stream_finalized);
+        let db = db_clone.clone();
+        let llm = llm_clone.clone();
+        let redis = redis_clone.clone();
+        let model = model_name.clone();
+        let user_message = um_clone.clone();
 
-                let event =
-                    Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+        async move {
+            match result {
+                Ok(chunk) => {
+                    if let Ok(mut acc) = assistant_accumulator.lock() {
+                        acc.push_chunk(&chunk.content);
+                    }
 
-                // On the final chunk, spawn persistence + memory + thoughts
-                if chunk.done && mark_stream_finalized(&stream_finalized) {
-                    let assistant_response = assistant_accumulator
-                        .lock()
-                        .ok()
-                        .and_then(|acc| acc.finalize());
-                    spawn_post_stream_tasks(
-                        db_clone.clone(),
-                        llm_clone.clone(),
-                        redis_clone.clone(),
-                        model_name.clone(),
-                        user_id,
-                        sid_for_stream,
-                        um_clone.clone(),
-                        assistant_response,
-                    );
-                }
+                    let event =
+                        Ok(Event::default()
+                            .data(serde_json::to_string(&chunk).unwrap_or_default()));
 
-                event
-            }
-            Err(e) => {
-                if let Ok(mut acc) = assistant_accumulator.lock() {
-                    acc.mark_error();
+                    // On the final chunk, spawn persistence + memory + thoughts
+                    if chunk.done && mark_stream_finalized(&stream_finalized) {
+                        let assistant_response = assistant_accumulator
+                            .lock()
+                            .ok()
+                            .and_then(|acc| acc.finalize());
+                        let mut assistant_persisted = false;
+                        if let (Some(sid), Some(content)) =
+                            (sid_for_stream, assistant_response.as_ref())
+                        {
+                            assistant_persisted = persist_assistant_message(
+                                &db, &redis, sid, user_id, content, &model,
+                            )
+                            .await;
+                        }
+                        spawn_post_stream_tasks(
+                            db,
+                            llm,
+                            model,
+                            user_id,
+                            user_message,
+                            assistant_response,
+                            assistant_persisted,
+                        );
+                    }
+
+                    event
                 }
-                if mark_stream_finalized(&stream_finalized) {
-                    spawn_post_stream_tasks(
-                        db_clone.clone(),
-                        llm_clone.clone(),
-                        redis_clone.clone(),
-                        model_name.clone(),
-                        user_id,
-                        sid_for_stream,
-                        um_clone.clone(),
-                        None,
-                    );
+                Err(e) => {
+                    if let Ok(mut acc) = assistant_accumulator.lock() {
+                        acc.mark_error();
+                    }
+                    if mark_stream_finalized(&stream_finalized) {
+                        spawn_post_stream_tasks(db, llm, model, user_id, user_message, None, false);
+                    }
+                    Ok(Event::default().data(
+                        serde_json::to_string(&ChatChunk {
+                            content: format!("[stream error: {e}]"),
+                            done: true,
+                        })
+                        .unwrap_or_default(),
+                    ))
                 }
-                Ok(Event::default().data(
-                    serde_json::to_string(&ChatChunk {
-                        content: format!("[stream error: {e}]"),
-                        done: true,
-                    })
-                    .unwrap_or_default(),
-                ))
             }
         }
     });
@@ -409,20 +419,13 @@ async fn run_forgetting_sweep(db: &sqlx::PgPool, user_id: Uuid) {
 fn spawn_post_stream_tasks(
     db: sqlx::PgPool,
     llm: crate::llm::client::LlmClient,
-    redis: crate::state::OptionalRedis,
     model: String,
     user_id: Uuid,
-    session_id: Option<Uuid>,
     user_message: String,
     assistant_response: Option<String>,
+    assistant_persisted: bool,
 ) {
     tokio::spawn(async move {
-        let mut assistant_persisted = false;
-        if let (Some(sid), Some(content)) = (session_id, assistant_response.as_ref()) {
-            assistant_persisted =
-                persist_assistant_message(&db, &redis, sid, user_id, content, &model).await;
-        }
-
         let had_assistant_response = has_assistant_response(&assistant_response);
         let assistant_for_memory = assistant_response.unwrap_or_default();
         crate::llm::memory::extract_and_save(
