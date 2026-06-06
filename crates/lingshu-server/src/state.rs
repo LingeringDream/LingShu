@@ -32,6 +32,10 @@ pub struct AppState {
     pub llm_settings: Arc<RwLock<HashMap<Uuid, LlmSettings>>>,
     /// L0-L4 permission tiers. In-memory, defaults to L0 only.
     pub permissions: Arc<RwLock<HashMap<Uuid, PermissionSettings>>>,
+    /// Key for integration token-at-rest encryption (AES-256-GCM), derived from
+    /// `ENCRYPTION_KEY`. `None` when unconfigured — integration writes that would
+    /// need to encrypt a token must then be rejected rather than stored in the clear.
+    pub encryption_key: Option<String>,
 }
 
 impl AppState {
@@ -95,6 +99,7 @@ impl AppState {
             vector,
             llm_settings: Arc::new(RwLock::new(HashMap::new())),
             permissions: Arc::new(RwLock::new(HashMap::new())),
+            encryption_key: config.security.encryption_key.clone(),
         })
     }
 

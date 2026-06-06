@@ -37,9 +37,9 @@ api_base_url = ""
 [security]
 # Change this for any non-local deployment
 jwt_secret = "change-me-dev-jwt-secret"
-# encryption_key is OPTIONAL and currently RESERVED — integration token
-# encryption is not yet implemented, so this key does not protect anything yet.
-# Leave it unset until the encryption helper lands.
+# encryption_key derives an AES-256-GCM key (via SHA-256) used to encrypt
+# integration access/refresh tokens at rest. Required before creating any
+# integration — POST /api/v1/integrations is rejected until this is set.
 # encryption_key = "change-me-dev-encryption-key"
 
 [cors]

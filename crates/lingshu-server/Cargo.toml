@@ -30,6 +30,9 @@ utoipa-swagger-ui = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 jsonwebtoken = { workspace = true }
+aes-gcm = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
 prometheus-client = { workspace = true }
 futures = { workspace = true }
 bytes = { workspace = true }

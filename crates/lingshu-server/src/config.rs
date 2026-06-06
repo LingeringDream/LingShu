@@ -71,13 +71,11 @@ fn default_embed_model() -> String {
 #[derive(Debug, Deserialize, Clone)]
 pub struct SecurityConfig {
     pub jwt_secret: String,
-    /// Reserved for integration token-at-rest encryption (AES-GCM).
+    /// Key for integration token-at-rest encryption (AES-256-GCM, see `crate::crypto`).
     ///
-    /// NOT YET WIRED: the integration write path and an encrypt/decrypt helper
-    /// do not exist yet, so setting this key currently protects nothing. It is
-    /// intentionally optional to avoid implying a security guarantee that the
-    /// code does not provide. Make it required again only once the encryption
-    /// helper is implemented and used on the `integrations` write path.
+    /// Optional so the server can still start without it, but `POST /api/v1/integrations`
+    /// rejects writes with `AppError::Internal` until an operator sets `ENCRYPTION_KEY` —
+    /// tokens are never persisted in the clear. Set it before connecting any integration.
     #[serde(default)]
     pub encryption_key: Option<String>,
 }

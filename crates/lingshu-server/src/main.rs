@@ -5,6 +5,7 @@
 mod auth;
 mod cache;
 mod config;
+mod crypto;
 mod db;
 mod error;
 mod llm;
