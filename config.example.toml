@@ -1,0 +1,42 @@
+# LingShu local configuration
+# Copy this file to config.toml and adjust for your environment:
+#
+#   cp config.example.toml config.toml
+#
+# config.toml is gitignored; do NOT commit real keys or personal values.
+# Environment variables (see .env.example) take precedence over this file.
+
+[database]
+# PostgreSQL connection string
+url = "postgres://lingshu:lingshu@localhost:5432/lingshu"
+max_connections = 20
+
+[redis]
+# Redis connection string (optional; leave empty to skip Redis)
+url = "redis://localhost:6379"
+
+[qdrant]
+# Qdrant vector database (optional; leave empty to skip Qdrant)
+url = "http://localhost:6333"
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[llm]
+# Ollama endpoint (local)
+ollama_url = "http://localhost:11434"
+# Set to an Ollama model installed on your machine, e.g. "<your-local-model>"
+default_model = ""
+# OpenAI-compatible cloud provider (optional; leave blank when using local Ollama)
+api_key = ""
+api_base_url = ""
+
+[security]
+# Change these for any non-local deployment
+jwt_secret = "change-me-dev-jwt-secret"
+encryption_key = "change-me-dev-encryption-key"
+
+[cors]
+# Allowed origins for browser requests
+allowed_origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8080", "http://127.0.0.1:8080"]

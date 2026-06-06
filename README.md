@@ -71,8 +71,12 @@ This starts PostgreSQL (5432), Redis (6379), and Qdrant (6333).
 ### 3. Configure environment
 
 ```bash
+cp config.example.toml config.toml
 cp .env.example .env
 ```
+
+- `config.toml` is the base configuration file loaded by the backend at startup. It is **gitignored** — do not commit real keys or personal model names.
+- `.env` provides environment variable overrides after it is loaded by the backend. Both files ship with safe defaults; edit them for your local setup.
 
 For local dev, update `.env` hostnames from Docker service names to `localhost`:
 
@@ -123,7 +127,12 @@ Builds and runs backend + frontend inside Docker containers alongside infrastruc
 
 ## Configuration
 
-Key environment variables (see [`.env.example`](./.env.example)):
+LingShu loads configuration in layers. `config.toml` is loaded first, then environment variables override it. The backend loads `.env` at startup, so values from `.env` participate in the same environment override layer as shell variables.
+
+1. **`config.toml`** — local base config (gitignored, created from [`config.example.toml`](./config.example.toml))
+2. **Environment variables** — values from [`.env`](./.env.example) or inline shell overrides, e.g. `LLM_DEFAULT_MODEL=<your-local-model> cargo run -p lingshu-server`
+
+Key environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -132,7 +141,7 @@ Key environment variables (see [`.env.example`](./.env.example)):
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant connection |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama LLM endpoint |
-| `LLM_DEFAULT_MODEL` | — | Ollama model for chat. Set in your local `.env`, e.g. `gemma4:e4b`, `qwen2.5:7b`, `llama3.2` |
+| `LLM_DEFAULT_MODEL` | — | Ollama model for chat. Set this to a model installed on your machine. |
 | `LLM_API_KEY` | — | Cloud LLM API key (Phase 1+ — not yet used; all calls go to Ollama) |
 | `LLM_API_BASE_URL` | `https://api.openai.com/v1` | Cloud LLM base URL (Phase 1+ — not yet used) |
 | `SERVER_HOST` | `127.0.0.1` | Backend bind address for the local management interface |

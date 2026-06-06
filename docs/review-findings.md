@@ -1,7 +1,7 @@
 # Documentation & Code Review Findings — 待办清单
 
 > 2026-06-06 · 三轮独立审查 + 两次代码审查（Phase 1 / Phase 2）
-> 总计 56 项发现：28 项已修复 ✅，28 项待处理。
+> 总计 56 项发现：29 项已修复 ✅，27 项待处理。
 
 ---
 
@@ -32,7 +32,7 @@
 - [x] **前端 `index.html` title 过期** — ✅ 2026-06-04：改为「macOS 桌面 AI 个人助理」。
 - [x] **Docker Compose `VITE_API_URL` 死配置** — ✅ 2026-06-06：`docker-compose.dev.yml` 设置 `VITE_API_URL: http://backend:8080`，`frontend/vite.config.ts` 通过 `loadEnv()` 读取并用于 Vite dev proxy 的 `/api` target，同时派生 `/ws` proxy target。
 - [ ] **无基准测试代码** — 性能 checklist 在 CI 中无一实现。
-- [ ] **`config.toml` 被 figment 引用但不存在** — 当前工作区本地有 `config.toml`，但该文件被 `.gitignore` 忽略且未被 git 跟踪；新克隆仍不会获得默认配置。应补充可提交的 `config.example.toml` 或调整启动文档。
+- [x] **`config.toml` 被 figment 引用但不存在** — ✅ 2026-06-06：新增 `config.example.toml`（覆盖 database/redis/qdrant/server/llm/security/cors 全部 7 个 section），README Quick Start 步骤 3 引导 `cp config.example.toml config.toml`，配置章节说明 `config.toml` 先加载、随后由 `.env`/shell 环境变量覆盖。`config.toml` 仍被 `.gitignore` 忽略，新克隆可通过示例文件获得完整默认配置。
 
 ### 代码审查发现的额外项（已修复）
 
@@ -113,11 +113,11 @@
 
 | 优先级 | 数量 | 变化 |
 |--------|------|------|
-| ✅ 已修复 | 28 | +10（P1+4: Redis/Qdrant/sessions/VITE_API_URL、P2 产品+1: Thought Queue 引擎、Phase 2 遗留+4: 去重/限流/人格/Thought Queue 接入、OpenAPI 描述修正） |
-| 🔴 P1 | 5 | -5（lingshu-graph、WebSocket、Three.js、无基准、config.toml） |
+| ✅ 已修复 | 29 | +11（P1+5: Redis/Qdrant/sessions/VITE_API_URL/config.toml、P2 产品+1: Thought Queue 引擎、Phase 2 遗留+4: 去重/限流/人格/Thought Queue 接入、OpenAPI 描述修正） |
+| 🔴 P1 | 4 | -6（lingshu-graph、WebSocket、Three.js、无基准） |
 | 🟡 P2 | 16 | -1（产品设计 9 + 开发者体验 6 + Phase 2 遗留 1） |
 | 🟢 P3 | 7 | 0（无变化） |
-| **合计待处理** | **28** | -6 |
+| **合计待处理** | **27** | -7 |
 
 ---
 
