@@ -119,6 +119,39 @@ pub fn evaluate(base_importance: f32, days: f64, policy: &ForgettingPolicy) -> V
     }
 }
 
+/// Evaluate a memory with an additional **provenance guard**: when
+/// `is_referenced` is `true` the memory is unconditionally kept regardless
+/// of its base importance or decayed effective value.
+///
+/// This is the recommended entry point for background forgetting sweeps.
+/// Use the bare [`evaluate`] only when you are certain no external
+/// references exist (e.g. isolated unit tests of the decay math).
+///
+/// # Provenance coverage (current scope)
+///
+/// At present the "protected id set" includes only memories referenced by
+/// an active personality snapshot (`source_memory_ids`). Memories that are
+/// compressed into other memories (episodic→semantic chain) are not yet
+/// covered because the data model for that chain does not exist yet. When
+/// it lands, its source references must be added to the protected set.
+pub fn evaluate_with_protection(
+    base_importance: f32,
+    days: f64,
+    is_referenced: bool,
+    policy: &ForgettingPolicy,
+) -> Verdict {
+    let effective = effective_importance(base_importance, days, policy.half_life_days);
+
+    if is_referenced || is_protected(base_importance, policy) {
+        return Verdict::Keep { effective };
+    }
+    if effective < policy.forget_floor {
+        Verdict::Forget { effective }
+    } else {
+        Verdict::Keep { effective }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -278,5 +311,44 @@ mod tests {
         let p = ForgettingPolicy::default();
         let v = evaluate(0.8, 30.0, &p);
         assert!((v.effective() - 0.4).abs() < 1e-6);
+    }
+
+    // ── evaluate_with_protection ────────────────────────────────────
+
+    #[test]
+    fn protection_referenced_forces_keep_even_when_old_and_low() {
+        let p = ForgettingPolicy::default();
+        // Low importance, ancient — would normally be forgotten.
+        let v = evaluate_with_protection(0.3, 365.0, true, &p);
+        assert!(!v.should_forget(), "referenced memory must be kept");
+    }
+
+    #[test]
+    fn protection_unreferenced_old_low_is_forgotten() {
+        let p = ForgettingPolicy::default();
+        // Same parameters but unreferenced — should forget.
+        let v = evaluate_with_protection(0.3, 365.0, false, &p);
+        assert!(v.should_forget(), "unreferenced old low memory should be forgotten");
+    }
+
+    #[test]
+    fn protection_high_importance_kept_even_when_unreferenced() {
+        let p = ForgettingPolicy::default();
+        // is_protected still works independently of is_referenced.
+        let v = evaluate_with_protection(0.95, 3650.0, false, &p);
+        assert!(!v.should_forget());
+    }
+
+    #[test]
+    fn protection_referenced_kept_even_below_floor() {
+        let p = ForgettingPolicy {
+            half_life_days: 30.0,
+            forget_floor: 0.15,
+            protect_importance: 0.9,
+        };
+        // base 0.2, 180 days (6 half-lives) → effective ≈ 0.0031 << 0.15 floor
+        // Without reference it would be forgotten, with reference it's kept.
+        let v = evaluate_with_protection(0.2, 180.0, true, &p);
+        assert!(!v.should_forget(), "referenced memory survives even below floor");
     }
 }

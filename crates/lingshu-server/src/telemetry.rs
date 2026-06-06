@@ -31,6 +31,10 @@ pub enum SignalEventType {
     MemoryDedupHit,
     MemoryCreated,
     MemoryRetrievalHit,
+    /// Service-side only: a memory was soft-deleted by the background
+    /// forgetting sweep because its decayed effective importance fell
+    /// below the floor and it was not protected by provenance.
+    MemoryForgotten,
     MemoryReferenced,
     MemoryCopied,
     MemoryDisputed,
@@ -58,6 +62,7 @@ impl SignalEventType {
             Self::MemoryDedupHit => "memory_dedup_hit",
             Self::MemoryCreated => "memory_created",
             Self::MemoryRetrievalHit => "memory_retrieval_hit",
+            Self::MemoryForgotten => "memory_forgotten",
             Self::MemoryReferenced => "memory_referenced",
             Self::MemoryCopied => "memory_copied",
             Self::MemoryDisputed => "memory_disputed",
@@ -79,6 +84,7 @@ impl SignalEventType {
             "memory_dedup_hit" => Some(Self::MemoryDedupHit),
             "memory_created" => Some(Self::MemoryCreated),
             "memory_retrieval_hit" => Some(Self::MemoryRetrievalHit),
+            "memory_forgotten" => Some(Self::MemoryForgotten),
             "memory_referenced" => Some(Self::MemoryReferenced),
             "memory_copied" => Some(Self::MemoryCopied),
             "memory_disputed" => Some(Self::MemoryDisputed),
@@ -230,6 +236,7 @@ mod tests {
             SignalEventType::MemoryDedupHit,
             SignalEventType::MemoryCreated,
             SignalEventType::MemoryRetrievalHit,
+            SignalEventType::MemoryForgotten,
             SignalEventType::MemoryReferenced,
             SignalEventType::MemoryCopied,
             SignalEventType::MemoryDisputed,
@@ -275,6 +282,7 @@ mod tests {
         assert!(SignalEventType::allowed_from_client("thought_dismissed").is_none());
         assert!(SignalEventType::allowed_from_client("thought_snoozed").is_none());
         assert!(SignalEventType::allowed_from_client("memory_referenced").is_none());
+        assert!(SignalEventType::allowed_from_client("memory_forgotten").is_none());
     }
 
     #[test]

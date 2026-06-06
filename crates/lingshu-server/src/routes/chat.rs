@@ -396,10 +396,38 @@ fn last_forgetting_sweeps() -> &'static Mutex<HashMap<Uuid, u64>> {
 /// `(id, importance, last_accessed_at, created_at)` — one row of decay input.
 type MemoryDecayRow = (Uuid, f32, Option<DateTime<Utc>>, DateTime<Utc>);
 
-/// Evaluate a user's memories against the forgetting policy and soft-delete
-/// those that have decayed past the forget floor. Best-effort background
-/// maintenance: failures are logged only and never propagate.
+/// Evaluate a user's memories against the forgetting policy with provenance
+/// protection, soft-deleting those that have decayed past the forget floor.
+///
+/// # Provenance guard
+///
+/// Memories referenced by an active personality snapshot (`source_memory_ids`)
+/// are kept unconditionally regardless of age or importance. This prevents the
+/// forgetting sweep from removing memories that are still wired into the user's
+/// active personality profile. See [`forgetting::evaluate_with_protection`].
+///
+/// Best-effort background maintenance: failures are logged only and never
+/// propagate to the caller.
 async fn run_forgetting_sweep(db: &sqlx::PgPool, user_id: Uuid) {
+    // Load protected IDs from active personality snapshots.
+    // An empty set is safe — it just means no extra protection beyond
+    // the base-importance threshold.
+    let protected: std::collections::HashSet<Uuid> = match sqlx::query_scalar(
+        "SELECT DISTINCT unnest(source_memory_ids) \
+         FROM personality_snapshots \
+         WHERE user_id = $1 AND is_active = true",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(ids) => ids.into_iter().collect(),
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Failed to load protected memory IDs for forgetting sweep");
+            return;
+        }
+    };
+
     let rows: Vec<MemoryDecayRow> = match sqlx::query_as(
         "SELECT id, importance, last_accessed_at, created_at FROM memories \
          WHERE user_id = $1 AND deleted_at IS NULL",
@@ -426,8 +454,12 @@ async fn run_forgetting_sweep(db: &sqlx::PgPool, user_id: Uuid) {
     for (id, importance, last_accessed_at, created_at) in rows {
         let reference = last_accessed_at.unwrap_or(created_at);
         let days = forgetting::days_since(reference, now);
+        let is_referenced = protected.contains(&id);
 
-        if !forgetting::evaluate(importance, days, &policy).should_forget() {
+        let verdict =
+            forgetting::evaluate_with_protection(importance, days, is_referenced, &policy);
+
+        if !verdict.should_forget() {
             continue;
         }
 
@@ -440,7 +472,25 @@ async fn run_forgetting_sweep(db: &sqlx::PgPool, user_id: Uuid) {
         .execute(db)
         .await
         {
-            Ok(_) => forgotten += 1,
+            Ok(affected) => {
+                if affected.rows_affected() > 0 {
+                    forgotten += 1;
+                    // Record telemetry for each forgotten memory
+                    crate::telemetry::record(
+                        db,
+                        user_id,
+                        crate::telemetry::SignalEventType::MemoryForgotten,
+                        Some("memory"),
+                        Some(id),
+                        serde_json::json!({
+                            "effective": verdict.effective(),
+                            "importance": importance,
+                            "days_since_access": days,
+                        }),
+                    )
+                    .await;
+                }
+            }
             Err(error) => {
                 tracing::warn!(%user_id, memory_id = %id, %error, "Failed to soft-delete forgotten memory");
             }
