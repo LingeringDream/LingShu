@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::models::thought::Thought;
+use crate::routes::settings::llm_settings_for_user;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -14,6 +15,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/thoughts/{id}",
             get(get_thought).patch(update_thought),
+        )
+        .route(
+            "/api/v1/thoughts/generate",
+            axum::routing::post(generate_thoughts),
         )
 }
 
@@ -191,4 +196,43 @@ async fn update_thought(
     .await?;
 
     Ok(Json(ThoughtResponse::from(thought)))
+}
+
+// ── Handler: generate ─────────────────────────────────────────────
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GenerateThoughtsResponse {
+    /// Number of new thoughts created (0-3)
+    pub created: usize,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/thoughts/generate",
+    responses(
+        (status = 200, description = "Thoughts generated", body = GenerateThoughtsResponse),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+async fn generate_thoughts(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
+) -> Result<Json<GenerateThoughtsResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    let settings = llm_settings_for_user(&state, user_id).await;
+
+    if settings.model.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!("Model not configured.")));
+    }
+
+    let created = crate::llm::thoughts::generate_and_save_thoughts(
+        &state.db,
+        &state.llm,
+        &settings.model,
+        user_id,
+    )
+    .await
+    .map_err(|e| AppError::Internal(e))?;
+
+    Ok(Json(GenerateThoughtsResponse { created }))
 }

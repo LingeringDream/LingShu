@@ -49,6 +49,7 @@ pub fn thought_queue_prompt(
 - **detail**：具体内容，说清楚建议做什么（50 字以内）
 - **reason**：为什么提出这条建议，引用触发条件
 - **confidence**：0.0-1.0 置信度。不确定时降低，不要瞎猜
+- **source_memory_ids**：支持这条建议的记忆 UUID 数组。如果建议来自对话内容而非已有记忆，返回空数组 []
 - **requires_confirmation**：是否需要用户确认（true/false）
   - true：涉及创建日程、修改数据、发送通知等操作
   - false：纯信息提醒、轻提示
@@ -58,7 +59,7 @@ pub fn thought_queue_prompt(
 - 不要重复已有日程或用户已经明确拒绝过的建议
 - 不要伪装成自己有意识——你是基于规则的启发式引擎
 
-严格返回 JSON 数组。每条对象包含：title, detail, reason, confidence, requires_confirmation。
+严格返回 JSON 数组。每条对象包含：title, detail, reason, confidence, source_memory_ids, requires_confirmation。
 如果当前没有值得提出的建议，返回 []。
 
 JSON 数组："

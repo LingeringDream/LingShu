@@ -128,6 +128,21 @@ pub async fn chat(
         crate::llm::memory::extract_and_save(&db, &llm, &model, user_id, &user_message, "").await;
     });
 
+    // Spawn background thought generation only after this request has persisted
+    // a session message. Fire-and-forget; failures must not affect SSE.
+    if session_id.is_some() && crate::llm::thoughts::should_generate_thoughts(user_id) {
+        let db = state.db.clone();
+        let llm = state.llm.clone();
+        let model = settings.model.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::llm::thoughts::generate_and_save_thoughts(&db, &llm, &model, user_id).await
+            {
+                tracing::warn!(%user_id, %e, "Thought generation failed");
+            }
+        });
+    }
+
     Ok(Sse::new(sse_stream))
 }
 
