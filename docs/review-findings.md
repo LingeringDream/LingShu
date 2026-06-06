@@ -1,7 +1,7 @@
 # Documentation & Code Review Findings — 待办清单
 
 > 2026-06-06 · 三轮独立审查 + 两次代码审查（Phase 1 / Phase 2）
-> 总计 56 项发现：31 项已修复 ✅，25 项待处理。
+> 总计 56 项发现：32 项已修复 ✅，24 项待处理。
 
 ---
 
@@ -28,7 +28,7 @@
 - [x] **lingshu-vector crate 无 Qdrant 客户端** — ✅ 2026-06-06：`crates/lingshu-vector/src/search.rs` 已实现 `QdrantClient`（`new` / `create_collection` / `upsert_point` / `search`），基于 HTTP API 的轻量客户端。**注意：记忆检索仍未接入向量搜索（见 Phase 2 遗留）。**
 - [x] **chat/sessions 路由孤立** — ✅ 2026-06-06：`main.rs` 已 `.merge(routes::sessions::router())`，`routes/sessions.rs` 提供 `list_sessions` / `get_session` / `delete_session` 三个端点。
 - [ ] **WebSocket 处理器孤立** — `ws/handler.rs` 存在（实现 echo 逻辑），`main.rs` 有 `mod ws;` 声明，但**未注册任何 WebSocket 路由**（无 `.route()` 或 `.merge()` 挂载 handler）。
-- [ ] **前端 Three.js 依赖无引用** — `three`、`@react-three/fiber`、`@react-three/drei` 在 `package.json` 中已安装，但前端源码中 **零 import**。
+- [x] **前端 Three.js 依赖无引用** — ✅ 2026-06-06：从 `frontend/package.json` 移除 `three`、`@react-three/fiber`、`@react-three/drei` 和 `@types/three`，并同步清理 `package-lock.json` 中相关传递依赖。
 - [x] **前端 `index.html` title 过期** — ✅ 2026-06-04：改为「macOS 桌面 AI 个人助理」。
 - [x] **Docker Compose `VITE_API_URL` 死配置** — ✅ 2026-06-06：`docker-compose.dev.yml` 设置 `VITE_API_URL: http://backend:8080`，`frontend/vite.config.ts` 通过 `loadEnv()` 读取并用于 Vite dev proxy 的 `/api` target，同时派生 `/ws` proxy target。
 - [ ] **无基准测试代码** — 性能 checklist 在 CI 中无一实现。
@@ -113,11 +113,11 @@
 
 | 优先级 | 数量 | 变化 |
 |--------|------|------|
-| ✅ 已修复 | 31 | +13（P1+6: Redis/Qdrant/sessions/VITE_API_URL/config.toml/lingshu-graph、P2 产品+1: Thought Queue 引擎、DevEx+1: cargo test --workspace、Phase 2 遗留+4: 去重/限流/人格/Thought Queue 接入、OpenAPI 描述修正） |
-| 🔴 P1 | 3 | -7（WebSocket、Three.js、无基准） |
+| ✅ 已修复 | 32 | +14（P1+7: Redis/Qdrant/sessions/VITE_API_URL/config.toml/lingshu-graph/Three.js、P2 产品+1: Thought Queue 引擎、DevEx+1: cargo test --workspace、Phase 2 遗留+4: 去重/限流/人格/Thought Queue 接入、OpenAPI 描述修正） |
+| 🔴 P1 | 2 | -8（WebSocket、无基准） |
 | 🟡 P2 | 15 | -2（产品设计 9 + 开发者体验 5 + Phase 2 遗留 1） |
 | 🟢 P3 | 7 | 0（无变化） |
-| **合计待处理** | **25** | -9 |
+| **合计待处理** | **24** | -10 |
 
 ---
 
