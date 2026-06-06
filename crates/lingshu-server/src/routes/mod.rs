@@ -11,6 +11,7 @@ pub mod project_members;
 pub mod projects;
 pub mod sessions;
 pub mod settings;
+pub mod signals;
 pub mod system;
 pub mod task_dependencies;
 pub mod tasks;
@@ -87,6 +88,7 @@ use utoipa::OpenApi;
         integrations::delete_integration,
         audit::list_entries,
         chat::chat,
+        signals::ingest_signal,
         sessions::list_sessions,
         sessions::get_session,
         sessions::delete_session,
@@ -128,6 +130,7 @@ use utoipa::OpenApi;
         integrations::CreateIntegrationRequest,
         audit::AuditEntryResponse,
         chat::ChatRequest,
+        signals::SignalIngestRequest,
         sessions::SessionResponse,
     ))
 )]

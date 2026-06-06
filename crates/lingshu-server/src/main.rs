@@ -13,6 +13,7 @@ mod models;
 mod patch;
 mod routes;
 mod state;
+mod telemetry;
 mod ws;
 
 use axum::http::{HeaderValue, Method};
@@ -85,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::personality::router())
         .merge(routes::thoughts::router())
         .merge(routes::integrations::router())
+        .merge(routes::signals::router())
         .merge(routes::audit::router())
         .merge(
             utoipa_swagger_ui::SwaggerUi::new("/swagger-ui")
