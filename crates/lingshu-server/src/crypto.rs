@@ -15,10 +15,28 @@ use sha2::{Digest, Sha256};
 
 const NONCE_LEN: usize = 12;
 
+/// Number of SHA-256 iterations for key stretching.
+/// 100 000 rounds ≈ 100ms on modern hardware, making brute-force ~10⁵× harder
+/// while staying imperceptible for the occasional integration creation.
+const KEY_DERIVE_ROUNDS: usize = 100_000;
+
+/// Derive a 32-byte AES-256 key from an arbitrary-length operator-supplied
+/// string. Uses iterated SHA-256 (PBKDF2-like) so that even weak human-chosen
+/// keys are significantly more expensive to brute-force.
 fn derive_key(key: &str) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(key.as_bytes());
-    hasher.finalize().into()
+    let key_bytes = key.as_bytes();
+    let mut state = Sha256::digest(key_bytes).to_vec(); // 32 bytes
+
+    for _ in 0..KEY_DERIVE_ROUNDS {
+        let mut hasher = Sha256::new();
+        hasher.update(&state);
+        hasher.update(key_bytes);
+        state = hasher.finalize().to_vec();
+    }
+
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&state);
+    out
 }
 
 fn build_cipher(key: &str) -> anyhow::Result<Aes256Gcm> {
@@ -109,6 +127,20 @@ mod tests {
         let blob = encrypt("super-secret-access-token", KEY).expect("encrypt");
         assert!(decrypt(&blob[..NONCE_LEN - 1], KEY).is_err());
         assert!(decrypt(&[], KEY).is_err());
+    }
+
+    #[test]
+    fn derive_key_is_deterministic() {
+        let k1 = derive_key("my-secret-key");
+        let k2 = derive_key("my-secret-key");
+        assert_eq!(k1, k2, "same input must produce same key");
+    }
+
+    #[test]
+    fn derive_key_different_inputs_produce_different_keys() {
+        let k1 = derive_key("key-a");
+        let k2 = derive_key("key-b");
+        assert_ne!(k1, k2, "different inputs must produce different keys");
     }
 
     #[test]

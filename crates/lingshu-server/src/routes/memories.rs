@@ -318,8 +318,9 @@ async fn search_memories(
     ))
 }
 
-/// Try semantic search via Qdrant. Returns `None` on any failure or when
-/// Qdrant is unavailable, so the caller falls back to ILIKE.
+/// Try semantic search via the shared [`crate::llm::semantic::semantic_memory_search`].
+/// Returns `None` on any failure or when Qdrant is unavailable, so the caller
+/// falls back to ILIKE.
 async fn try_semantic_search_memories(
     state: &AppState,
     user_id: Uuid,
@@ -327,30 +328,15 @@ async fn try_semantic_search_memories(
     limit: i64,
 ) -> Option<Vec<MemoryRow>> {
     let qdrant = state.vector.as_ref()?;
-    let embed_model = &state.config.llm.embed_model;
-
-    let embedding = state
-        .llm
-        .embed(embed_model, query)
-        .await
-        .map_err(|e| {
-            tracing::warn!(%user_id, %e, "Embedding failed for memory search, falling back to ILIKE");
-        })
-        .ok()?;
-
-    let filter = crate::llm::memory::build_user_filter(user_id);
-    let results = qdrant
-        .search("memories", embedding, limit as u32, Some(filter))
-        .await
-        .map_err(|e| {
-            tracing::warn!(%user_id, %e, "Qdrant search failed for memory search, falling back to ILIKE");
-        })
-        .ok()?;
-
-    let ids = crate::llm::memory::extract_memory_ids(&results);
-    if ids.is_empty() {
-        return None;
-    }
+    let ids = crate::llm::semantic::semantic_memory_search(
+        qdrant,
+        &state.llm,
+        &state.config.llm.embed_model,
+        user_id,
+        query,
+        limit as u32,
+    )
+    .await?;
 
     // Load from PG and preserve Qdrant rank order
     let rows: Vec<MemoryRow> = sqlx::query_as(

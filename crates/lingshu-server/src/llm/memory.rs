@@ -57,17 +57,37 @@ async fn find_duplicate_memory(
     Ok(None)
 }
 
+/// Derive an i64 advisory lock key from (user_id, memory_type).
+/// Uses the low 8 bytes of the UUID XOR'd with a hash of the type string
+/// to produce a well-distributed partition key.
+fn advisory_lock_key(user_id: Uuid, memory_type: &str) -> i64 {
+    let uuid_bytes = user_id.as_bytes();
+    let uuid_low = i64::from_le_bytes(
+        uuid_bytes[0..8].try_into().unwrap(),
+    );
+    // Simple string hash for the type suffix
+    let type_hash: i64 = memory_type
+        .bytes()
+        .fold(0i64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as i64));
+    uuid_low ^ type_hash
+}
+
 /// Save a memory to the database with near-duplicate detection.
 ///
 /// If a duplicate is found, the existing row's `importance` is bumped to
 /// `GREATEST(importance, new)` and `updated_at` refreshed. Otherwise a new
 /// row is inserted.
 ///
-/// After a new insert, this function *best-effort* computes an embedding
-/// via `llm.embed()`, upserts a point into Qdrant, and writes `vector_id`
-/// back to the row.  When Qdrant or the embedding model is unavailable
-/// the failure is logged and the memory is still saved — the vector path
-/// is never allowed to fail the caller.
+/// The duplicate-check + insert/update runs inside a transaction serialized
+/// by `pg_advisory_xact_lock` keyed on (user_id, memory_type), preventing
+/// TOCTOU races where concurrent callers could both pass the semantic
+/// similarity check and insert near-duplicate rows.
+///
+/// After a successful insert, this function *best-effort* computes an
+/// embedding via `llm.embed()`, upserts a point into Qdrant, and writes
+/// `vector_id` back to the row.  When Qdrant or the embedding model is
+/// unavailable the failure is logged and the memory is still saved — the
+/// vector path is never allowed to fail the caller.
 ///
 /// This is the canonical write path for memories — used by both automatic
 /// extraction and the manual `POST /api/v1/memories` endpoint.
@@ -81,6 +101,17 @@ pub async fn save_memory(
     content: &str,
     importance: f32,
 ) -> Result<SaveMemoryOutcome, sqlx::Error> {
+    // Derive a stable advisory lock key from (user_id, memory_type).
+    // pg_advisory_xact_lock serializes concurrent writes within the same
+    // (user, type) partition without blocking unrelated partitions.
+    let lock_key = advisory_lock_key(user_id, memory_type);
+
+    let mut tx = db.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(lock_key)
+        .execute(&mut *tx)
+        .await?;
+
     // 1. Check for duplicates
     if let Some(existing_id) = find_duplicate_memory(db, user_id, memory_type, content).await? {
         let updated: Memory = sqlx::query_as(
@@ -92,8 +123,10 @@ pub async fn save_memory(
         .bind(importance)
         .bind(existing_id)
         .bind(user_id)
-        .fetch_one(db)
+        .fetch_one(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         tracing::info!(
             memory_type = %memory_type,
@@ -118,10 +151,12 @@ pub async fn save_memory(
     .bind(memory_type)
     .bind(content)
     .bind(importance)
-    .fetch_one(db)
+    .fetch_one(&mut *tx)
     .await?;
 
-    // 3. Best-effort vector upsert
+    tx.commit().await?;
+
+    // 3. Best-effort vector upsert (outside transaction — fire-and-forget)
     // Clone everything needed by the spawned task so nothing borrows from this scope.
     if vector.is_some() {
         let memory_id = inserted.id;

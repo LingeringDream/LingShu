@@ -78,11 +78,20 @@ async fn list_integrations(
 ) -> Result<Json<Vec<IntegrationResponse>>, AppError> {
     let user_id = auth::require_user(auth).await?;
 
+    // Select only the columns needed for the response — encrypted token
+    // blobs are intentionally excluded from this query.
     let integrations: Vec<Integration> =
-        sqlx::query_as("SELECT * FROM integrations WHERE user_id = $1 ORDER BY created_at DESC")
-            .bind(user_id)
-            .fetch_all(&state.db)
-            .await?;
+        sqlx::query_as(
+            "SELECT id, user_id, project_id, platform, \
+                    ''::bytea AS access_token_encrypted, \
+                    NULL::bytea AS refresh_token_encrypted, \
+                    token_expires_at, config, status, last_sync_at, \
+                    created_at, updated_at \
+             FROM integrations WHERE user_id = $1 ORDER BY created_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&state.db)
+        .await?;
 
     Ok(Json(
         integrations
@@ -212,13 +221,19 @@ async fn get_integration(
 ) -> Result<Json<IntegrationResponse>, AppError> {
     let user_id = auth::require_user(auth).await?;
 
-    let integration: Integration =
-        sqlx::query_as("SELECT * FROM integrations WHERE id = $1 AND user_id = $2")
-            .bind(id)
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or_else(|| AppError::NotFound("Integration not found".to_string()))?;
+    let integration: Integration = sqlx::query_as(
+        "SELECT id, user_id, project_id, platform, \
+                ''::bytea AS access_token_encrypted, \
+                NULL::bytea AS refresh_token_encrypted, \
+                token_expires_at, config, status, last_sync_at, \
+                created_at, updated_at \
+         FROM integrations WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Integration not found".to_string()))?;
 
     Ok(Json(IntegrationResponse::from(integration)))
 }

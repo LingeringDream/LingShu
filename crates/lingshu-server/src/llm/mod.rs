@@ -5,4 +5,5 @@ pub mod memory;
 pub mod ollama;
 pub mod personality;
 pub mod prompts;
+pub mod semantic;
 pub mod thoughts;

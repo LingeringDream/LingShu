@@ -604,7 +604,7 @@ async fn fetch_memory_context(
 ) -> String {
     // ── Semantic path ────────────────────────────────────────────
     let rows = if let Some(qdrant) = vector {
-        try_semantic_fetch(db, qdrant, llm, embed_model, user_id, user_message).await
+        try_semantic_fetch(qdrant, llm, embed_model, user_id, user_message).await
     } else {
         None
     };
@@ -653,42 +653,24 @@ async fn fetch_memory_context(
     ctx
 }
 
-/// Try the semantic path: embed → Qdrant search → return `memory_id` UUIDs.
-/// Returns `None` on any failure so the caller can fall back gracefully.
+/// Try the semantic path via the shared [`crate::llm::semantic::semantic_memory_search`].
+/// Returns `None` on any failure so the caller can fall back to legacy SQL.
 async fn try_semantic_fetch(
-    _db: &sqlx::PgPool,
     qdrant: &lingshu_vector::search::QdrantClient,
     llm: &crate::llm::client::LlmClient,
     embed_model: &str,
     user_id: Uuid,
     user_message: &str,
 ) -> Option<Vec<Uuid>> {
-    if user_message.trim().is_empty() {
-        return None;
-    }
-
-    let embedding = llm
-        .embed(embed_model, user_message)
-        .await
-        .map_err(|e| {
-            tracing::warn!(%user_id, %e, "Embedding failed, falling back to SQL memory fetch");
-        })
-        .ok()?;
-
-    let filter = crate::llm::memory::build_user_filter(user_id);
-    let results = qdrant
-        .search("memories", embedding, 20, Some(filter))
-        .await
-        .map_err(|e| {
-            tracing::warn!(%user_id, %e, "Qdrant search failed, falling back to SQL memory fetch");
-        })
-        .ok()?;
-
-    let ids = crate::llm::memory::extract_memory_ids(&results);
-    if ids.is_empty() {
-        return None; // triggers fallback
-    }
-    Some(ids)
+    crate::llm::semantic::semantic_memory_search(
+        qdrant,
+        llm,
+        embed_model,
+        user_id,
+        user_message,
+        20, // top-k for chat context
+    )
+    .await
 }
 
 /// Load memories from PG by a set of IDs, preserving the given ID order and
