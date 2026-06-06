@@ -144,7 +144,15 @@ impl LlmClient {
             stream: false,
             options,
         };
-        let resp: OllamaChatResponse = self.http.post(&url).json(&req).send().await?.json().await?;
+        let resp: OllamaChatResponse = self
+            .http
+            .post(&url)
+            .json(&req)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         Ok(resp.message.map(|m| m.content).unwrap_or_default())
     }
 
