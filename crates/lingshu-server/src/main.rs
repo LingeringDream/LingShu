@@ -67,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
     // Build router
     let app = Router::new()
         .merge(routes::system::router())
+        .merge(ws::router())
         .merge(routes::auth::router())
         .merge(routes::users::router())
         .merge(routes::settings::router())
