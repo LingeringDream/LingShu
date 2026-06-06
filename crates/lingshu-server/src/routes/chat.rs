@@ -3,11 +3,13 @@ use axum::{
     routing::post,
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     convert::Infallible,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -15,6 +17,7 @@ use uuid::Uuid;
 use crate::auth;
 use crate::error::AppError;
 use crate::llm::client::{ChatChunk, ChatMessage, ChatOptions};
+use crate::llm::forgetting::{self, ForgettingPolicy};
 use crate::llm::prompts::{personality_prompt, PersonalityValues};
 use crate::models::personality::PersonalityTraits;
 use crate::routes::settings::llm_settings_for_user;
@@ -309,6 +312,99 @@ fn has_assistant_response(assistant_response: &Option<String>) -> bool {
     }
 }
 
+// ── Forgetting sweep (auto-trigger, cooldown-gated) ───────────────
+
+/// Minimum seconds between automatic forgetting sweeps per user.
+const FORGETTING_SWEEP_COOLDOWN_SECS: u64 = 24 * 60 * 60; // 24 hours
+
+static LAST_FORGETTING_SWEEPS: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
+
+/// Check whether the per-user cooldown allows a forgetting sweep to run now.
+fn should_run_sweep(user_id: Uuid) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut map = last_forgetting_sweeps()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    should_run_sweep_at(&mut map, user_id, now)
+}
+
+/// Pure helper — testable without a real system clock.
+fn should_run_sweep_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: u64) -> bool {
+    if let Some(prev) = last.get(&user_id) {
+        if now.saturating_sub(*prev) < FORGETTING_SWEEP_COOLDOWN_SECS {
+            return false;
+        }
+    }
+    last.insert(user_id, now);
+    true
+}
+
+fn last_forgetting_sweeps() -> &'static Mutex<HashMap<Uuid, u64>> {
+    LAST_FORGETTING_SWEEPS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// `(id, importance, last_accessed_at, created_at)` — one row of decay input.
+type MemoryDecayRow = (Uuid, f32, Option<DateTime<Utc>>, DateTime<Utc>);
+
+/// Evaluate a user's memories against the forgetting policy and soft-delete
+/// those that have decayed past the forget floor. Best-effort background
+/// maintenance: failures are logged only and never propagate.
+async fn run_forgetting_sweep(db: &sqlx::PgPool, user_id: Uuid) {
+    let rows: Vec<MemoryDecayRow> = match sqlx::query_as(
+        "SELECT id, importance, last_accessed_at, created_at FROM memories \
+         WHERE user_id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Failed to load memories for forgetting sweep");
+            return;
+        }
+    };
+
+    if rows.is_empty() {
+        return;
+    }
+
+    let now = Utc::now();
+    let policy = ForgettingPolicy::default();
+    let mut forgotten = 0u32;
+
+    for (id, importance, last_accessed_at, created_at) in rows {
+        let reference = last_accessed_at.unwrap_or(created_at);
+        let days = forgetting::days_since(reference, now);
+
+        if !forgetting::evaluate(importance, days, &policy).should_forget() {
+            continue;
+        }
+
+        match sqlx::query(
+            "UPDATE memories SET deleted_at = NOW() \
+             WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .bind(user_id)
+        .execute(db)
+        .await
+        {
+            Ok(_) => forgotten += 1,
+            Err(error) => {
+                tracing::warn!(%user_id, memory_id = %id, %error, "Failed to soft-delete forgotten memory");
+            }
+        }
+    }
+
+    if forgotten > 0 {
+        tracing::info!(%user_id, count = forgotten, "Forgetting sweep soft-deleted decayed memories");
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_post_stream_tasks(
     db: sqlx::PgPool,
@@ -365,6 +461,12 @@ fn spawn_post_stream_tasks(
             {
                 tracing::warn!(%user_id, %e, "Thought generation failed");
             }
+        }
+
+        // Forgetting sweep (auto-trigger): background maintenance gated by
+        // a per-user 24h cooldown, independent of the chat outcome.
+        if should_run_sweep(user_id) {
+            run_forgetting_sweep(&db, user_id).await;
         }
     });
 }
@@ -452,11 +554,13 @@ async fn load_chat_history(
     Ok(rows)
 }
 
-/// Fetch top-N high-importance memories to inject as chat context.
+/// Fetch top-N high-importance memories to inject as chat context, and mark
+/// them as "reviewed" (bumping `access_count` / `last_accessed_at`) so the
+/// forgetting sweep sees them as freshly accessed.
 /// Phase 0: simple recency + importance query (no vector search yet).
 async fn fetch_memory_context(db: &sqlx::PgPool, user_id: Uuid, _user_message: &str) -> String {
-    let rows: Vec<(String, String)> = match sqlx::query_as(
-        "SELECT memory_type, content FROM memories \
+    let rows: Vec<(Uuid, String, String)> = match sqlx::query_as(
+        "SELECT id, memory_type, content FROM memories \
          WHERE user_id = $1 AND deleted_at IS NULL AND importance >= 0.5 \
          ORDER BY importance DESC, updated_at DESC LIMIT 5",
     )
@@ -475,8 +579,21 @@ async fn fetch_memory_context(db: &sqlx::PgPool, user_id: Uuid, _user_message: &
         return String::new();
     }
 
+    let ids: Vec<Uuid> = rows.iter().map(|(id, _, _)| *id).collect();
+    if let Err(error) = sqlx::query(
+        "UPDATE memories SET access_count = access_count + 1, last_accessed_at = NOW() \
+         WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(&ids)
+    .bind(user_id)
+    .execute(db)
+    .await
+    {
+        tracing::warn!(%user_id, %error, "Failed to record memory access for chat context");
+    }
+
     let mut ctx = String::new();
-    for (mtype, content) in &rows {
+    for (_, mtype, content) in &rows {
         let label = match mtype.as_str() {
             "preference" => "偏好",
             "fact" => "事实",
@@ -684,5 +801,52 @@ mod tests {
     #[test]
     fn has_assistant_response_whitespace_returns_false() {
         assert!(!has_assistant_response(&Some("   \n\t".to_string())));
+    }
+
+    // ── Forgetting sweep cooldown tests ───────────────────────────
+
+    #[test]
+    fn sweep_cooldown_allows_first_call() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_run_sweep_at(&mut map, user, 100));
+    }
+
+    #[test]
+    fn sweep_cooldown_blocks_second_call_within_window() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_run_sweep_at(&mut map, user, 100));
+        assert!(!should_run_sweep_at(&mut map, user, 100 + 3600)); // 1h < 24h
+    }
+
+    #[test]
+    fn sweep_cooldown_is_per_user() {
+        let user_a = Uuid::new_v4();
+        let user_b = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_run_sweep_at(&mut map, user_a, 100));
+        assert!(should_run_sweep_at(&mut map, user_b, 100));
+        assert!(!should_run_sweep_at(&mut map, user_a, 200));
+    }
+
+    #[test]
+    fn sweep_cooldown_allows_after_window_expires() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_run_sweep_at(&mut map, user, 100));
+        let after_cooldown = 100 + FORGETTING_SWEEP_COOLDOWN_SECS;
+        assert!(should_run_sweep_at(&mut map, user, after_cooldown));
+    }
+
+    #[test]
+    fn sweep_cooldown_allows_exactly_at_boundary() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_run_sweep_at(&mut map, user, 100));
+        let before_boundary = 100 + FORGETTING_SWEEP_COOLDOWN_SECS - 1;
+        let at_boundary = 100 + FORGETTING_SWEEP_COOLDOWN_SECS;
+        assert!(!should_run_sweep_at(&mut map, user, before_boundary));
+        assert!(should_run_sweep_at(&mut map, user, at_boundary));
     }
 }
