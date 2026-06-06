@@ -6,14 +6,41 @@ interface ChatState {
   messages: Message[];
   isLoading: boolean;
   streamingId: string | null;
+  /** Active conversation id — created lazily on first message so the backend
+   *  persists the exchange and can replay history on later turns. */
+  sessionId: string | null;
   sendMessage: (content: string) => Promise<void>;
   clearMessages: () => void;
 }
 
-export const useChatStore = create<ChatState>((set) => ({
+/** Ensure a conversation exists, creating one on first use. Returns the
+ *  conversation id, or `null` if creation failed (chat still proceeds as an
+ *  ephemeral, non-persisted exchange in that case). */
+async function ensureSessionId(
+  current: string | null,
+  setSessionId: (id: string) => void,
+): Promise<string | null> {
+  if (current) return current;
+  try {
+    const resp = await apiFetch('/api/v1/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (!resp.ok) return null;
+    const data: { id: string } = await resp.json();
+    setSessionId(data.id);
+    return data.id;
+  } catch {
+    return null;
+  }
+}
+
+export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   isLoading: false,
   streamingId: null,
+  sessionId: null,
 
   sendMessage: async (content: string) => {
     const userMessage: Message = {
@@ -39,10 +66,18 @@ export const useChatStore = create<ChatState>((set) => ({
     }));
 
     try {
+      // Lazily create/reuse a conversation so the backend persists messages
+      // and can supply prior-turn history as context.
+      const sessionId = await ensureSessionId(get().sessionId, (id) =>
+        set({ sessionId: id }),
+      );
+
       const response = await apiFetch('/api/v1/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: content }),
+        body: JSON.stringify(
+          sessionId ? { message: content, session_id: sessionId } : { message: content },
+        ),
       });
 
       if (!response.ok) {
@@ -121,5 +156,7 @@ export const useChatStore = create<ChatState>((set) => ({
     }
   },
 
-  clearMessages: () => set({ messages: [] }),
+  // Start a fresh conversation: drop the session so the next message creates
+  // a new one rather than appending to the previous thread.
+  clearMessages: () => set({ messages: [], sessionId: null }),
 }));
