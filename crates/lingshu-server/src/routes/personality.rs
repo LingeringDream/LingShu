@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::models::personality::{PersonalitySnapshot, PersonalityTraits};
+use crate::routes::settings::llm_settings_for_user;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -26,6 +27,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/personality/snapshots/{id}/activate",
             post(activate_snapshot),
         )
+        .route("/api/v1/personality/evolve", post(evolve_personality))
 }
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -180,4 +182,50 @@ async fn activate_snapshot(
     tx.commit().await?;
 
     Ok(Json(SnapshotResponse::from(snapshot)))
+}
+
+// ── Handler: evolve ───────────────────────────────────────────────
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EvolvePersonalityResponse {
+    pub created: bool,
+    pub reason: String,
+    pub snapshot: Option<SnapshotResponse>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/personality/evolve",
+    responses(
+        (status = 200, description = "Evolution result", body = EvolvePersonalityResponse),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+async fn evolve_personality(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
+) -> Result<Json<EvolvePersonalityResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    let settings = llm_settings_for_user(&state, user_id).await;
+
+    if settings.model.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Model not configured. Set it via PATCH /api/v1/settings/llm or LLM_DEFAULT_MODEL in .env."
+        )));
+    }
+
+    let outcome = crate::llm::personality::evolve_and_save_personality(
+        &state.db,
+        &state.llm,
+        &settings.model,
+        user_id,
+    )
+    .await
+    .map_err(|e| AppError::Internal(e))?;
+
+    Ok(Json(EvolvePersonalityResponse {
+        created: outcome.created,
+        reason: outcome.reason,
+        snapshot: outcome.snapshot.map(SnapshotResponse::from),
+    }))
 }
