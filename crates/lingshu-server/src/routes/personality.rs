@@ -24,7 +24,7 @@ pub fn router() -> Router<AppState> {
             get(get_active_snapshot),
         )
         .route(
-            "/api/v1/personality/snapshots/{id}/activate",
+            "/api/v1/personality/snapshots/:id/activate",
             post(activate_snapshot),
         )
         .route("/api/v1/personality/evolve", post(evolve_personality))

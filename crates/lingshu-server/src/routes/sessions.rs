@@ -11,7 +11,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/chat/sessions", get(list_sessions))
         .route(
-            "/api/v1/chat/sessions/{id}",
+            "/api/v1/chat/sessions/:id",
             get(get_session).delete(delete_session),
         )
 }

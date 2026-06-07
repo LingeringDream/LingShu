@@ -30,11 +30,11 @@ async fn verify_project_ownership(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/v1/projects/{pid}/tasks",
+            "/api/v1/projects/:pid/tasks",
             get(list_tasks).post(create_task),
         )
         .route(
-            "/api/v1/projects/{pid}/tasks/{tid}",
+            "/api/v1/projects/:pid/tasks/:tid",
             get(get_task).patch(update_task).delete(delete_task),
         )
 }

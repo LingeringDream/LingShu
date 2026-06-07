@@ -14,6 +14,8 @@ mod patch;
 mod routes;
 mod state;
 mod telemetry;
+#[cfg(test)]
+mod tests_integration;
 mod ws;
 
 use axum::http::{HeaderValue, Method};

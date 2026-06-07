@@ -19,7 +19,7 @@ pub fn router() -> Router<AppState> {
             routing::get(list_memories).post(create_memory),
         )
         .route(
-            "/api/v1/memories/{id}",
+            "/api/v1/memories/:id",
             routing::get(get_memory)
                 .patch(update_memory)
                 .delete(delete_memory),

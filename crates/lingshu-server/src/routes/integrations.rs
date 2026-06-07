@@ -15,7 +15,7 @@ pub fn router() -> Router<AppState> {
             get(list_integrations).post(create_integration),
         )
         .route(
-            "/api/v1/integrations/{id}",
+            "/api/v1/integrations/:id",
             get(get_integration).delete(delete_integration),
         )
 }

@@ -10,11 +10,11 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/v1/projects/{pid}/tasks/{tid}/dependencies",
+            "/api/v1/projects/:pid/tasks/:tid/dependencies",
             get(list_dependencies).post(add_dependency),
         )
         .route(
-            "/api/v1/projects/{pid}/tasks/{tid}/dependencies/{did}",
+            "/api/v1/projects/:pid/tasks/:tid/dependencies/:did",
             get(get_dependency).delete(remove_dependency),
         )
 }

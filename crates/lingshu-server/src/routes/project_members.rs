@@ -10,11 +10,11 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
-            "/api/v1/projects/{pid}/members",
+            "/api/v1/projects/:pid/members",
             get(list_members).post(add_member),
         )
         .route(
-            "/api/v1/projects/{pid}/members/{uid}",
+            "/api/v1/projects/:pid/members/:uid",
             get(get_member).delete(remove_member),
         )
 }

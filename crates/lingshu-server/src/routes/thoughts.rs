@@ -17,7 +17,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/thoughts", get(list_thoughts))
         .route(
-            "/api/v1/thoughts/{id}",
+            "/api/v1/thoughts/:id",
             get(get_thought).patch(update_thought),
         )
         .route(

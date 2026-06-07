@@ -14,7 +14,7 @@ pub fn router() -> Router<AppState> {
             get(list_conversations).post(create_conversation),
         )
         .route(
-            "/api/v1/conversations/{id}",
+            "/api/v1/conversations/:id",
             get(get_conversation).delete(delete_conversation),
         )
 }

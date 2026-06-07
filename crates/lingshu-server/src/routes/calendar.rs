@@ -22,15 +22,15 @@ pub fn router() -> Router<AppState> {
             routing::get(list_events).post(create_event),
         )
         .route(
-            "/api/v1/calendar/events/{id}",
+            "/api/v1/calendar/events/:id",
             routing::patch(update_event).delete(delete_event),
         )
         .route(
-            "/api/v1/calendar/events/{id}/confirm",
+            "/api/v1/calendar/events/:id/confirm",
             routing::post(confirm_event),
         )
         .route(
-            "/api/v1/calendar/events/{id}/apple-event",
+            "/api/v1/calendar/events/:id/apple-event",
             routing::post(save_apple_event_id),
         )
 }
