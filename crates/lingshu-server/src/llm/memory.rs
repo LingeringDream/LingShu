@@ -215,7 +215,7 @@ pub async fn save_memory(
 
 /// Best-effort: embed content → upsert Qdrant point → write vector_id back to PG.
 /// Failures at any step are returned as `Err` and logged by the caller.
-async fn upsert_memory_vector(
+pub(crate) async fn upsert_memory_vector(
     db: &PgPool,
     qdrant: &QdrantClient,
     llm: &LlmClient,
