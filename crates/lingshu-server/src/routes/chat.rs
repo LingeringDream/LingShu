@@ -186,10 +186,8 @@ pub async fn chat(
                         let assistant_message_id: Option<Uuid> = if let (Some(sid), Some(content)) =
                             (sid_for_stream, assistant_response.as_ref())
                         {
-                            persist_assistant_message(
-                                &db, &redis, sid, user_id, content, &model,
-                            )
-                            .await
+                            persist_assistant_message(&db, &redis, sid, user_id, content, &model)
+                                .await
                         } else {
                             None
                         };
@@ -728,7 +726,12 @@ fn spawn_post_stream_tasks(
         // semantically similar memories. Gated by 24h cooldown. Best-effort.
         if crate::llm::consolidation::should_run_consolidation(user_id) {
             let _ = crate::llm::consolidation::consolidate_memories(
-                &db, &llm, &model, &embed_model, &vector, user_id,
+                &db,
+                &llm,
+                &model,
+                &embed_model,
+                &vector,
+                user_id,
             )
             .await;
         }

@@ -79,18 +79,17 @@ async fn list_integrations(
 
     // Select only the columns needed for the response — encrypted token
     // blobs are intentionally excluded from this query.
-    let integrations: Vec<Integration> =
-        sqlx::query_as(
-            "SELECT id, user_id, project_id, platform, \
+    let integrations: Vec<Integration> = sqlx::query_as(
+        "SELECT id, user_id, project_id, platform, \
                     ''::bytea AS access_token_encrypted, \
                     NULL::bytea AS refresh_token_encrypted, \
                     token_expires_at, config, status, last_sync_at, \
                     created_at, updated_at \
              FROM integrations WHERE user_id = $1 ORDER BY created_at DESC",
-        )
-        .bind(user_id)
-        .fetch_all(&state.db)
-        .await?;
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await?;
 
     Ok(Json(
         integrations
@@ -126,7 +125,11 @@ async fn create_integration(
             "access_token must not be empty".into(),
         ));
     }
-    if req.refresh_token.as_deref().is_some_and(|t| t.trim().is_empty()) {
+    if req
+        .refresh_token
+        .as_deref()
+        .is_some_and(|t| t.trim().is_empty())
+    {
         return Err(AppError::Validation(
             "refresh_token must not be empty when present".into(),
         ));
@@ -291,15 +294,16 @@ mod tests {
 
     fn test_cipher() -> std::sync::Arc<crate::crypto::TokenCipher> {
         std::sync::Arc::new(
-            crate::crypto::TokenCipher::from_key_str("test-integration-key")
-                .expect("test cipher"),
+            crate::crypto::TokenCipher::from_key_str("test-integration-key").expect("test cipher"),
         )
     }
 
     #[test]
     fn decrypt_token_round_trips_with_correct_key() {
         let cipher = test_cipher();
-        let blob = cipher.encrypt("super-secret-access-token").expect("encrypt");
+        let blob = cipher
+            .encrypt("super-secret-access-token")
+            .expect("encrypt");
         assert_eq!(
             decrypt_token(Some(&cipher), &blob).expect("decrypt"),
             "super-secret-access-token"
@@ -309,7 +313,9 @@ mod tests {
     #[test]
     fn decrypt_token_errors_when_key_unconfigured() {
         let cipher = test_cipher();
-        let blob = cipher.encrypt("super-secret-access-token").expect("encrypt");
+        let blob = cipher
+            .encrypt("super-secret-access-token")
+            .expect("encrypt");
         assert!(decrypt_token(None, &blob).is_err());
     }
 }

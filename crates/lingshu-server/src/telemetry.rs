@@ -213,7 +213,9 @@ mod tests {
 
     #[test]
     fn detect_remember_english() {
-        assert!(detect_explicit_memory_request("please remember that I prefer tea"));
+        assert!(detect_explicit_memory_request(
+            "please remember that I prefer tea"
+        ));
     }
 
     #[test]

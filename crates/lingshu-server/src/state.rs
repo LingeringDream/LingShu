@@ -89,20 +89,20 @@ impl AppState {
         };
 
         // Pre-derive the encryption cipher once at startup (100k-round KDF)
-        let token_cipher: Option<Arc<TokenCipher>> =
-            match config.security.encryption_key.as_deref() {
-                Some(key) if !key.is_empty() => match TokenCipher::from_key_str(key) {
-                    Ok(cipher) => {
-                        tracing::info!("TokenCipher initialised");
-                        Some(Arc::new(cipher))
-                    }
-                    Err(e) => {
-                        tracing::warn!("TokenCipher initialisation failed (non-fatal): {e}");
-                        None
-                    }
-                },
-                _ => None,
-            };
+        let token_cipher: Option<Arc<TokenCipher>> = match config.security.encryption_key.as_deref()
+        {
+            Some(key) if !key.is_empty() => match TokenCipher::from_key_str(key) {
+                Ok(cipher) => {
+                    tracing::info!("TokenCipher initialised");
+                    Some(Arc::new(cipher))
+                }
+                Err(e) => {
+                    tracing::warn!("TokenCipher initialisation failed (non-fatal): {e}");
+                    None
+                }
+            },
+            _ => None,
+        };
 
         Ok(Self {
             db,

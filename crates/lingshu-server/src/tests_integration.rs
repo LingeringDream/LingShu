@@ -16,7 +16,6 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-
 // ═══════════════════════════════════════════════════════════════════════
 // Regression: axum 0.7 requires ":param" syntax (not "{param}" from 0.8)
 // ═══════════════════════════════════════════════════════════════════════
@@ -24,8 +23,8 @@ use uuid::Uuid;
 #[cfg(test)]
 mod router_regression {
     use super::*;
-    use axum::{routing, Router};
     use axum::body::Body;
+    use axum::{routing, Router};
     use tower::util::ServiceExt;
 
     /// A route with :id must match /test/<uuid> and return 200,
@@ -36,8 +35,7 @@ mod router_regression {
             format!("id={id}")
         }
 
-        let app = Router::<()>::new()
-            .route("/api/v1/test/:id", routing::get(handler));
+        let app = Router::<()>::new().route("/api/v1/test/:id", routing::get(handler));
 
         let resp = app
             .oneshot(
@@ -49,23 +47,26 @@ mod router_regression {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), 200, "route with :id must match (got {})", resp.status());
+        assert_eq!(
+            resp.status(),
+            200,
+            "route with :id must match (got {})",
+            resp.status()
+        );
     }
 
     /// Multiple :param segments must all be captured.
     #[tokio::test]
     async fn multiple_colon_params_all_captured() {
-        async fn handler(
-            axum::extract::Path((a, b)): axum::extract::Path<(Uuid, Uuid)>,
-        ) -> String {
+        async fn handler(axum::extract::Path((a, b)): axum::extract::Path<(Uuid, Uuid)>) -> String {
             format!("a={a},b={b}")
         }
 
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
 
-        let app = Router::<()>::new()
-            .route("/api/v1/projects/:pid/tasks/:tid", routing::get(handler));
+        let app =
+            Router::<()>::new().route("/api/v1/projects/:pid/tasks/:tid", routing::get(handler));
 
         let resp = app
             .oneshot(
@@ -84,20 +85,23 @@ mod router_regression {
     /// (regression: :id/confirm was previously {id}/confirm → 404).
     #[tokio::test]
     async fn param_followed_by_literal_segment_matches() {
-        async fn handler(
-            axum::extract::Path(id): axum::extract::Path<Uuid>,
-        ) -> String {
+        async fn handler(axum::extract::Path(id): axum::extract::Path<Uuid>) -> String {
             format!("confirm:{id}")
         }
 
-        let app = Router::<()>::new()
-            .route("/api/v1/calendar/events/:id/confirm", routing::post(handler));
+        let app = Router::<()>::new().route(
+            "/api/v1/calendar/events/:id/confirm",
+            routing::post(handler),
+        );
 
         let resp = app
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
-                    .uri(format!("/api/v1/calendar/events/{}/confirm", Uuid::new_v4()))
+                    .uri(format!(
+                        "/api/v1/calendar/events/{}/confirm",
+                        Uuid::new_v4()
+                    ))
                     .header("content-type", "application/json")
                     .body(Body::empty())
                     .unwrap(),
@@ -111,8 +115,8 @@ mod router_regression {
 
 /// Create a pool to the dev database (reads DATABASE_URL).
 async fn dev_pool() -> PgPool {
-    let db_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set for integration tests");
+    let db_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
     PgPool::connect(&db_url).await.expect("connect to dev DB")
 }
 
@@ -120,16 +124,16 @@ async fn dev_pool() -> PgPool {
 /// so cleanup is `DELETE FROM <table> WHERE user_id = $1`.
 async fn create_user(pool: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
-    let email = format!("test-int-{}@example.com", id);
+    let email = format!("test-int-{id}@example.com");
     sqlx::query(
         "INSERT INTO users (id, email, display_name, password_hash) \
-         VALUES ($1, $2, 'test-int', 'not-a-real-hash')"
+         VALUES ($1, $2, 'test-int', 'not-a-real-hash')",
     )
-        .bind(id)
-        .bind(&email)
-        .execute(pool)
-        .await
-        .unwrap();
+    .bind(id)
+    .bind(&email)
+    .execute(pool)
+    .await
+    .unwrap();
     id
 }
 
@@ -162,7 +166,6 @@ async fn cleanup_user(pool: &PgPool, user_id: Uuid) {
         .execute(pool)
         .await;
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════
 // Test 1: thoughts list_thoughts — dynamic format! SQL with 3 branches
@@ -233,7 +236,14 @@ mod thoughts {
     async fn list_thoughts_active_filter() {
         let pool = dev_pool().await;
         let user_id = create_user(&pool).await;
-        insert_thought(&pool, user_id, "active1", "snoozed", Some("2099-01-01T00:00:00Z")).await;
+        insert_thought(
+            &pool,
+            user_id,
+            "active1",
+            "snoozed",
+            Some("2099-01-01T00:00:00Z"),
+        )
+        .await;
         insert_thought(&pool, user_id, "active2", "pending", None).await;
 
         // The SQL under test (from routes/thoughts.rs:117-125):
@@ -249,7 +259,11 @@ mod thoughts {
         .await
         .unwrap();
 
-        assert_eq!(rows.len(), 1, "only the non-future-scheduled thought should be active");
+        assert_eq!(
+            rows.len(),
+            1,
+            "only the non-future-scheduled thought should be active"
+        );
         assert_eq!(rows[0].1, "active2");
 
         cleanup_user(&pool, user_id).await;
@@ -326,7 +340,6 @@ mod thoughts {
         cleanup_user(&pool, user_id).await;
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════
 // Test 2: consolidation — write derived + soft-demote source in transaction
@@ -412,14 +425,13 @@ mod consolidation {
 
         // Verify demotion
         for (sid, expected) in [(s1, 0.4f32), (s2, 0.35f32)] {
-            let imp: (f32,) = sqlx::query_as(
-                "SELECT importance FROM memories WHERE id = $1 AND user_id = $2",
-            )
-            .bind(sid)
-            .bind(user_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+            let imp: (f32,) =
+                sqlx::query_as("SELECT importance FROM memories WHERE id = $1 AND user_id = $2")
+                    .bind(sid)
+                    .bind(user_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
             assert!(
                 (imp.0 - expected).abs() < 0.001,
                 "source {sid}: expected ~{expected}, got {}",
@@ -428,14 +440,13 @@ mod consolidation {
         }
 
         // Unrelated memory untouched
-        let imp3: (f32,) = sqlx::query_as(
-            "SELECT importance FROM memories WHERE id = $1 AND user_id = $2",
-        )
-        .bind(s3)
-        .bind(user_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let imp3: (f32,) =
+            sqlx::query_as("SELECT importance FROM memories WHERE id = $1 AND user_id = $2")
+                .bind(s3)
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!((imp3.0 - 0.6).abs() < 0.001, "unrelated memory unchanged");
 
         cleanup_user(&pool, user_id).await;
@@ -450,12 +461,11 @@ mod consolidation {
         let s1 = Uuid::new_v4();
         insert_memory_raw(&pool, s1, user_id, "source memory", 0.8).await;
 
-        let pre_count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM memories WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let pre_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM memories WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
         // Start transaction, insert derived, then rollback
         let mut tx = pool.begin().await.unwrap();
@@ -466,25 +476,23 @@ mod consolidation {
         )
         .bind(Uuid::new_v4())
         .bind(user_id)
-        .bind(&vec![s1])
+        .bind(vec![s1])
         .execute(&mut *tx)
         .await
         .unwrap();
         tx.rollback().await.unwrap();
 
-        let post_count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM memories WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let post_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM memories WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
         assert_eq!(pre_count.0, post_count.0, "rollback restores state");
 
         cleanup_user(&pool, user_id).await;
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════
 // Test 3: forgetting sweep — protected ID set (personality + derived sources)
@@ -539,7 +547,7 @@ mod forgetting {
         )
         .bind(Uuid::new_v4())
         .bind(user_id)
-        .bind(&vec![m1, m2])
+        .bind(vec![m1, m2])
         .execute(&pool)
         .await
         .unwrap();
@@ -577,10 +585,15 @@ mod forgetting {
 
         // Derived memory referencing raw1
         insert_memory_with_id(
-            &pool, Uuid::new_v4(), user_id,
-            "derived from raw1", 0.7, "derived",
-            &vec![raw1],
-        ).await;
+            &pool,
+            Uuid::new_v4(),
+            user_id,
+            "derived from raw1",
+            0.7,
+            "derived",
+            &[raw1],
+        )
+        .await;
 
         // Protection query (from chat.rs:474-476):
         let protected: Vec<Uuid> = sqlx::query_scalar(
@@ -621,17 +634,22 @@ mod forgetting {
         )
         .bind(Uuid::new_v4())
         .bind(user_id)
-        .bind(&vec![m_pers])
+        .bind(vec![m_pers])
         .execute(&pool)
         .await
         .unwrap();
 
         // Derived memory → m_der_src
         insert_memory_with_id(
-            &pool, Uuid::new_v4(), user_id,
-            "derived content", 0.7, "derived",
-            &vec![m_der_src],
-        ).await;
+            &pool,
+            Uuid::new_v4(),
+            user_id,
+            "derived content",
+            0.7,
+            "derived",
+            &[m_der_src],
+        )
+        .await;
 
         // Combined protection set (as in chat.rs run_forgetting_sweep):
         let mut protected = std::collections::HashSet::new();
@@ -645,7 +663,9 @@ mod forgetting {
         .fetch_all(&pool)
         .await
         .unwrap();
-        for id in ids1 { protected.insert(id); }
+        for id in ids1 {
+            protected.insert(id);
+        }
 
         let ids2: Vec<Uuid> = sqlx::query_scalar(
             "SELECT DISTINCT unnest(source_memory_ids) FROM memories \
@@ -655,17 +675,27 @@ mod forgetting {
         .fetch_all(&pool)
         .await
         .unwrap();
-        for id in ids2 { protected.insert(id); }
+        for id in ids2 {
+            protected.insert(id);
+        }
 
-        assert!(protected.contains(&m_pers), "personality-referenced should be protected");
-        assert!(protected.contains(&m_der_src), "derived source should be protected");
-        assert!(!protected.contains(&m_unprot), "unreferenced should NOT be protected");
+        assert!(
+            protected.contains(&m_pers),
+            "personality-referenced should be protected"
+        );
+        assert!(
+            protected.contains(&m_der_src),
+            "derived source should be protected"
+        );
+        assert!(
+            !protected.contains(&m_unprot),
+            "unreferenced should NOT be protected"
+        );
         assert_eq!(protected.len(), 2, "exactly 2 protected IDs");
 
         cleanup_user(&pool, user_id).await;
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════
 // Test 4: integrations — NULL project partial unique index (23505 path)
@@ -714,20 +744,20 @@ mod integrations {
                     "duplicate NULL-project integration must be 23505 unique_violation"
                 );
             }
-            Ok(_) => panic!("second NULL-project integration should have been rejected by unique index"),
+            Ok(_) => {
+                panic!("second NULL-project integration should have been rejected by unique index")
+            }
             Err(e) => panic!("unexpected error type: {e}"),
         }
 
         // 3. Same platform with non-NULL project_id: OK (not blocked by partial index)
         let project_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO projects (id, name, owner_id) VALUES ($1, 'test proj', $2)",
-        )
-        .bind(project_id)
-        .bind(user_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("INSERT INTO projects (id, name, owner_id) VALUES ($1, 'test proj', $2)")
+            .bind(project_id)
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         sqlx::query(
             "INSERT INTO integrations \
@@ -781,7 +811,10 @@ mod integrations {
         .await
         .unwrap();
 
-        assert!(duplicate_exists.0, "IS NOT DISTINCT FROM should detect the duplicate");
+        assert!(
+            duplicate_exists.0,
+            "IS NOT DISTINCT FROM should detect the duplicate"
+        );
 
         // With a different project_id, NOT a duplicate
         let no_duplicate: (bool,) = sqlx::query_as(
@@ -799,12 +832,14 @@ mod integrations {
         .await
         .unwrap();
 
-        assert!(!no_duplicate.0, "different project_id should not be a duplicate");
+        assert!(
+            !no_duplicate.0,
+            "different project_id should not be a duplicate"
+        );
 
         cleanup_user(&pool, user_id).await;
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════
 // Test 5: memories — full-column FromRow ↔ SELECT/RETURNING consistency
@@ -816,6 +851,7 @@ mod memories {
     /// SELECT * must return columns matching the Memory struct, including
     /// tier and source_memory_ids from migration 0018.
     #[ignore]
+    #[allow(clippy::type_complexity)]
     #[tokio::test]
     async fn memory_select_star_matches_insert_returning_star() {
         let pool = dev_pool().await;
@@ -829,12 +865,21 @@ mod memories {
         // metadata(10), deleted_at(11), created_at(12), updated_at(13),
         // source_memory_ids(14), tier(15)
         let inserted: (
-            Uuid, Uuid, Option<Uuid>, String, String, f32, i32,
-            Option<chrono::DateTime<chrono::Utc>>, Option<String>,
+            Uuid,
+            Uuid,
+            Option<Uuid>,
+            String,
+            String,
+            f32,
+            i32,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
             serde_json::Value,
             Option<chrono::DateTime<chrono::Utc>>,
-            chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>,
-            Vec<Uuid>, String,
+            chrono::DateTime<chrono::Utc>,
+            chrono::DateTime<chrono::Utc>,
+            Vec<Uuid>,
+            String,
         ) = sqlx::query_as(
             "INSERT INTO memories \
              (id, user_id, memory_type, content, importance, source_memory_ids, tier) \
@@ -852,29 +897,41 @@ mod memories {
         .unwrap();
 
         // Verify RETURNING * columns (position-based)
-        assert_eq!(inserted.0, memory_id);        // 1: id
-        assert_eq!(inserted.1, user_id);           // 2: user_id
-        assert_eq!(inserted.2, None);              // 3: project_id
-        assert_eq!(inserted.3, "preference");      // 4: memory_type
-        assert_eq!(inserted.4, "test content");    // 5: content
+        assert_eq!(inserted.0, memory_id); // 1: id
+        assert_eq!(inserted.1, user_id); // 2: user_id
+        assert_eq!(inserted.2, None); // 3: project_id
+        assert_eq!(inserted.3, "preference"); // 4: memory_type
+        assert_eq!(inserted.4, "test content"); // 5: content
         assert!((inserted.5 - 0.75).abs() < f32::EPSILON); // 6: importance
-        assert_eq!(inserted.6, 0);                 // 7: access_count
-        assert_eq!(inserted.7, None);              // 8: last_accessed_at
-        assert_eq!(inserted.8, None);              // 9: vector_id
+        assert_eq!(inserted.6, 0); // 7: access_count
+        assert_eq!(inserted.7, None); // 8: last_accessed_at
+        assert_eq!(inserted.8, None); // 9: vector_id
         assert_eq!(inserted.9, serde_json::json!({})); // 10: metadata
-        assert_eq!(inserted.10, None);             // 11: deleted_at
-        assert_eq!(inserted.13, source_ids);        // 14: source_memory_ids
-        assert_eq!(inserted.14, "derived");        // 15: tier
+        assert_eq!(inserted.10, None); // 11: deleted_at
+        assert_eq!(inserted.13, source_ids); // 14: source_memory_ids
+        assert_eq!(inserted.14, "derived"); // 15: tier
 
         // SELECT * must match RETURNING * (same column order)
-        let selected = sqlx::query_as::<_, (
-            Uuid, Uuid, Option<Uuid>, String, String, f32, i32,
-            Option<chrono::DateTime<chrono::Utc>>, Option<String>,
-            serde_json::Value,
-            Option<chrono::DateTime<chrono::Utc>>,
-            chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>,
-            Vec<Uuid>, String,
-        )>("SELECT * FROM memories WHERE id = $1 AND user_id = $2")
+        let selected = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                Uuid,
+                Option<Uuid>,
+                String,
+                String,
+                f32,
+                i32,
+                Option<chrono::DateTime<chrono::Utc>>,
+                Option<String>,
+                serde_json::Value,
+                Option<chrono::DateTime<chrono::Utc>>,
+                chrono::DateTime<chrono::Utc>,
+                chrono::DateTime<chrono::Utc>,
+                Vec<Uuid>,
+                String,
+            ),
+        >("SELECT * FROM memories WHERE id = $1 AND user_id = $2")
         .bind(memory_id)
         .bind(user_id)
         .fetch_one(&pool)
@@ -882,8 +939,8 @@ mod memories {
         .unwrap();
 
         // Key columns match between INSERT...RETURNING * and SELECT *
-        assert_eq!(selected.0, inserted.0);   // id
-        assert_eq!(selected.4, inserted.4);   // content
+        assert_eq!(selected.0, inserted.0); // id
+        assert_eq!(selected.4, inserted.4); // content
         assert_eq!(selected.13, inserted.13); // source_memory_ids (col 14)
         assert_eq!(selected.14, inserted.14); // tier (col 15)
 
@@ -909,7 +966,10 @@ mod memories {
         .unwrap();
 
         assert_eq!(tier, "raw", "tier should default to 'raw'");
-        assert!(source_ids.is_empty(), "source_memory_ids should default to empty array");
+        assert!(
+            source_ids.is_empty(),
+            "source_memory_ids should default to empty array"
+        );
 
         cleanup_user(&pool, user_id).await;
     }
@@ -977,13 +1037,12 @@ mod memories {
         .await
         .unwrap();
 
-        let (count, last): (i32, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
-            "SELECT access_count, last_accessed_at FROM memories WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (count, last): (i32, Option<chrono::DateTime<chrono::Utc>>) =
+            sqlx::query_as("SELECT access_count, last_accessed_at FROM memories WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         assert_eq!(count, 1, "access_count should be bumped from 0 to 1");
         assert!(last.is_some(), "last_accessed_at should be set after bump");

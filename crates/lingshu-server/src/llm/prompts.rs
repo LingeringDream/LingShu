@@ -276,7 +276,9 @@ pub fn style_exemplar_prompt(exemplars: &[StyleExemplar]) -> String {
         .collect();
 
     if !liked.is_empty() {
-        lines.push("以下是用户曾点赞的回复风格示例（请参考其详略度与语气，但不要复述内容）：".to_string());
+        lines.push(
+            "以下是用户曾点赞的回复风格示例（请参考其详略度与语气，但不要复述内容）：".to_string(),
+        );
         for (i, ex) in liked.iter().enumerate() {
             let snippet = if ex.content.chars().count() > MAX_EXEMPLAR_LEN {
                 let truncated: String = ex.content.chars().take(MAX_EXEMPLAR_LEN).collect();
@@ -366,7 +368,7 @@ mod tests {
     fn exemplar_truncates_at_3() {
         let exemplars: Vec<_> = (0..6)
             .map(|i| StyleExemplar {
-                content: format!("回复内容 {}", i),
+                content: format!("回复内容 {i}"),
                 style_tag: None,
             })
             .collect();
@@ -385,10 +387,16 @@ mod tests {
         }];
         let prompt = style_exemplar_prompt(&exemplars);
         // Truncated → ends with …
-        assert!(prompt.contains('…'), "long content should be truncated with ellipsis");
+        assert!(
+            prompt.contains('…'),
+            "long content should be truncated with ellipsis"
+        );
         // Should not contain the full 300 chars
         let after_ellipsis = prompt.split('…').nth(1).unwrap_or("");
-        assert!(after_ellipsis.trim().is_empty(), "nothing after truncation ellipsis");
+        assert!(
+            after_ellipsis.trim().is_empty(),
+            "nothing after truncation ellipsis"
+        );
     }
 
     #[test]
@@ -407,7 +415,10 @@ mod tests {
         assert!(prompt.contains("更简洁"));
         assert!(prompt.contains("更口语化"));
         // No liked exemplars (empty content), just the style summary
-        assert!(!prompt.contains("点赞"), "empty-content exemplars should not appear in liked list");
+        assert!(
+            !prompt.contains("点赞"),
+            "empty-content exemplars should not appear in liked list"
+        );
     }
 
     #[test]

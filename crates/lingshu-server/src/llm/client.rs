@@ -481,7 +481,11 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
     if content.is_empty() && !done {
         return None;
     }
-    Some(ChatChunk { content, done, assistant_message_id: None })
+    Some(ChatChunk {
+        content,
+        done,
+        assistant_message_id: None,
+    })
 }
 
 #[cfg(test)]

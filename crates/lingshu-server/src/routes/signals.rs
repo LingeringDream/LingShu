@@ -48,15 +48,12 @@ pub struct SignalIngestRequest {
 
 /// Validate `reply_style_tag` metadata shape: `{ "tag": "too_long" | "too_short" | "too_formal" }`.
 fn validate_reply_style_tag_metadata(meta: &serde_json::Value) -> Result<(), AppError> {
-    let tag = meta
-        .get("tag")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            AppError::Validation(
-                "reply_style_tag requires metadata.tag to be one of: too_long, too_short, too_formal"
-                    .into(),
-            )
-        })?;
+    let tag = meta.get("tag").and_then(|v| v.as_str()).ok_or_else(|| {
+        AppError::Validation(
+            "reply_style_tag requires metadata.tag to be one of: too_long, too_short, too_formal"
+                .into(),
+        )
+    })?;
 
     match tag {
         "too_long" | "too_short" | "too_formal" => Ok(()),
@@ -76,19 +73,17 @@ fn validate_personality_slider_metadata(meta: &serde_json::Value) -> Result<(), 
     })?;
 
     if trait_name.is_empty() {
-        return Err(AppError::Validation("metadata.trait must not be empty".into()));
+        return Err(AppError::Validation(
+            "metadata.trait must not be empty".into(),
+        ));
     }
 
     let _from = meta.get("from").and_then(|v| v.as_f64()).ok_or_else(|| {
-        AppError::Validation(
-            "personality_slider_changed requires metadata.from as a number".into(),
-        )
+        AppError::Validation("personality_slider_changed requires metadata.from as a number".into())
     })?;
 
     let _to = meta.get("to").and_then(|v| v.as_f64()).ok_or_else(|| {
-        AppError::Validation(
-            "personality_slider_changed requires metadata.to as a number".into(),
-        )
+        AppError::Validation("personality_slider_changed requires metadata.to as a number".into())
     })?;
 
     Ok(())
@@ -121,8 +116,8 @@ async fn ingest_signal(
     let user_id = auth::require_user(auth).await?;
 
     // 1. Validate event_type is in the client-allowed subset
-    let event_type = telemetry::SignalEventType::allowed_from_client(&req.event_type)
-        .ok_or_else(|| {
+    let event_type =
+        telemetry::SignalEventType::allowed_from_client(&req.event_type).ok_or_else(|| {
             AppError::Validation(format!(
                 "Unknown or client-disallowed signal event type: '{}'",
                 req.event_type
@@ -189,12 +184,10 @@ mod tests {
 
     #[test]
     fn personality_slider_valid() {
-        assert!(
-            validate_personality_slider_metadata(&json!({
-                "trait": "warmth", "from": 0.5, "to": 0.6
-            }))
-            .is_ok()
-        );
+        assert!(validate_personality_slider_metadata(&json!({
+            "trait": "warmth", "from": 0.5, "to": 0.6
+        }))
+        .is_ok());
     }
 
     #[test]
@@ -206,9 +199,8 @@ mod tests {
 
     #[test]
     fn personality_slider_missing_from() {
-        let err =
-            validate_personality_slider_metadata(&json!({"trait": "warmth", "to": 0.6}))
-                .unwrap_err();
+        let err = validate_personality_slider_metadata(&json!({"trait": "warmth", "to": 0.6}))
+            .unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
 

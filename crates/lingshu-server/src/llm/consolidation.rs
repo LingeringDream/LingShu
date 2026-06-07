@@ -43,11 +43,7 @@ const DEMOTE_FACTOR: f32 = 0.5;
 static LAST_CONSOLIDATIONS: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
 
 /// Pure predicate — testable without a real clock.
-pub fn should_run_consolidation_at(
-    last: &mut HashMap<Uuid, u64>,
-    user_id: Uuid,
-    now: u64,
-) -> bool {
+pub fn should_run_consolidation_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: u64) -> bool {
     if let Some(prev) = last.get(&user_id) {
         if now.saturating_sub(*prev) < CONSOLIDATION_COOLDOWN_SECS {
             return false;

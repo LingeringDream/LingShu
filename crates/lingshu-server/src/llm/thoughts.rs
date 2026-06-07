@@ -481,10 +481,7 @@ mod tests {
         // Near-identical text with minor whitespace/punctuation variation
         // IS caught by is_duplicate (Jaccard similarity > threshold)
         let dismissed = vec![(id, "建议创建一个日程提醒".to_string())];
-        assert!(is_recently_dismissed(
-            &dismissed,
-            "建议创建一个日程提醒！"
-        ));
+        assert!(is_recently_dismissed(&dismissed, "建议创建一个日程提醒！"));
     }
 
     // ── active_count_allows_more ──────────────────────────────────

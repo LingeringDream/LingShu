@@ -328,7 +328,10 @@ mod tests {
         let p = ForgettingPolicy::default();
         // Same parameters but unreferenced — should forget.
         let v = evaluate_with_protection(0.3, 365.0, false, &p);
-        assert!(v.should_forget(), "unreferenced old low memory should be forgotten");
+        assert!(
+            v.should_forget(),
+            "unreferenced old low memory should be forgotten"
+        );
     }
 
     #[test]
@@ -349,6 +352,9 @@ mod tests {
         // base 0.2, 180 days (6 half-lives) → effective ≈ 0.0031 << 0.15 floor
         // Without reference it would be forgotten, with reference it's kept.
         let v = evaluate_with_protection(0.2, 180.0, true, &p);
-        assert!(!v.should_forget(), "referenced memory survives even below floor");
+        assert!(
+            !v.should_forget(),
+            "referenced memory survives even below floor"
+        );
     }
 }

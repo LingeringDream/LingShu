@@ -62,9 +62,7 @@ async fn find_duplicate_memory(
 /// to produce a well-distributed partition key.
 fn advisory_lock_key(user_id: Uuid, memory_type: &str) -> i64 {
     let uuid_bytes = user_id.as_bytes();
-    let uuid_low = i64::from_le_bytes(
-        uuid_bytes[0..8].try_into().unwrap(),
-    );
+    let uuid_low = i64::from_le_bytes(uuid_bytes[0..8].try_into().unwrap());
     // Simple string hash for the type suffix
     let type_hash: i64 = memory_type
         .bytes()
