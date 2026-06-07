@@ -73,6 +73,29 @@ impl QdrantClient {
         Ok(())
     }
 
+    /// Delete points by UUID from a collection.
+    /// Best-effort: caller should handle errors gracefully (log + continue).
+    pub async fn delete_points(
+        &self,
+        collection: &str,
+        ids: &[Uuid],
+    ) -> anyhow::Result<()> {
+        let url = format!(
+            "{}/collections/{}/points/delete",
+            self.base_url, collection
+        );
+        let point_ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
+        let body = serde_json::json!({ "points": point_ids });
+
+        self.http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
+    }
+
     /// Search for similar vectors
     pub async fn search(
         &self,
