@@ -551,6 +551,92 @@ async fn run_forgetting_sweep(
     }
 }
 
+// ── Thought Queue maintenance sweep ─────────────────────────────
+
+/// Minimum seconds between automatic thought maintenance sweeps per user.
+const THOUGHT_MAINTENANCE_COOLDOWN_SECS: u64 = 24 * 60 * 60; // 24 hours
+
+/// Pending/shown thoughts older than this are auto-expired.
+const STALE_THOUGHT_DAYS: i32 = 14;
+
+static LAST_THOUGHT_MAINTENANCE: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
+
+/// Per-user cooldown gate. Pure helper — testable without a real system clock.
+fn should_run_maintenance_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: u64) -> bool {
+    if let Some(prev) = last.get(&user_id) {
+        if now.saturating_sub(*prev) < THOUGHT_MAINTENANCE_COOLDOWN_SECS {
+            return false;
+        }
+    }
+    last.insert(user_id, now);
+    true
+}
+
+fn should_run_thought_maintenance(user_id: Uuid) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut map = LAST_THOUGHT_MAINTENANCE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    should_run_maintenance_at(&mut map, user_id, now)
+}
+
+/// Best-effort background maintenance: expire stale pending/shown thoughts
+/// and resurrect due snoozed thoughts. Failures are logged only.
+async fn run_thought_maintenance(db: &sqlx::PgPool, user_id: Uuid) {
+    // 1. Expire stale pending/shown thoughts
+    match sqlx::query(
+        "UPDATE thought_queue SET status = 'expired', updated_at = NOW() \
+         WHERE user_id = $1 AND status IN ('pending', 'shown') \
+           AND created_at < NOW() - ($2::integer || ' days')::INTERVAL",
+    )
+    .bind(user_id)
+    .bind(STALE_THOUGHT_DAYS)
+    .execute(db)
+    .await
+    {
+        Ok(result) => {
+            if result.rows_affected() > 0 {
+                tracing::info!(
+                    %user_id,
+                    expired = result.rows_affected(),
+                    "Thought maintenance: expired stale thoughts"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Thought maintenance: failed to expire stale thoughts");
+        }
+    }
+
+    // 2. Resurrect due snoozed thoughts → pending
+    match sqlx::query(
+        "UPDATE thought_queue SET status = 'pending', scheduled_at = NULL, \
+         updated_at = NOW() \
+         WHERE user_id = $1 AND status = 'snoozed' AND scheduled_at <= NOW()",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await
+    {
+        Ok(result) => {
+            if result.rows_affected() > 0 {
+                tracing::info!(
+                    %user_id,
+                    resurrected = result.rows_affected(),
+                    "Thought maintenance: resurrected due snoozed thoughts"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Thought maintenance: failed to resurrect snoozed thoughts");
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_post_stream_tasks(
     db: sqlx::PgPool,
@@ -610,6 +696,12 @@ fn spawn_post_stream_tasks(
         // a per-user 24h cooldown, independent of the chat outcome.
         if should_run_sweep(user_id) {
             run_forgetting_sweep(&db, &vector, user_id).await;
+        }
+
+        // Thought Queue maintenance (auto-trigger): expire stale pending/shown
+        // thoughts, resurrect due snoozed thoughts. Gated by 24h cooldown.
+        if should_run_thought_maintenance(user_id) {
+            run_thought_maintenance(&db, user_id).await;
         }
     });
 }
@@ -1165,5 +1257,41 @@ mod tests {
         let at_boundary = 100 + FORGETTING_SWEEP_COOLDOWN_SECS;
         assert!(!should_run_sweep_at(&mut map, user, before_boundary));
         assert!(should_run_sweep_at(&mut map, user, at_boundary));
+    }
+
+    // ── Thought maintenance cooldown tests ────────────────────────
+
+    #[test]
+    fn maintenance_cooldown_allows_first_call() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_run_maintenance_at(&mut map, user, 100));
+    }
+
+    #[test]
+    fn maintenance_cooldown_blocks_second_call_within_window() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_run_maintenance_at(&mut map, user, 100));
+        assert!(!should_run_maintenance_at(&mut map, user, 100 + 3600)); // 1h < 24h
+    }
+
+    #[test]
+    fn maintenance_cooldown_is_per_user() {
+        let user_a = Uuid::new_v4();
+        let user_b = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_run_maintenance_at(&mut map, user_a, 100));
+        assert!(should_run_maintenance_at(&mut map, user_b, 100));
+        assert!(!should_run_maintenance_at(&mut map, user_a, 200));
+    }
+
+    #[test]
+    fn maintenance_cooldown_allows_after_window_expires() {
+        let user = Uuid::new_v4();
+        let mut map = HashMap::new();
+        assert!(should_run_maintenance_at(&mut map, user, 100));
+        let after_cooldown = 100 + THOUGHT_MAINTENANCE_COOLDOWN_SECS;
+        assert!(should_run_maintenance_at(&mut map, user, after_cooldown));
     }
 }

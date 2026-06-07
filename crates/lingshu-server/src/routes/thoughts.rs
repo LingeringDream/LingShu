@@ -31,6 +31,10 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 pub struct ListThoughtsParams {
     pub status: Option<String>,
+    /// When `true`, only return thoughts whose `scheduled_at` is NULL or in the past
+    /// (hiding unripe snoozed thoughts). Default behaviour (active absent or false)
+    /// shows all thoughts regardless of schedule.
+    pub active: Option<bool>,
     pub limit: Option<i64>,
 }
 
@@ -97,21 +101,32 @@ async fn list_thoughts(
     let user_id = auth::require_user(auth).await?;
     let limit = params.limit.unwrap_or(50).min(200);
 
+    // User-scoped, with optional status filter and optional "active" filter
+    // (hide future-scheduled snoozed thoughts when active=true).
+    let base_sql = "SELECT * FROM thought_queue WHERE user_id = $1";
+
     let thoughts: Vec<Thought> = if let Some(st) = &params.status {
-        sqlx::query_as(
-            "SELECT * FROM thought_queue WHERE user_id = $1 AND status = $2 \
-             ORDER BY scheduled_at ASC NULLS FIRST, created_at DESC LIMIT $3",
-        )
+        sqlx::query_as(&format!(
+            "{base_sql} AND status = $2 ORDER BY scheduled_at ASC NULLS FIRST, created_at DESC LIMIT $3"
+        ))
         .bind(user_id)
         .bind(st)
         .bind(limit)
         .fetch_all(&state.db)
         .await?
+    } else if params.active.unwrap_or(false) {
+        sqlx::query_as(&format!(
+            "{base_sql} AND (scheduled_at IS NULL OR scheduled_at <= NOW()) \
+             ORDER BY scheduled_at ASC NULLS FIRST, created_at DESC LIMIT $2"
+        ))
+        .bind(user_id)
+        .bind(limit)
+        .fetch_all(&state.db)
+        .await?
     } else {
-        sqlx::query_as(
-            "SELECT * FROM thought_queue WHERE user_id = $1 \
-             ORDER BY scheduled_at ASC NULLS FIRST, created_at DESC LIMIT $2",
-        )
+        sqlx::query_as(&format!(
+            "{base_sql} ORDER BY scheduled_at ASC NULLS FIRST, created_at DESC LIMIT $2"
+        ))
         .bind(user_id)
         .bind(limit)
         .fetch_all(&state.db)
@@ -147,7 +162,7 @@ async fn get_thought(
     Ok(Json(ThoughtResponse::from(thought)))
 }
 
-/// ── State machine ──────────────────────────────────────────────────
+// ── State machine ──────────────────────────────────────────────────
 
 /// Validate a thought status transition against the lifecycle state machine:
 ///

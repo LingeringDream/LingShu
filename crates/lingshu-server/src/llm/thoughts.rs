@@ -24,6 +24,13 @@ const MAX_NEW_THOUGHTS: usize = 3;
 /// Minimum confidence to persist a candidate.
 const MIN_CONFIDENCE: f32 = 0.55;
 
+/// Max active (pending + shown) thoughts before generation is suppressed.
+const MAX_ACTIVE_THOUGHTS: usize = 5;
+
+/// Recently dismissed thoughts with the same/similar title are suppressed
+/// for this many days to prevent immediate regeneration.
+const SUPPRESS_DISMISSED_DAYS: i32 = 14;
+
 // ── Cooldown tracking ─────────────────────────────────────────────
 
 static LAST_GENERATIONS: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
@@ -82,6 +89,25 @@ pub async fn generate_and_save_thoughts(
     model: &str,
     user_id: Uuid,
 ) -> anyhow::Result<usize> {
+    // 0. Active cap: don't generate if the queue is already full
+    let active_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM thought_queue \
+         WHERE user_id = $1 AND status IN ('pending', 'shown')",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    if !active_count_allows_more(active_count.0 as usize, MAX_ACTIVE_THOUGHTS) {
+        tracing::info!(
+            %user_id,
+            active = active_count.0,
+            max = MAX_ACTIVE_THOUGHTS,
+            "Skipping thought generation: active cap reached"
+        );
+        return Ok(0);
+    }
+
     // 1. Gather context
     let recent_context = gather_recent_context(db, user_id).await?;
     let active_goals = gather_active_goals(db, user_id).await?;
@@ -249,7 +275,8 @@ async fn check_duplicate_thought(
     user_id: Uuid,
     title: &str,
 ) -> Result<bool, sqlx::Error> {
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+    // 1. Check against currently active (pending/shown) thoughts
+    let active: Vec<(Uuid, String)> = sqlx::query_as(
         "SELECT id, title FROM thought_queue \
          WHERE user_id = $1 AND status IN ('pending', 'shown') \
          ORDER BY created_at DESC LIMIT 50",
@@ -258,7 +285,7 @@ async fn check_duplicate_thought(
     .fetch_all(db)
     .await?;
 
-    for (_id, existing_title) in &rows {
+    for (_id, existing_title) in &active {
         if existing_title == title
             || is_duplicate(existing_title, title, DEDUP_SIMILARITY_THRESHOLD)
         {
@@ -266,7 +293,40 @@ async fn check_duplicate_thought(
         }
     }
 
+    // 2. Suppress if recently dismissed with same/similar title
+    let dismissed: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, title FROM thought_queue \
+         WHERE user_id = $1 AND status = 'dismissed' \
+           AND resolved_at > NOW() - ($2::integer || ' days')::INTERVAL \
+         ORDER BY resolved_at DESC LIMIT 50",
+    )
+    .bind(user_id)
+    .bind(SUPPRESS_DISMISSED_DAYS)
+    .fetch_all(db)
+    .await?;
+
+    if is_recently_dismissed(&dismissed, title) {
+        tracing::debug!(
+            %user_id, %title,
+            "Suppressed thought generation: similar title was recently dismissed"
+        );
+        return Ok(true);
+    }
+
     Ok(false)
+}
+
+/// Pure predicate: check whether a candidate title matches any recently-dismissed
+/// thought (exact or semantic similarity).
+fn is_recently_dismissed(dismissed: &[(Uuid, String)], title: &str) -> bool {
+    for (_id, dismissed_title) in dismissed {
+        if dismissed_title == title
+            || is_duplicate(dismissed_title, title, DEDUP_SIMILARITY_THRESHOLD)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 // ── Insert ────────────────────────────────────────────────────────
@@ -296,6 +356,13 @@ async fn insert_thought(
     .execute(db)
     .await?;
     Ok(())
+}
+
+// ── Pure predicates ────────────────────────────────────────────────
+
+/// Whether the active thought count allows more suggestions.
+fn active_count_allows_more(count: usize, max: usize) -> bool {
+    count < max
 }
 
 // ── Tests ─────────────────────────────────────────────────────────
@@ -385,5 +452,52 @@ mod tests {
         let candidates: Vec<ThoughtCandidate> = serde_json::from_str(raw).expect("should parse");
         assert_eq!(candidates[0].source_memory_ids, Vec::<Uuid>::new());
         assert!(candidates[0].requires_confirmation); // default true
+    }
+
+    // ── is_recently_dismissed ─────────────────────────────────────
+
+    #[test]
+    fn recently_dismissed_exact_match() {
+        let id = Uuid::new_v4();
+        let dismissed = vec![(id, "建议创建日程".to_string())];
+        assert!(is_recently_dismissed(&dismissed, "建议创建日程"));
+    }
+
+    #[test]
+    fn recently_dismissed_no_match() {
+        let id = Uuid::new_v4();
+        let dismissed = vec![(id, "建议创建日程".to_string())];
+        assert!(!is_recently_dismissed(&dismissed, "完全不相关的建议"));
+    }
+
+    #[test]
+    fn recently_dismissed_empty_list() {
+        assert!(!is_recently_dismissed(&[], "建议创建日程"));
+    }
+
+    #[test]
+    fn recently_dismissed_semantic_similarity() {
+        let id = Uuid::new_v4();
+        // Near-identical text with minor whitespace/punctuation variation
+        // IS caught by is_duplicate (Jaccard similarity > threshold)
+        let dismissed = vec![(id, "建议创建一个日程提醒".to_string())];
+        assert!(is_recently_dismissed(
+            &dismissed,
+            "建议创建一个日程提醒！"
+        ));
+    }
+
+    // ── active_count_allows_more ──────────────────────────────────
+
+    #[test]
+    fn allows_when_below_max() {
+        assert!(active_count_allows_more(0, 5));
+        assert!(active_count_allows_more(4, 5));
+    }
+
+    #[test]
+    fn disallows_when_at_or_above_max() {
+        assert!(!active_count_allows_more(5, 5));
+        assert!(!active_count_allows_more(6, 5));
     }
 }
