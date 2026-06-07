@@ -1,4 +1,5 @@
 use axum::{extract::Path, routing::get, Json, Router};
+use chrono::Duration;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -8,6 +9,9 @@ use crate::error::AppError;
 use crate::models::thought::Thought;
 use crate::routes::settings::llm_settings_for_user;
 use crate::state::AppState;
+
+/// Duration after which a snoozed thought resurfaces (3 days).
+const SNOOZE_DURATION: Duration = Duration::days(3);
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -46,6 +50,7 @@ pub struct ThoughtResponse {
     pub source_memory_ids: Vec<Uuid>,
     pub requires_confirmation: bool,
     pub status: String,
+    pub shown_at: Option<chrono::DateTime<chrono::Utc>>,
     pub scheduled_at: Option<chrono::DateTime<chrono::Utc>>,
     pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -64,6 +69,7 @@ impl From<Thought> for ThoughtResponse {
             source_memory_ids: t.source_memory_ids,
             requires_confirmation: t.requires_confirmation,
             status: t.status.as_str().to_string(),
+            shown_at: t.shown_at,
             scheduled_at: t.scheduled_at,
             resolved_at: t.resolved_at,
             created_at: t.created_at,
@@ -141,6 +147,23 @@ async fn get_thought(
     Ok(Json(ThoughtResponse::from(thought)))
 }
 
+/// ── State machine ──────────────────────────────────────────────────
+
+/// Validate a thought status transition against the lifecycle state machine:
+///
+/// ```text
+/// pending → shown | accepted | dismissed | snoozed
+/// shown   → accepted | dismissed | snoozed
+/// (accepted, dismissed, expired = terminal; snoozed → pending is system-only)
+/// ```
+fn next_status_is_valid(from: &str, to: &str) -> bool {
+    match from {
+        "pending" => matches!(to, "shown" | "accepted" | "dismissed" | "snoozed"),
+        "shown" => matches!(to, "accepted" | "dismissed" | "snoozed"),
+        _ => false, // terminal states + snoozed (system-only transition)
+    }
+}
+
 #[utoipa::path(
     patch,
     path = "/api/v1/thoughts/{id}",
@@ -156,20 +179,22 @@ async fn update_thought(
 ) -> Result<Json<ThoughtResponse>, AppError> {
     let user_id = auth::require_user(auth).await?;
 
-    // Only allow specific status transitions
-    let new_status = match req.status.as_deref() {
-        Some("shown" | "accepted" | "dismissed" | "snoozed" | "confirmed") => {
-            req.status.as_deref().unwrap().to_string()
-        }
-        Some(other) => {
-            return Err(AppError::Validation(format!(
-                "Invalid status '{other}'. Allowed: shown, accepted, dismissed, snoozed (confirmed is an alias for accepted)"
-            )))
-        }
+    // Canonicalise the target status; "confirmed" is a legacy alias for "accepted".
+    let raw = match req.status.as_deref() {
+        Some(s) => s,
         None => return Err(AppError::BadRequest("status field is required".to_string())),
     };
+    let new_status = match raw {
+        "shown" | "accepted" | "dismissed" | "snoozed" => raw.to_string(),
+        "confirmed" => "accepted".to_string(), // legacy compat
+        other => {
+            return Err(AppError::Validation(format!(
+                "Invalid status '{other}'. Allowed: shown, accepted, dismissed, snoozed"
+            )))
+        }
+    };
 
-    // Fetch current thought to validate the transition
+    // Fetch current thought
     let current: Thought =
         sqlx::query_as("SELECT * FROM thought_queue WHERE id = $1 AND user_id = $2")
             .bind(id)
@@ -178,35 +203,64 @@ async fn update_thought(
             .await?
             .ok_or_else(|| AppError::NotFound("Thought not found".to_string()))?;
 
-    // Only allow transitions from pending or shown states
     let current_status = current.status.as_str();
-    if current_status != "pending" && current_status != "shown" {
+
+    // Validate transition
+    if !next_status_is_valid(current_status, &new_status) {
         return Err(AppError::Validation(format!(
-            "Cannot transition thought from '{current_status}' status. Only pending or shown thoughts can be updated."
+            "Cannot transition thought from '{current_status}' to '{new_status}'. \
+             Allowed transitions: pending→shown|accepted|dismissed|snoozed, \
+             shown→accepted|dismissed|snoozed"
         )));
     }
 
-    let thought: Thought = sqlx::query_as(
-        "UPDATE thought_queue SET status = $1, resolved_at = NOW(), \
-         updated_at = NOW() \
-         WHERE id = $2 AND user_id = $3 RETURNING *",
-    )
-    .bind(&new_status)
-    .bind(id)
-    .bind(user_id)
-    .fetch_one(&state.db)
-    .await?;
+    // Build UPDATE based on target status (timestamp semantics differ per status)
+    let thought: Thought = match new_status.as_str() {
+        "shown" => {
+            sqlx::query_as(
+                "UPDATE thought_queue SET status = $1, shown_at = COALESCE(shown_at, NOW()), \
+                 updated_at = NOW() WHERE id = $2 AND user_id = $3 RETURNING *",
+            )
+            .bind(&new_status)
+            .bind(id)
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?
+        }
+        "accepted" | "dismissed" => {
+            sqlx::query_as(
+                "UPDATE thought_queue SET status = $1, resolved_at = NOW(), \
+                 updated_at = NOW() WHERE id = $2 AND user_id = $3 RETURNING *",
+            )
+            .bind(&new_status)
+            .bind(id)
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?
+        }
+        "snoozed" => {
+            let snooze_until = chrono::Utc::now() + SNOOZE_DURATION;
+            sqlx::query_as(
+                "UPDATE thought_queue SET status = $1, scheduled_at = $2, \
+                 updated_at = NOW() WHERE id = $3 AND user_id = $4 RETURNING *",
+            )
+            .bind(&new_status)
+            .bind(snooze_until)
+            .bind(id)
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?
+        }
+        _ => unreachable!("validated by next_status_is_valid"),
+    };
 
     // Signal: map status to thought lifecycle event
     let event_type = match new_status.as_str() {
         "shown" => crate::telemetry::SignalEventType::ThoughtShown,
-        "accepted" | "confirmed" => crate::telemetry::SignalEventType::ThoughtAccepted,
+        "accepted" => crate::telemetry::SignalEventType::ThoughtAccepted,
         "dismissed" => crate::telemetry::SignalEventType::ThoughtDismissed,
         "snoozed" => crate::telemetry::SignalEventType::ThoughtSnoozed,
-        _ => {
-            // unreachable — validated above
-            return Ok(Json(ThoughtResponse::from(thought)));
-        }
+        _ => return Ok(Json(ThoughtResponse::from(thought))),
     };
 
     crate::telemetry::record(
@@ -259,4 +313,101 @@ async fn generate_thoughts(
     .map_err(AppError::Internal)?;
 
     Ok(Json(GenerateThoughtsResponse { created }))
+}
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── next_status_is_valid ──────────────────────────────────────
+
+    #[test]
+    fn pending_to_shown_is_valid() {
+        assert!(next_status_is_valid("pending", "shown"));
+    }
+
+    #[test]
+    fn pending_to_accepted_is_valid() {
+        assert!(next_status_is_valid("pending", "accepted"));
+    }
+
+    #[test]
+    fn pending_to_dismissed_is_valid() {
+        assert!(next_status_is_valid("pending", "dismissed"));
+    }
+
+    #[test]
+    fn pending_to_snoozed_is_valid() {
+        assert!(next_status_is_valid("pending", "snoozed"));
+    }
+
+    #[test]
+    fn pending_to_expired_is_invalid() {
+        assert!(!next_status_is_valid("pending", "expired"));
+    }
+
+    #[test]
+    fn pending_to_pending_is_invalid() {
+        assert!(!next_status_is_valid("pending", "pending"));
+    }
+
+    #[test]
+    fn shown_to_accepted_is_valid() {
+        assert!(next_status_is_valid("shown", "accepted"));
+    }
+
+    #[test]
+    fn shown_to_dismissed_is_valid() {
+        assert!(next_status_is_valid("shown", "dismissed"));
+    }
+
+    #[test]
+    fn shown_to_snoozed_is_valid() {
+        assert!(next_status_is_valid("shown", "snoozed"));
+    }
+
+    #[test]
+    fn shown_to_shown_is_invalid() {
+        assert!(!next_status_is_valid("shown", "shown"));
+    }
+
+    #[test]
+    fn shown_to_pending_is_invalid() {
+        assert!(!next_status_is_valid("shown", "pending"));
+    }
+
+    #[test]
+    fn accepted_is_terminal() {
+        assert!(!next_status_is_valid("accepted", "shown"));
+        assert!(!next_status_is_valid("accepted", "pending"));
+        assert!(!next_status_is_valid("accepted", "accepted"));
+        assert!(!next_status_is_valid("accepted", "dismissed"));
+        assert!(!next_status_is_valid("accepted", "snoozed"));
+        assert!(!next_status_is_valid("accepted", "expired"));
+    }
+
+    #[test]
+    fn dismissed_is_terminal() {
+        assert!(!next_status_is_valid("dismissed", "shown"));
+        assert!(!next_status_is_valid("dismissed", "pending"));
+        assert!(!next_status_is_valid("dismissed", "accepted"));
+        assert!(!next_status_is_valid("dismissed", "dismissed"));
+        assert!(!next_status_is_valid("dismissed", "snoozed"));
+        assert!(!next_status_is_valid("dismissed", "expired"));
+    }
+
+    #[test]
+    fn expired_is_terminal() {
+        assert!(!next_status_is_valid("expired", "shown"));
+        assert!(!next_status_is_valid("expired", "pending"));
+    }
+
+    #[test]
+    fn snoozed_is_system_only() {
+        assert!(!next_status_is_valid("snoozed", "pending"));
+        assert!(!next_status_is_valid("snoozed", "shown"));
+        assert!(!next_status_is_valid("snoozed", "accepted"));
+    }
 }

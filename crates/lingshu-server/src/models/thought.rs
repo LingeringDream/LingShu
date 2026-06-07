@@ -25,16 +25,31 @@ pub struct Thought {
     /// Lifecycle status
     pub status: ThoughtStatus,
 
-    /// When to surface this thought
+    /// When the thought was first shown to the user
+    pub shown_at: Option<DateTime<Utc>>,
+
+    /// When to surface this thought (NULL = immediate; future = snoozed)
     pub scheduled_at: Option<DateTime<Utc>>,
 
-    /// When the user acted on it
+    /// When the user acted on it (terminal states only: accepted / dismissed)
     pub resolved_at: Option<DateTime<Utc>>,
 
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
+/// Thought Queue lifecycle state machine:
+///
+/// ```text
+/// pending ─→ shown ──→ accepted   (terminal, resolved_at = NOW)
+///    │         │   ╰─→ dismissed   (terminal, resolved_at = NOW)
+///    │         │   ╰─→ snoozed     (non-terminal, scheduled_at = NOW+3d)
+///    │         ╰─→ accepted | dismissed | snoozed  (direct, skipping shown)
+///    │
+///    ╰─→ expired   (system-only: stale pending after STALE_THOUGHT_DAYS)
+///
+/// snoozed ─→ pending   (system-only: scheduled_at reached, maintenance sweep)
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "VARCHAR")]
 pub enum ThoughtStatus {
@@ -42,10 +57,12 @@ pub enum ThoughtStatus {
     Pending,
     #[sqlx(rename = "shown")]
     Shown,
-    #[sqlx(rename = "confirmed")]
-    Confirmed,
+    #[sqlx(rename = "accepted")]
+    Accepted,
     #[sqlx(rename = "dismissed")]
     Dismissed,
+    #[sqlx(rename = "snoozed")]
+    Snoozed,
     #[sqlx(rename = "expired")]
     Expired,
 }
@@ -55,8 +72,9 @@ impl ThoughtStatus {
         match self {
             Self::Pending => "pending",
             Self::Shown => "shown",
-            Self::Confirmed => "confirmed",
+            Self::Accepted => "accepted",
             Self::Dismissed => "dismissed",
+            Self::Snoozed => "snoozed",
             Self::Expired => "expired",
         }
     }
