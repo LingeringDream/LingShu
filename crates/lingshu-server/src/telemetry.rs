@@ -38,6 +38,9 @@ pub enum SignalEventType {
     MemoryReferenced,
     MemoryCopied,
     MemoryDisputed,
+    /// Service-side only: the offline consolidation engine produced a
+    /// derived memory that summarises multiple raw source memories.
+    MemoryConsolidated,
 
     // ── Reply feedback ─────────────────────────────────────────────
     ReplyThumbUp,
@@ -66,6 +69,7 @@ impl SignalEventType {
             Self::MemoryReferenced => "memory_referenced",
             Self::MemoryCopied => "memory_copied",
             Self::MemoryDisputed => "memory_disputed",
+            Self::MemoryConsolidated => "memory_consolidated",
             Self::ReplyThumbUp => "reply_thumb_up",
             Self::ReplyThumbDown => "reply_thumb_down",
             Self::ReplyStyleTag => "reply_style_tag",
@@ -88,6 +92,7 @@ impl SignalEventType {
             "memory_referenced" => Some(Self::MemoryReferenced),
             "memory_copied" => Some(Self::MemoryCopied),
             "memory_disputed" => Some(Self::MemoryDisputed),
+            "memory_consolidated" => Some(Self::MemoryConsolidated),
             "reply_thumb_up" => Some(Self::ReplyThumbUp),
             "reply_thumb_down" => Some(Self::ReplyThumbDown),
             "reply_style_tag" => Some(Self::ReplyStyleTag),

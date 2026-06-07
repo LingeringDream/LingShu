@@ -703,6 +703,15 @@ fn spawn_post_stream_tasks(
         if should_run_thought_maintenance(user_id) {
             run_thought_maintenance(&db, user_id).await;
         }
+
+        // Memory consolidation (auto-trigger): LLM-as-judge offline merge of
+        // semantically similar memories. Gated by 24h cooldown. Best-effort.
+        if crate::llm::consolidation::should_run_consolidation(user_id) {
+            let _ = crate::llm::consolidation::consolidate_memories(
+                &db, &llm, &model, &embed_model, &vector, user_id,
+            )
+            .await;
+        }
     });
 }
 

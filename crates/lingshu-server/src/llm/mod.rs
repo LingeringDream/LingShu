@@ -1,4 +1,5 @@
 pub mod client;
+pub mod consolidation;
 pub mod dedup;
 pub mod forgetting;
 pub mod memory;
