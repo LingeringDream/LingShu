@@ -106,6 +106,16 @@ struct OpenAIDelta {
     content: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpenAIEmbedResponse {
+    data: Vec<OpenAIEmbedData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIEmbedData {
+    embedding: Vec<f32>,
+}
+
 // ── Constructor ─────────────────────────────────────────────────────
 
 impl LlmClient {
@@ -129,10 +139,19 @@ impl LlmClient {
 
     // ── Embeddings ─────────────────────────────────────────────
 
-    /// Generate an embedding vector for `text` via Ollama's `/api/embeddings`.
-    /// Returns the embedding as `Vec<f32>`. This method does NOT support
-    /// OpenAI-compatible providers — local Ollama only.
+    /// Generate an embedding vector for `text`.
+    ///
+    /// Ollama path: POST `/api/embeddings` → `{embedding: [f32]}`.
+    /// OpenAI path:  POST `/v1/embeddings` → `{data: [{embedding: [f32]}]}`.
     pub async fn embed(&self, model: &str, text: &str) -> anyhow::Result<Vec<f32>> {
+        if self.is_openai() {
+            self.embed_openai(model, text).await
+        } else {
+            self.embed_ollama(model, text).await
+        }
+    }
+
+    async fn embed_ollama(&self, model: &str, text: &str) -> anyhow::Result<Vec<f32>> {
         let url = format!("{}/api/embeddings", self.ollama_url);
         let body = serde_json::json!({
             "model": model,
@@ -148,6 +167,34 @@ impl LlmClient {
             .json()
             .await?;
         Ok(resp.embedding)
+    }
+
+    async fn embed_openai(&self, model: &str, text: &str) -> anyhow::Result<Vec<f32>> {
+        let url = self.openai_embeddings_url();
+        let body = serde_json::json!({
+            "model": model,
+            "input": text,
+        });
+        let mut http_req = self.http.post(&url).json(&body);
+        if let Some(ref key) = self.api_key {
+            http_req = http_req.header("Authorization", format!("Bearer {key}"));
+        }
+        let resp: OpenAIEmbedResponse = http_req.send().await?.error_for_status()?.json().await?;
+        resp.data
+            .into_iter()
+            .next()
+            .map(|d| d.embedding)
+            .ok_or_else(|| anyhow::anyhow!("OpenAI embeddings returned empty data array"))
+    }
+
+    fn openai_embeddings_url(&self) -> String {
+        let base_url = self
+            .api_base_url
+            .as_deref()
+            .unwrap_or("")
+            .trim_end_matches('/');
+        let base_url = base_url.strip_suffix("/v1").unwrap_or(base_url);
+        format!("{base_url}/v1/embeddings")
     }
 
     // ── Non-streaming chat ──────────────────────────────────────
@@ -444,7 +491,16 @@ mod tests {
     use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    fn client_for_base_url(base_url: String) -> LlmClient {
+    fn ollama_client(ollama_url: String) -> LlmClient {
+        LlmClient::new(
+            reqwest::Client::new(),
+            &ollama_url,
+            None, // no api_key → Ollama-only
+            None, // no api_base_url → not OpenAI
+        )
+    }
+
+    fn openai_client(base_url: String) -> LlmClient {
         LlmClient::new(
             reqwest::Client::new(),
             "http://ollama.invalid",
@@ -469,7 +525,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = client_for_base_url(format!("{}/v1", server.uri()));
+        let client = openai_client(format!("{}/v1", server.uri()));
 
         let response = client
             .chat(
@@ -502,7 +558,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = client_for_base_url(format!("{}/v1", server.uri()));
+        let client = openai_client(format!("{}/v1", server.uri()));
 
         let chunks: Vec<ChatChunk> = client
             .chat_stream(
@@ -524,5 +580,75 @@ mod tests {
             Some("pong")
         );
         assert!(chunks.last().is_some_and(|chunk| chunk.done));
+    }
+
+    // ── Embed tests ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn ollama_embed_returns_vector() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/embeddings"))
+            .and(body_json(serde_json::json!({
+                "model": "nomic-embed-text",
+                "prompt": "hello world",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "embedding": [0.1, 0.2, 0.3]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = ollama_client(server.uri());
+        let embedding = client
+            .embed("nomic-embed-text", "hello world")
+            .await
+            .expect("Ollama embed should succeed");
+
+        assert_eq!(embedding, vec![0.1_f32, 0.2, 0.3]);
+    }
+
+    #[tokio::test]
+    async fn openai_embed_returns_vector() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
+            .and(body_json(serde_json::json!({
+                "model": "text-embedding-3-small",
+                "input": "hello world",
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"embedding": [0.4, 0.5, 0.6]}]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = openai_client(server.uri());
+        let embedding = client
+            .embed("text-embedding-3-small", "hello world")
+            .await
+            .expect("OpenAI embed should succeed");
+
+        assert_eq!(embedding, vec![0.4_f32, 0.5, 0.6]);
+    }
+
+    #[tokio::test]
+    async fn openai_embed_accepts_base_url_that_already_includes_v1() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/embeddings"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"embedding": [0.7, 0.8]}]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = openai_client(format!("{}/v1", server.uri()));
+        let embedding = client
+            .embed("text-embedding-3-small", "test")
+            .await
+            .expect("OpenAI embed with /v1 already in base URL should work");
+
+        assert_eq!(embedding, vec![0.7_f32, 0.8]);
     }
 }

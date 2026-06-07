@@ -76,7 +76,7 @@ impl AppState {
         let vector = if config.qdrant.url.is_empty() {
             None
         } else {
-            match try_connect_qdrant(&config.qdrant.url, &http).await {
+            match try_connect_qdrant(&config.qdrant.url, config.llm.embed_dim, &http).await {
                 Ok(client) => {
                     tracing::info!("Qdrant connected");
                     Some(client)
@@ -138,10 +138,14 @@ async fn try_connect_redis(url: &str) -> anyhow::Result<fred::clients::RedisClie
     Ok(client)
 }
 
-async fn try_connect_qdrant(url: &str, http: &reqwest::Client) -> anyhow::Result<QdrantClient> {
+async fn try_connect_qdrant(
+    url: &str,
+    embed_dim: u64,
+    http: &reqwest::Client,
+) -> anyhow::Result<QdrantClient> {
     let client = QdrantClient::with_client(url, http.clone());
     // Try to create the memories collection (idempotent — ignore "already exists")
-    match client.create_collection("memories", 768).await {
+    match client.create_collection("memories", embed_dim).await {
         Ok(()) => {}
         Err(e) => {
             let msg = e.to_string();

@@ -56,6 +56,12 @@ pub struct LlmConfig {
     pub api_key: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
+    #[serde(default = "default_embed_dim")]
+    pub embed_dim: u64,
+}
+
+fn default_embed_dim() -> u64 {
+    768
 }
 
 fn default_model() -> String {
@@ -126,6 +132,7 @@ impl AppConfig {
                 "OLLAMA_URL" => Some("llm.ollama_url".into()),
                 "LLM_DEFAULT_MODEL" => Some("llm.default_model".into()),
                 "LLM_EMBED_MODEL" => Some("llm.embed_model".into()),
+                "LLM_EMBED_DIM" => Some("llm.embed_dim".into()),
                 "LLM_API_KEY" => Some("llm.api_key".into()),
                 "LLM_API_BASE_URL" => Some("llm.api_base_url".into()),
                 "SERVER_HOST" => Some("server.host".into()),
@@ -225,5 +232,6 @@ mod tests {
 
         assert_eq!(config.default_model, "");
         assert_eq!(config.embed_model, "nomic-embed-text");
+        assert_eq!(config.embed_dim, 768);
     }
 }
