@@ -441,7 +441,14 @@ type MemoryDecayRow = (Uuid, f32, Option<DateTime<Utc>>, DateTime<Utc>);
 ///
 /// Best-effort background maintenance: failures are logged only and never
 /// propagate to the caller.
-async fn run_forgetting_sweep(db: &sqlx::PgPool, user_id: Uuid) {
+///
+/// After a PG soft-delete, this also best-effort removes the memory's vector
+/// point from Qdrant so the vector store stays consistent with the PG state.
+async fn run_forgetting_sweep(
+    db: &sqlx::PgPool,
+    vector: &crate::state::OptionalVector,
+    user_id: Uuid,
+) {
     // Load protected IDs from active personality snapshots.
     // An empty set is safe — it just means no extra protection beyond
     // the base-importance threshold.
@@ -508,6 +515,15 @@ async fn run_forgetting_sweep(db: &sqlx::PgPool, user_id: Uuid) {
             Ok(affected) => {
                 if affected.rows_affected() > 0 {
                     forgotten += 1;
+                    // Best-effort: remove the vector point from Qdrant
+                    if let Some(qdrant) = vector {
+                        if let Err(e) = qdrant.delete_points("memories", &[id]).await {
+                            tracing::warn!(
+                                %user_id, memory_id = %id, %e,
+                                "Failed to delete vector point for forgotten memory (non-fatal)"
+                            );
+                        }
+                    }
                     // Record telemetry for each forgotten memory
                     crate::telemetry::record(
                         db,
@@ -593,7 +609,7 @@ fn spawn_post_stream_tasks(
         // Forgetting sweep (auto-trigger): background maintenance gated by
         // a per-user 24h cooldown, independent of the chat outcome.
         if should_run_sweep(user_id) {
-            run_forgetting_sweep(&db, user_id).await;
+            run_forgetting_sweep(&db, &vector, user_id).await;
         }
     });
 }

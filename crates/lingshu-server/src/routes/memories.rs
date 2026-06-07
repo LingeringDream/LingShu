@@ -265,6 +265,18 @@ async fn delete_memory(
     if rows == 0 {
         return Err(AppError::NotFound("Memory not found".into()));
     }
+
+    // Best-effort: remove the corresponding vector point from Qdrant.
+    // Failure is non-fatal — the PG row is already soft-deleted.
+    if let Some(qdrant) = &state.vector {
+        if let Err(e) = qdrant.delete_points("memories", &[id]).await {
+            tracing::warn!(
+                %user_id, memory_id = %id, %e,
+                "Failed to delete Qdrant point for manually deleted memory (non-fatal)"
+            );
+        }
+    }
+
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
