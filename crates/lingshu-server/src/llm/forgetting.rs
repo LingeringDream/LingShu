@@ -129,11 +129,11 @@ pub fn evaluate(base_importance: f32, days: f64, policy: &ForgettingPolicy) -> V
 ///
 /// # Provenance coverage (current scope)
 ///
-/// At present the "protected id set" includes only memories referenced by
-/// an active personality snapshot (`source_memory_ids`). Memories that are
-/// compressed into other memories (episodic→semantic chain) are not yet
-/// covered because the data model for that chain does not exist yet. When
-/// it lands, its source references must be added to the protected set.
+/// The "protected id set" includes:
+/// - Memories referenced by an active personality snapshot (`source_memory_ids`).
+/// - Raw source memories referenced by active derived memories
+///   (`tier='derived'`, consolidation provenance chain). ✅ Implemented
+///   in `run_forgetting_sweep` (chat.rs post-stream sweep).
 pub fn evaluate_with_protection(
     base_importance: f32,
     days: f64,

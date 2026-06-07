@@ -449,10 +449,10 @@ async fn run_forgetting_sweep(
     vector: &crate::state::OptionalVector,
     user_id: Uuid,
 ) {
-    // Load protected IDs from active personality snapshots.
-    // An empty set is safe — it just means no extra protection beyond
-    // the base-importance threshold.
-    let protected: std::collections::HashSet<Uuid> = match sqlx::query_scalar(
+    // Load protected IDs from active personality snapshots and derived-memory
+    // source chains (consolidation provenance). An empty set is safe — it just
+    // means no extra protection beyond the base-importance threshold.
+    let mut protected: std::collections::HashSet<Uuid> = match sqlx::query_scalar(
         "SELECT DISTINCT unnest(source_memory_ids) \
          FROM personality_snapshots \
          WHERE user_id = $1 AND is_active = true",
@@ -465,6 +465,26 @@ async fn run_forgetting_sweep(
         Err(error) => {
             tracing::warn!(%user_id, %error, "Failed to load protected memory IDs for forgetting sweep");
             return;
+        }
+    };
+
+    // Also protect raw source memories that feed into active derived memories
+    // (consolidation provenance guard — §4 of soulledger-design-decisions.md).
+    match sqlx::query_scalar(
+        "SELECT DISTINCT unnest(source_memory_ids) FROM memories \
+         WHERE user_id = $1 AND tier = 'derived' AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await
+    {
+        Ok(ids) => {
+            for id in ids {
+                protected.insert(id);
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Failed to load consolidation source IDs for protection");
         }
     };
 
@@ -1067,6 +1087,45 @@ impl AssistantStreamAccumulator {
     }
 }
 
+// ── Retrieval dedup: prefer derived over raw source ──────────────
+
+/// When both a derived memory and its raw source appear in the retrieval
+/// results, prefer the derived summary and drop the raw source. This avoids
+/// showing the user duplicate information.
+///
+/// `source_map` maps raw source UUID → set of derived memory UUIDs that
+/// reference it. Only keys present in this map are candidates for removal.
+pub(crate) fn dedup_retrieval_ids(
+    ids: &[Uuid],
+    source_map: &std::collections::HashMap<Uuid, Vec<Uuid>>,
+) -> Vec<Uuid> {
+    // Collect all derived memory IDs in the result set.
+    let result_set: std::collections::HashSet<Uuid> = ids.iter().copied().collect();
+    let mut derived_in_result: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    for id in ids {
+        // If this ID appears as a derived ID in the source map, mark it.
+        for (raw_id, derived_ids) in source_map {
+            if derived_ids.contains(id) && result_set.contains(raw_id) {
+                derived_in_result.insert(*id);
+            }
+        }
+    }
+
+    // Filter: keep an ID unless it's a raw source whose derived summary is also present.
+    ids.iter()
+        .copied()
+        .filter(|id| {
+            if let Some(derived_ids) = source_map.get(id) {
+                // This is a raw source — drop it if any of its derived summaries
+                // are also in the result set.
+                !derived_ids.iter().any(|d| result_set.contains(d))
+            } else {
+                true
+            }
+        })
+        .collect()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1302,5 +1361,52 @@ mod tests {
         assert!(should_run_maintenance_at(&mut map, user, 100));
         let after_cooldown = 100 + THOUGHT_MAINTENANCE_COOLDOWN_SECS;
         assert!(should_run_maintenance_at(&mut map, user, after_cooldown));
+    }
+
+    // ── dedup_retrieval_ids tests ────────────────────────────────
+
+    #[test]
+    fn dedup_keeps_all_when_no_derived_present() {
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let ids = vec![id1, id2];
+        let map: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        let result = dedup_retrieval_ids(&ids, &map);
+        assert_eq!(result, vec![id1, id2]);
+    }
+
+    #[test]
+    fn dedup_drops_raw_when_derived_is_present() {
+        let raw = Uuid::new_v4();
+        let derived = Uuid::new_v4();
+        let ids = vec![raw, derived];
+        let mut map = HashMap::new();
+        map.insert(raw, vec![derived]);
+        let result = dedup_retrieval_ids(&ids, &map);
+        assert_eq!(result, vec![derived]);
+    }
+
+    #[test]
+    fn dedup_keeps_raw_when_derived_absent() {
+        let raw = Uuid::new_v4();
+        let derived = Uuid::new_v4(); // derived NOT in result set
+        let ids = vec![raw];
+        let mut map = HashMap::new();
+        map.insert(raw, vec![derived]);
+        let result = dedup_retrieval_ids(&ids, &map);
+        assert_eq!(result, vec![raw]);
+    }
+
+    #[test]
+    fn dedup_handles_multiple_raw_sources() {
+        let raw1 = Uuid::new_v4();
+        let raw2 = Uuid::new_v4();
+        let derived = Uuid::new_v4();
+        let ids = vec![raw1, raw2, derived];
+        let mut map = HashMap::new();
+        map.insert(raw1, vec![derived]);
+        map.insert(raw2, vec![derived]);
+        let result = dedup_retrieval_ids(&ids, &map);
+        assert_eq!(result, vec![derived]);
     }
 }
