@@ -550,6 +550,7 @@ pub struct WriteExternalEventRequest {
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Calendar L1 permission not enabled"),
         (status = 404, description = "Event not found"),
+        (status = 409, description = "Event is not confirmed — confirm first"),
         (status = 422, description = "Validation error"),
     )
 )]
@@ -572,7 +573,7 @@ async fn write_external_event_id(
     let row = sqlx::query_as::<_, EventRow>(
         "UPDATE calendar_events \
          SET external_event_id = $1, synced_to_eventkit = true, updated_at = NOW() \
-         WHERE id = $2 AND user_id = $3 \
+         WHERE id = $2 AND user_id = $3 AND status = 'confirmed' \
          RETURNING id, title, description, location, start_time, end_time, \
          attendees, status, calendar_name, parse_confidence, source_input, created_at",
     )
@@ -580,8 +581,24 @@ async fn write_external_event_id(
     .bind(id)
     .bind(user_id)
     .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Event not found".into()))?;
+    .await?;
+
+    let Some(row) = row else {
+        // Distinguish "not found" from "exists but not confirmed"
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM calendar_events WHERE id = $1 AND user_id = $2")
+                .bind(id)
+                .bind(user_id)
+                .fetch_optional(&state.db)
+                .await?;
+
+        return match status.as_deref() {
+            Some("confirmed") | None => Err(AppError::NotFound("Event not found".into())),
+            Some(_) => Err(AppError::Conflict(
+                "Confirm the event before syncing to system calendar".into(),
+            )),
+        };
+    };
 
     Ok(Json(row.into_response()))
 }

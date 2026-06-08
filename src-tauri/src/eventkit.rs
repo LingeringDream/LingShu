@@ -51,7 +51,7 @@ mod imp {
 
     fn iso_to_nsdate(iso: &str) -> Result<Retained<NSDate>, String> {
         let dt = chrono::DateTime::parse_from_rfc3339(iso)
-            .map_err(|e| format!("Invalid ISO 8601 date '{}': {}", iso, e))?;
+            .map_err(|e| format!("Invalid ISO 8601 date '{iso}': {e}"))?;
         let timestamp = dt.naive_utc().and_utc().timestamp();
         let nsdate = NSDate::dateWithTimeIntervalSince1970(objc2_foundation::NSTimeInterval::from(
             timestamp as f64,
@@ -62,20 +62,25 @@ mod imp {
     // ── Public API ─────────────────────────────────────────────────
 
     pub fn request_access() -> Result<String, String> {
-        let status = unsafe { EKEventStore::authorizationStatusForEntityType(EKEntityType::Event) };
-
-        match status {
-            EKAuthorizationStatus::FullAccess => Ok("full_access".into()),
-            EKAuthorizationStatus::Denied => Ok("denied".into()),
-            EKAuthorizationStatus::Restricted => Ok("restricted".into()),
-            EKAuthorizationStatus::WriteOnly => {
-                trigger_access_prompt();
-                Ok("write_only".into())
-            }
-            _ => {
-                // NotDetermined
-                trigger_access_prompt();
-                Ok("not_determined".into())
+        // macOS 14+ deprecates authorizationStatusForEntityType: it returns Denied
+        // even when the app has full calendar access via requestFullAccessToEvents.
+        // We always show the prompt first; the completion handler tells us the truth.
+        // On older macOS the prompt is a no-op if access was already granted.
+        match trigger_access_prompt() {
+            Some(true) => Ok("full_access".into()),
+            Some(false) => Ok("denied".into()),
+            None => {
+                // Prompt did not complete (timeout or store unavailable).
+                // Fall back to the deprecated status check.
+                let status =
+                    unsafe { EKEventStore::authorizationStatusForEntityType(EKEntityType::Event) };
+                match status {
+                    EKAuthorizationStatus::FullAccess => Ok("full_access".into()),
+                    EKAuthorizationStatus::Denied => Ok("denied".into()),
+                    EKAuthorizationStatus::Restricted => Ok("restricted".into()),
+                    EKAuthorizationStatus::WriteOnly => Ok("write_only".into()),
+                    _ => Ok("not_determined".into()),
+                }
             }
         }
     }
@@ -124,7 +129,7 @@ mod imp {
                 }
                 Err(err) => {
                     let msg = err.localizedDescription().to_string();
-                    Err(format!("Failed to save event: {}", msg))
+                    Err(format!("Failed to save event: {msg}"))
                 }
             }
         })
@@ -141,7 +146,7 @@ mod imp {
         with_store(|store| {
             let ns_id = NSString::from_str(event_identifier);
             let existing = unsafe { store.eventWithIdentifier(&ns_id) }
-                .ok_or_else(|| format!("Event not found: {}", event_identifier))?;
+                .ok_or_else(|| format!("Event not found: {event_identifier}"))?;
 
             if let Some(t) = new_title {
                 unsafe { existing.setTitle(Some(&NSString::from_str(t))) };
@@ -178,7 +183,7 @@ mod imp {
         with_store(|store| {
             let ns_id = NSString::from_str(event_identifier);
             let existing = unsafe { store.eventWithIdentifier(&ns_id) }
-                .ok_or_else(|| format!("Event not found: {}", event_identifier))?;
+                .ok_or_else(|| format!("Event not found: {event_identifier}"))?;
 
             let result =
                 unsafe { store.removeEvent_span_commit_error(&existing, EKSpan::ThisEvent, true) };
@@ -193,17 +198,21 @@ mod imp {
         })
     }
 
-    fn trigger_access_prompt() {
-        let _ = with_store(|store| {
+    /// Show the calendar access prompt and return the user's choice.
+    ///
+    /// Returns `Some(true)` if access was granted, `Some(false)` if denied,
+    /// `None` if the prompt timed out or the store is unavailable.
+    fn trigger_access_prompt() -> Option<bool> {
+        with_store(|store| {
             use std::sync::{Arc, Mutex};
 
-            let done = Arc::new(Mutex::new(false));
-            let done_clone = done.clone();
+            let result: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
+            let result_clone = result.clone();
 
             let block = block2::RcBlock::new(
-                move |_granted: objc2::runtime::Bool, _error: *mut NSError| {
-                    let mut d = done_clone.lock().unwrap();
-                    *d = true;
+                move |granted: objc2::runtime::Bool, _error: *mut NSError| {
+                    let mut r = result_clone.lock().unwrap();
+                    *r = Some(granted.as_bool());
                 },
             );
 
@@ -215,12 +224,18 @@ mod imp {
 
             // Pump for up to 10 seconds for the user to respond.
             let start = std::time::Instant::now();
-            while !*done.lock().unwrap() && start.elapsed() < std::time::Duration::from_secs(10) {
+            loop {
+                let r = *result.lock().unwrap();
+                if r.is_some() {
+                    return Ok(r);
+                }
+                if start.elapsed() >= std::time::Duration::from_secs(10) {
+                    return Ok(None);
+                }
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
-
-            Ok(())
-        });
+        })
+        .unwrap_or(None)
     }
 }
 
