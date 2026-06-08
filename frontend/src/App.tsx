@@ -71,6 +71,7 @@ export default function App() {
 
   // Stats
   const [stats, setStats] = useState({ events: 0, tasks: 0, pendingTasks: 0 });
+  const [l1CalendarEnabled, setL1CalendarEnabled] = useState(false);
 
   const { fetchProjects } = useProjectStore();
 
@@ -95,19 +96,37 @@ export default function App() {
   const loadDashboard = useCallback(async () => {
     setDashboardLoading(true);
     try {
-      // Calendar events
-      const calRes = await apiFetch('/api/v1/calendar/events?limit=5');
-      if (calRes.ok) {
-        const events: CalendarEvent[] = await calRes.json();
-        setScheduleItems(
-          events.map((e) => ({
-            id: e.id,
-            time: new Date(e.start_time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-            title: e.title,
-            state: e.status === 'confirmed' ? 'active' : 'muted',
-          }))
-        );
-        setStats((s) => ({ ...s, events: events.length }));
+      // Gate calendar on L1 permission to avoid 403 noise
+      let l1Calendar = false;
+      try {
+        const permRes = await apiFetch('/api/v1/permissions');
+        if (permRes.ok) {
+          const perms: { l1_calendar: boolean } = await permRes.json();
+          l1Calendar = perms.l1_calendar ?? false;
+        }
+      } catch {
+        // permissions fetch is best-effort; default to disabled
+      }
+      setL1CalendarEnabled(l1Calendar);
+
+      // Calendar events — only when L1 calendar is enabled
+      if (l1Calendar) {
+        const calRes = await apiFetch('/api/v1/calendar/events?limit=5');
+        if (calRes.ok) {
+          const events: CalendarEvent[] = await calRes.json();
+          setScheduleItems(
+            events.map((e) => ({
+              id: e.id,
+              time: new Date(e.start_time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+              title: e.title,
+              state: e.status === 'confirmed' ? 'active' : 'muted',
+            }))
+          );
+          setStats((s) => ({ ...s, events: events.length }));
+        }
+      } else {
+        setScheduleItems([]);
+        setStats((s) => ({ ...s, events: 0 }));
       }
 
       // Conversations
@@ -265,6 +284,25 @@ export default function App() {
           </div>
           {dashboardLoading ? (
             <p style={{ padding: 12, fontSize: 13 }}>加载中...</p>
+          ) : !l1CalendarEnabled ? (
+            <div style={{ padding: 12, fontSize: 13 }}>
+              <p style={{ color: '#888', margin: '0 0 8px 0' }}>需要开启 L1 日历权限</p>
+              <button
+                type="button"
+                onClick={() => setActiveSection('privacy')}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: 12,
+                  border: '1px solid var(--accent)',
+                  borderRadius: 4,
+                  background: 'transparent',
+                  color: 'var(--accent)',
+                  cursor: 'pointer',
+                }}
+              >
+                前往权限设置
+              </button>
+            </div>
           ) : scheduleItems.length === 0 ? (
             <p style={{ padding: 12, fontSize: 13, color: '#888' }}>暂无日程。去日历添加吧。</p>
           ) : (
