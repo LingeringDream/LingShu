@@ -33,6 +33,9 @@ pub struct AppState {
     pub llm_settings: Arc<RwLock<HashMap<Uuid, LlmSettings>>>,
     /// L0-L4 permission tiers. In-memory, defaults to L0 only.
     pub permissions: Arc<RwLock<HashMap<Uuid, PermissionSettings>>>,
+    /// Per-user role-play / custom persona prompt. Cached in memory,
+    /// backed by the `users.role_prompt` column in PostgreSQL.
+    pub role_prompts: Arc<RwLock<HashMap<Uuid, String>>>,
     /// Pre-initialised AES-256-GCM cipher for integration token encryption.
     /// The expensive 100k-round KDF runs once at startup. `None` when
     /// `ENCRYPTION_KEY` is unconfigured — integration writes that would need to
@@ -120,6 +123,7 @@ impl AppState {
             vector,
             llm_settings: Arc::new(RwLock::new(HashMap::new())),
             permissions: Arc::new(RwLock::new(HashMap::new())),
+            role_prompts: Arc::new(RwLock::new(HashMap::new())),
             token_cipher,
         })
     }

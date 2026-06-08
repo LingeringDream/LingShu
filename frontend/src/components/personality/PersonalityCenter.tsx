@@ -45,6 +45,94 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+// ── Role Prompt (inlined for style consistency) ────────────────────
+
+function RolePromptSection() {
+  const [prompt, setPrompt] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    apiFetch('/api/v1/settings/role-prompt')
+      .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
+      .then((d: { role_prompt: string }) => setPrompt(d.role_prompt))
+      .catch(() => {}) // silently use empty default
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setSaved(false);
+    try {
+      const resp = await apiFetch('/api/v1/settings/role-prompt', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role_prompt: prompt }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      // silently ignore — keep the local value
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+
+  return (
+    <section style={{ marginBottom: 24 }}>
+      <h4 style={{ margin: '0 0 12px' }}>角色扮演提示词</h4>
+      <p style={{ fontSize: 13, color: 'var(--color-secondary-text, #888)', margin: '0 0 8px' }}>
+        自定义 AI 角色设定（例如：猫娘、顾问、演员…），留空则使用默认人格。
+      </p>
+      <textarea
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        rows={4}
+        placeholder="例如：你是一只名叫「小灵」的猫娘助手，说话时偶尔带喵~的口癖，性格活泼可爱但专业。"
+        style={{
+          width: '100%',
+          background: 'var(--bg-tertiary, #f5f5f5)',
+          border: '1px solid var(--color-border, #ddd)',
+          borderRadius: 6,
+          padding: '10px 12px',
+          color: 'var(--text-primary, #333)',
+          fontSize: 13,
+          outline: 'none',
+          fontFamily: 'inherit',
+          resize: 'vertical',
+          lineHeight: 1.5,
+          boxSizing: 'border-box',
+        }}
+      />
+      <button
+        type="button"
+        onClick={save}
+        disabled={saving}
+        style={{
+          marginTop: 8,
+          padding: '6px 16px',
+          background: saved ? '#4caf50' : 'var(--color-accent, #0a73ff)',
+          color: '#fff',
+          border: 'none',
+          borderRadius: 4,
+          fontSize: 13,
+          cursor: saving ? 'not-allowed' : 'pointer',
+          opacity: saving ? 0.7 : 1,
+          transition: 'background 0.2s',
+        }}
+      >
+        {saving ? '保存中...' : saved ? '已保存' : '保存'}
+      </button>
+    </section>
+  );
+}
+
+// ── Main Component ──────────────────────────────────────────────────
+
 export function PersonalityCenter() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [active, setActive] = useState<Snapshot | null>(null);
@@ -131,6 +219,9 @@ export function PersonalityCenter() {
       {error && (
         <p style={{ color: '#e05555', fontSize: 13, marginBottom: 12 }}>{error}</p>
       )}
+
+      {/* Role-play prompt — at the top, above trait sliders */}
+      <RolePromptSection />
 
       {/* Trait editor */}
       <section style={{ marginBottom: 24 }}>

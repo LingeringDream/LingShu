@@ -3,10 +3,8 @@ import { ReactNode } from 'react';
 export type AppSectionKey =
   | 'home'
   | 'chat'
-  | 'calendar'
+  | 'workspace'
   | 'memory'
-  | 'tasks'
-  | 'projects'
   | 'personality'
   | 'thoughts'
   | 'preferences'
@@ -22,10 +20,8 @@ interface AppLayoutProps {
 const navItems: { key: AppSectionKey; label: string }[] = [
   { key: 'home', label: '首页' },
   { key: 'chat', label: '聊天' },
-  { key: 'calendar', label: '日历' },
+  { key: 'workspace', label: '工作台' },
   { key: 'memory', label: '记忆中心' },
-  { key: 'tasks', label: '我的任务' },
-  { key: 'projects', label: '项目管理' },
   { key: 'personality', label: '人格中心' },
   { key: 'thoughts', label: '思维队列' },
   { key: 'preferences', label: '偏好设置' },

@@ -74,10 +74,12 @@ pub async fn chat(
     let style_exemplar_snippet = load_style_exemplar_snippet(&state.db, user_id).await;
     let personality_values = load_active_personality(&state.db, user_id).await;
     let personality_snippet = personality_prompt(&personality_values);
+    let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
     let system_prompt = build_system_prompt(
         &personality_snippet,
         &memory_context,
         &style_exemplar_snippet,
+        &role_prompt,
     );
     let mut messages = vec![ChatMessage::system(system_prompt)];
 
@@ -264,6 +266,7 @@ fn build_system_prompt(
     personality_snippet: &str,
     memory_context: &str,
     style_exemplar_snippet: &str,
+    role_prompt: &str,
 ) -> String {
     let base = r#"你是灵枢（LingShu），一个运行在 macOS 桌面上的 AI 个人助理。
 
@@ -306,7 +309,17 @@ fn build_system_prompt(
 - 对话内容仅用于改进助理体验，用户可随时查看和删除记忆
 - 你是一个 AI 助手，不是真正的意识体。你记住的是「用户说过什么」，而非「你经历过什么」"#;
 
-    let mut parts = vec![base.to_string(), personality_snippet.to_string()];
+    let mut parts = vec![base.to_string()];
+
+    // Inject user's custom role-play prompt at the top (before personality)
+    // so it takes precedence over the default identity.
+    if !role_prompt.is_empty() {
+        parts.push(format!(
+            "## 角色设定（用户自定义）\n以下是对你的角色和行为的特别设定。你必须严格遵守这些设定，它们覆盖默认身份中相冲突的部分。\n\n{role_prompt}"
+        ));
+    }
+
+    parts.push(personality_snippet.to_string());
 
     if !memory_context.is_empty() {
         parts.push(format!(
@@ -1320,7 +1333,7 @@ mod tests {
     #[test]
     fn build_system_prompt_includes_personality_snippet() {
         let snippet = "## 当前人格参数\n测试人格";
-        let prompt = build_system_prompt(snippet, "", "");
+        let prompt = build_system_prompt(snippet, "", "", "");
         assert!(
             prompt.contains("当前人格参数"),
             "System prompt should include personality snippet. Got:\n{prompt}"
@@ -1334,7 +1347,7 @@ mod tests {
     #[test]
     fn build_system_prompt_skips_memory_when_empty() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "", "");
+        let prompt = build_system_prompt(snippet, "", "", "");
         assert!(
             !prompt.contains("用户档案与记忆"),
             "System prompt should NOT include memory section when memory is empty"
@@ -1345,7 +1358,7 @@ mod tests {
     fn build_system_prompt_includes_memory_when_present() {
         let snippet = "## 当前人格参数\n- 直接度：中";
         let memories = "- [偏好] 喜欢安静的环境\n- [事实] 住在北京";
-        let prompt = build_system_prompt(snippet, memories, "");
+        let prompt = build_system_prompt(snippet, memories, "", "");
         assert!(
             prompt.contains("用户档案与记忆"),
             "System prompt should include memory section when memories exist"
@@ -1370,7 +1383,7 @@ mod tests {
     #[test]
     fn build_system_prompt_contains_base_identity() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "", "");
+        let prompt = build_system_prompt(snippet, "", "", "");
         assert!(prompt.contains("灵枢"));
         assert!(prompt.contains("LingShu"));
         assert!(prompt.contains("权限边界"));

@@ -8,10 +8,15 @@ use crate::state::AppState;
 use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route(
-        "/api/v1/settings/llm",
-        get(get_llm_settings).patch(update_llm_settings),
-    )
+    Router::new()
+        .route(
+            "/api/v1/settings/llm",
+            get(get_llm_settings).patch(update_llm_settings),
+        )
+        .route(
+            "/api/v1/settings/role-prompt",
+            get(get_role_prompt).patch(update_role_prompt),
+        )
 }
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -132,4 +137,90 @@ async fn update_llm_settings(
     .await;
 
     Ok(Json(result))
+}
+
+// ── Role-Play Prompt ────────────────────────────────────────────────
+
+/// Load the role-play prompt for a user. Checks the in-memory cache first,
+/// then falls back to the `users.role_prompt` column in PostgreSQL.
+pub async fn role_prompt_for_user(state: &AppState, user_id: Uuid) -> String {
+    // 1. In-memory cache
+    {
+        let map = state.role_prompts.read().await;
+        if let Some(prompt) = map.get(&user_id) {
+            return prompt.clone();
+        }
+    }
+    // 2. Database
+    let prompt: String = sqlx::query_scalar(
+        "SELECT role_prompt FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    // Populate cache
+    {
+        let mut map = state.role_prompts.write().await;
+        map.insert(user_id, prompt.clone());
+    }
+    prompt
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RolePromptPatch {
+    pub role_prompt: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RolePromptResponse {
+    pub role_prompt: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/settings/role-prompt",
+    responses((status = 200, body = RolePromptResponse), (status = 401))
+)]
+async fn get_role_prompt(
+    State(state): State<AppState>,
+    auth: Option<AuthUser>,
+) -> Result<Json<RolePromptResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    let role_prompt = role_prompt_for_user(&state, user_id).await;
+    Ok(Json(RolePromptResponse { role_prompt }))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/settings/role-prompt",
+    request_body = RolePromptPatch,
+    responses((status = 200, body = RolePromptResponse), (status = 401))
+)]
+async fn update_role_prompt(
+    State(state): State<AppState>,
+    auth: Option<AuthUser>,
+    Json(patch): Json<RolePromptPatch>,
+) -> Result<Json<RolePromptResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    let trimmed = patch.role_prompt.trim().to_string();
+
+    // Persist to DB
+    sqlx::query("UPDATE users SET role_prompt = $1, updated_at = NOW() WHERE id = $2")
+        .bind(&trimmed)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+
+    // Update cache
+    {
+        let mut map = state.role_prompts.write().await;
+        map.insert(user_id, trimmed.clone());
+    }
+
+    Ok(Json(RolePromptResponse {
+        role_prompt: trimmed,
+    }))
 }

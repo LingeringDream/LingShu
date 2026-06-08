@@ -3,11 +3,11 @@ import { AppLayout, type AppSectionKey } from './components/layout/AppLayout';
 import { ChatWindow } from './components/chat/ChatWindow';
 import { ChatSettings } from './components/chat/ChatSettings';
 import { MemoryCenter } from './components/memory/MemoryCenter';
-import { CalendarPanel } from './components/calendar/CalendarPanel';
+import { WorkspacePage } from './components/workspace/WorkspacePage';
 import { PermissionSettings } from './components/settings/PermissionSettings';
 import { PersonalityCenter } from './components/personality/PersonalityCenter';
 import { ThoughtQueue } from './components/thoughts/ThoughtQueue';
-import { ProjectManager } from './components/projects/ProjectManager';
+
 import {
   type AvatarControlSettings,
   AvatarControlPanel,
@@ -239,7 +239,7 @@ export default function App() {
         <button
           type="button"
           className="stat-card stat-action-card"
-          onClick={() => setActiveSection('calendar')}
+          onClick={() => setActiveSection('workspace')}
         >
           <span className="stat-icon stat-blue" />
           <div>
@@ -251,7 +251,7 @@ export default function App() {
         <button
           type="button"
           className="stat-card stat-action-card"
-          onClick={() => setActiveSection('tasks')}
+          onClick={() => setActiveSection('workspace')}
         >
           <span className="stat-icon stat-orange" />
           <div>
@@ -278,7 +278,7 @@ export default function App() {
         <article className="dashboard-card schedule-card">
           <div className="card-title-row">
             <h3>今日日程</h3>
-            <button type="button" onClick={() => setActiveSection('calendar')}>
+            <button type="button" onClick={() => setActiveSection('workspace')}>
               查看全部
             </button>
           </div>
@@ -321,7 +321,7 @@ export default function App() {
         <article className="dashboard-card todo-card">
           <div className="card-title-row">
             <h3>我的待办</h3>
-            <button type="button" onClick={() => setActiveSection('tasks')}>
+            <button type="button" onClick={() => setActiveSection('workspace')}>
               新建待办
             </button>
           </div>
@@ -398,15 +398,8 @@ export default function App() {
             <ChatWindow />
           </section>
         );
-      case 'calendar':
-        return (
-          <section className="dashboard-card live-tool-card page-tool-card">
-            <div className="card-title-row">
-              <h3>日历解析与 Apple Calendar 同步</h3>
-            </div>
-            <CalendarPanel />
-          </section>
-        );
+      case 'workspace':
+        return <WorkspacePage />;
       case 'memory':
         return (
           <section className="dashboard-card live-tool-card page-tool-card">
@@ -414,14 +407,6 @@ export default function App() {
               <h3>记忆中心</h3>
             </div>
             <MemoryCenter />
-          </section>
-        );
-      case 'tasks':
-        return <TasksPage onNavigate={setActiveSection} />;
-      case 'projects':
-        return (
-          <section className="dashboard-card page-tool-card">
-            <ProjectManager />
           </section>
         );
       case 'personality':
@@ -470,174 +455,3 @@ export default function App() {
   );
 }
 
-// ── Tasks Page (real API) ───────────────────────────────────────
-
-interface TasksPageProps {
-  onNavigate: (section: AppSectionKey) => void;
-}
-
-function TasksPage({ onNavigate }: TasksPageProps) {
-  const { projects, fetchProjects } = useProjectStore();
-  const [selectedPid, setSelectedPid] = useState<string | null>(null);
-  const [taskList, setTaskList] = useState<TaskItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
-  const [newTitle, setNewTitle] = useState('');
-  const [newPriority, setNewPriority] = useState(3);
-
-  useEffect(() => {
-    fetchProjects();
-  }, [fetchProjects]);
-
-  useEffect(() => {
-    if (projects.length > 0 && !selectedPid) {
-      setSelectedPid(projects[0].id);
-    }
-  }, [projects, selectedPid]);
-
-  const loadTasks = useCallback(async () => {
-    if (!selectedPid) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiFetch(`/api/v1/projects/${selectedPid}/tasks?limit=50`);
-      if (!res.ok) throw new Error('Failed to load tasks');
-      setTaskList(await res.json());
-    } catch (e) {
-      setError(getErrorMessage(e, 'Load failed'));
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedPid]);
-
-  useEffect(() => {
-    loadTasks();
-  }, [loadTasks]);
-
-  const handleCreate = async () => {
-    if (!newTitle.trim() || !selectedPid) return;
-    try {
-      const res = await apiFetch(`/api/v1/projects/${selectedPid}/tasks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: newTitle.trim(), priority: newPriority }),
-      });
-      if (!res.ok) throw new Error('Failed to create task');
-      setNewTitle('');
-      setShowCreate(false);
-      await loadTasks();
-    } catch (e) {
-      setError(getErrorMessage(e, 'Create failed'));
-    }
-  };
-
-  const handleDelete = async (tid: string) => {
-    if (!selectedPid) return;
-    try {
-      await apiFetch(`/api/v1/projects/${selectedPid}/tasks/${tid}`, { method: 'DELETE' });
-      await loadTasks();
-    } catch (e) {
-      setError(getErrorMessage(e, 'Delete failed'));
-    }
-  };
-
-  const toggleStatus = async (t: TaskItem) => {
-    if (!selectedPid) return;
-    const newStatus = t.status === 'done' ? 'todo' : 'done';
-    try {
-      const res = await apiFetch(`/api/v1/projects/${selectedPid}/tasks/${t.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      if (!res.ok) throw new Error('Update failed');
-      await loadTasks();
-    } catch (e) {
-      setError(getErrorMessage(e, 'Update failed'));
-    }
-  };
-
-  return (
-    <section className="dashboard-card page-tool-card">
-      <div className="card-title-row">
-        <h3>我的任务</h3>
-        <button type="button" onClick={() => setShowCreate(true)}>新建任务</button>
-      </div>
-
-      {/* Project selector */}
-      {projects.length > 1 && (
-        <div style={{ marginBottom: 12 }}>
-          <select
-            value={selectedPid || ''}
-            onChange={(e) => setSelectedPid(e.target.value)}
-            style={{ fontSize: 13, padding: '4px 8px' }}
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {error && <p style={{ color: '#e05555', fontSize: 13 }}>{error}</p>}
-
-      {/* Create form */}
-      {showCreate && (
-        <div style={{ padding: 12, marginBottom: 12, border: '1px solid #0a73ff', borderRadius: 6, background: '#f8faff' }}>
-          <input
-            placeholder="任务标题"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            style={{ display: 'block', width: '100%', padding: 6, marginBottom: 8, fontSize: 13 }}
-          />
-          <select value={newPriority} onChange={(e) => setNewPriority(Number(e.target.value))} style={{ marginBottom: 8, fontSize: 13 }}>
-            <option value={1}>P1 - 紧急</option>
-            <option value={2}>P2 - 高</option>
-            <option value={3}>P3 - 中</option>
-            <option value={4}>P4 - 低</option>
-            <option value={5}>P5 - 极低</option>
-          </select>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" onClick={handleCreate} style={{ padding: '4px 14px', background: '#0a73ff', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 13 }}>创建</button>
-            <button type="button" onClick={() => setShowCreate(false)} style={{ padding: '4px 14px', border: '1px solid #ddd', borderRadius: 4, background: 'transparent', cursor: 'pointer', fontSize: 13 }}>取消</button>
-          </div>
-        </div>
-      )}
-
-      {/* Task list */}
-      {loading ? (
-        <p style={{ fontSize: 13 }}>加载中...</p>
-      ) : projects.length === 0 ? (
-        <p style={{ fontSize: 13, color: '#888' }}>
-          暂无项目。请先在 <button type="button" onClick={() => onNavigate('projects')} style={{ color: '#0a73ff', border: 'none', background: 'none', cursor: 'pointer', textDecoration: 'underline' }}>项目管理</button> 中创建项目。
-        </p>
-      ) : taskList.length === 0 ? (
-        <p style={{ fontSize: 13, color: '#888' }}>暂无任务。</p>
-      ) : (
-        <div className="todo-list spacious-list">
-          {taskList.map((t) => (
-            <div key={t.id} className="todo-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0' }}>
-              <input
-                type="checkbox"
-                checked={t.status === 'done'}
-                onChange={() => toggleStatus(t)}
-              />
-              <span style={{ flex: 1, textDecoration: t.status === 'done' ? 'line-through' : 'none' }}>
-                {t.title}
-              </span>
-              {t.priority <= 2 && <em>高优先级</em>}
-              <button
-                type="button"
-                onClick={() => handleDelete(t.id)}
-                style={{ padding: '1px 6px', fontSize: 11, color: '#c55', border: '1px solid #ecc', borderRadius: 3, background: 'transparent', cursor: 'pointer' }}
-              >
-                删除
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}

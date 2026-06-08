@@ -101,6 +101,8 @@ use utoipa::OpenApi;
         users::UpdateUserRequest,
         settings::LlmSettings,
         settings::LlmSettingsPatch,
+        settings::RolePromptPatch,
+        settings::RolePromptResponse,
         projects::CreateProjectRequest,
         projects::ProjectResponse,
         tasks::CreateTaskRequest,
