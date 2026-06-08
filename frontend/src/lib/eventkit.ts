@@ -3,10 +3,10 @@
 // Invokes Tauri EventKit commands from the frontend.
 // Gracefully degrades to no-ops when running in a browser (non-Tauri).
 //
-// Flow for creating an Apple Calendar event:
+// Flow for creating a system calendar event:
 //   1. User confirms event: POST /api/v1/calendar/events/{id}/confirm
-//   2. invoke create_calendar_event  →  get appleEventId
-//   3. POST /api/v1/calendar/events/{id}/apple-event  →  store appleEventId
+//   2. invoke create_calendar_event  →  get eventIdentifier
+//   3. PATCH /api/v1/calendar/events/{id}/external  →  store external_event_id
 
 import { isTauri, invokeTauri } from './tauri';
 import { apiFetch } from './api';
@@ -38,7 +38,7 @@ export interface AppleEventInput {
 }
 
 /**
- * Create an event in Apple Calendar and store the resulting
+ * Create an event in the system calendar and store the resulting
  * eventIdentifier back to the backend.
  *
  * Returns the EventKit eventIdentifier on success.
@@ -48,7 +48,7 @@ export async function syncEventToAppleCalendar(
   event: AppleEventInput
 ): Promise<string | null> {
   if (!isTauri()) {
-    console.log('[eventkit] Running in browser — skipping Apple Calendar sync');
+    console.log('[eventkit] Running in browser — skipping system calendar sync');
     return null;
   }
 
@@ -59,37 +59,37 @@ export async function syncEventToAppleCalendar(
       return null;
     }
 
-    // 1. Create in Apple Calendar via EventKit
-    const appleEventId = await invokeTauri<string>('create_calendar_event', {
+    // 1. Create in system calendar via EventKit
+    const eventIdentifier = await invokeTauri<string>('create_calendar_event', {
       event,
     });
 
-    if (!appleEventId) {
+    if (!eventIdentifier) {
       console.error('[eventkit] create_calendar_event returned null');
       return null;
     }
 
-    console.log(`[eventkit] Created Apple Calendar event: ${appleEventId}`);
+    console.log(`[eventkit] Created system calendar event: ${eventIdentifier}`);
 
-    // 2. Store apple_event_id back to backend
+    // 2. Write external_event_id back to backend
     const resp = await apiFetch(
-      `/api/v1/calendar/events/${backendEventId}/apple-event`,
+      `/api/v1/calendar/events/${backendEventId}/external`,
       {
-        method: 'POST',
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apple_event_id: appleEventId }),
+        body: JSON.stringify({ external_event_id: eventIdentifier }),
       }
     );
 
     if (!resp.ok) {
       console.error(
-        `[eventkit] Failed to save apple_event_id: HTTP ${resp.status}`
+        `[eventkit] Failed to store external_event_id: HTTP ${resp.status}`
       );
-      return appleEventId; // Event was created, but backend sync failed
+      return eventIdentifier; // Event was created, but backend sync failed
     }
 
-    console.log(`[eventkit] Stored apple_event_id for event ${backendEventId}`);
-    return appleEventId;
+    console.log(`[eventkit] Stored external_event_id for event ${backendEventId}`);
+    return eventIdentifier;
   } catch (err) {
     console.error('[eventkit] syncEventToAppleCalendar failed:', err);
     return null;
