@@ -19,9 +19,21 @@ interface ChatState {
  *  ephemeral, non-persisted exchange in that case). */
 async function ensureSessionId(
   current: string | null,
-  setSessionId: (id: string) => void,
+  setSessionId: (id: string | null) => void,
 ): Promise<string | null> {
-  if (current) return current;
+  if (current) {
+    // Verify the persisted session still exists on the backend.
+    // If the database was reset or the session was deleted, discard it
+    // and create a fresh one so the chat doesn't fail with a 404.
+    try {
+      const resp = await apiFetch(`/api/v1/chat/sessions/${current}`);
+      if (resp.ok) return current;
+    } catch {
+      // validation failed — fall through to create a new session below
+    }
+    // Stale session — discard and create a new one
+    setSessionId(null);
+  }
   try {
     const resp = await apiFetch('/api/v1/conversations', {
       method: 'POST',
@@ -153,9 +165,13 @@ export const useChatStore = create<ChatState>()(
             ),
           }));
         } catch (error) {
+          const is404 = error instanceof Error && error.message === 'HTTP 404';
           set((state) => ({
             isLoading: false,
             streamingId: null,
+            // If the session was not found (expired / DB reset), clear it
+            // so the next message creates a fresh one automatically.
+            sessionId: is404 ? null : state.sessionId,
             messages: state.messages.map((m) =>
               m.id === assistantId && m.content === ''
                 ? {
