@@ -172,10 +172,7 @@ async fn try_consolidate(
     let memory_list = build_memory_list(&memories);
     let prompt = build_consolidation_prompt(&memory_list);
 
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: prompt,
-    }];
+    let messages = vec![ChatMessage::user(prompt)];
 
     // 3. Call LLM
     let response = llm.chat(model, messages, None).await?;

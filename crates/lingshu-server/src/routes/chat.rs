@@ -79,24 +79,18 @@ pub async fn chat(
         &memory_context,
         &style_exemplar_snippet,
     );
-    let mut messages = vec![ChatMessage {
-        role: "system".to_string(),
-        content: system_prompt,
-    }];
+    let mut messages = vec![ChatMessage::system(system_prompt)];
 
     // Load chat history if session_id provided (verify ownership first)
     if let Some(sid) = session_id {
         let history = load_chat_history(&state.db, sid, user_id).await?;
         for (role, content) in history {
-            messages.push(ChatMessage { role, content });
+            messages.push(ChatMessage { role, content, tool_calls: None, tool_call_id: None });
         }
     }
 
     // Current user message
-    messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: user_message.clone(),
-    });
+    messages.push(ChatMessage::user(user_message.clone()));
 
     // Persist user message to DB before streaming (only when session_id is set)
     if let Some(sid) = session_id {
@@ -136,10 +130,19 @@ pub async fn chat(
         num_predict: Some(settings.max_tokens),
     };
 
+    // ── Tool calling loop ──────────────────────────────────────────
+    // Before streaming the final response, check whether the LLM wants to
+    // invoke tools (calendar, etc.). If it does, execute them and feed the
+    // results back into the conversation so the model can incorporate them
+    // into its reply.
+    let tools = calendar_tools();
+    let model = settings.model.clone();
+    messages = run_tool_loop(&state, user_id, &model, messages, &options, &tools).await;
+
     // chat_stream now returns provider-agnostic ChatChunks
     let chunk_stream = state
         .llm
-        .chat_stream(&settings.model, messages, Some(options));
+        .chat_stream(&model, messages, Some(options));
 
     // ── Build the SSE stream with optional assistant collection ──────
     let assistant_accumulator: Arc<Mutex<AssistantStreamAccumulator>> =
@@ -276,7 +279,7 @@ fn build_system_prompt(
 
 ## 能力范围（当前可用）
 - 💬 对话交流：回答提问、讨论想法、提供建议
-- 📅 日历解析：将自然语言转化为结构化日程（用户需确认后才创建）
+- 📅 日历管理：你可以直接调用工具创建和查询日程。当用户提到安排会议、预约、提醒等时间相关需求时，直接调用 create_calendar_event 工具，无需先口头确认——工具会自动创建「待确认」状态的草稿事件。查询日程时调用 list_calendar_events 工具
 - 🧠 记忆管理：从对话中自动提取重要信息，用户可在记忆中心查看和编辑
 - 🎯 主动建议：当检测到用户可能需要的提醒或建议时，以陈述句轻提示
 
@@ -1127,6 +1130,185 @@ pub(crate) fn dedup_retrieval_ids(
             }
         })
         .collect()
+}
+
+// ── Tool Calling ──────────────────────────────────────────────────
+
+/// Maximum number of sequential tool-calling iterations per chat message.
+const MAX_TOOL_LOOPS: usize = 3;
+
+/// Build the tool definitions that are available to the LLM during chat.
+fn calendar_tools() -> Vec<crate::llm::client::ToolDefinition> {
+    use crate::llm::client::ToolDefinition;
+    vec![
+        ToolDefinition::new(
+            "create_calendar_event",
+            "立即从自然语言描述创建日历事件。当用户说「帮我看/创建/添加/安排/预订/记一下...日程/会议/提醒/预约」或任何暗示想要安排时间的表述时，直接调用此工具，不要先口头询问。工具会自动创建「待确认」状态的草稿事件，用户稍后可在日历中确认。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "用户的原始自然语言描述，保留完整上下文。例如：「明天下午3点和张三在3楼会议室开会讨论Q3 OKR」"
+                    }
+                },
+                "required": ["text"]
+            }),
+        ),
+        ToolDefinition::new(
+            "list_calendar_events",
+            "查询用户当前的日历事件列表。当用户说「看/查/列一下...日程/日历/安排」、「我今天有什么...？」、「最近有什么...？」时调用此工具。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        ),
+    ]
+}
+
+/// Execute a single tool call and return a human-readable result string
+/// for injection into the LLM conversation.
+async fn execute_tool_call(
+    state: &AppState,
+    user_id: Uuid,
+    tool_call: &crate::llm::client::ToolCall,
+) -> Result<String, AppError> {
+    match tool_call.function.name.as_str() {
+        "create_calendar_event" => {
+            let text = tool_call
+                .function
+                .arguments
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if text.is_empty() {
+                return Ok("错误：未提供创建日历事件所需的文本。".into());
+            }
+            match crate::routes::calendar::parse_and_create_event(state, user_id, text).await {
+                Ok(event) => Ok(format!(
+                    "日程已创建：\n- 标题：{}\n- 时间：{} 至 {}\n- 状态：{}\n- 日历：{}",
+                    event.title, event.start_time, event.end_time,
+                    event.status, event.calendar_name
+                )),
+                Err(e) => {
+                    let msg = e.to_string();
+                    tracing::warn!(%user_id, %text, %msg, "Calendar parse failed via chat tool");
+                    Ok(format!("创建日历事件失败：{msg}"))
+                }
+            }
+        }
+        "list_calendar_events" => {
+            match crate::routes::calendar::list_user_events(state, user_id, Some(20)).await {
+                Ok(events) => {
+                    if events.is_empty() {
+                        Ok("当前没有即将到来的日历事件。".into())
+                    } else {
+                        let lines: Vec<String> = events
+                            .iter()
+                            .map(|e| {
+                                format!(
+                                    "- {}：{} 至 {}（{}）",
+                                    e.title, e.start_time, e.end_time, e.status
+                                )
+                            })
+                            .collect();
+                        Ok(format!("用户日历事件（共 {} 条）：\n{}", events.len(), lines.join("\n")))
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(%user_id, %e, "Calendar list failed via chat tool");
+                    Ok(format!("查询日历事件失败：{e}"))
+                }
+            }
+        }
+        other => Ok(format!("未知工具：{other}")),
+    }
+}
+
+/// Run the tool-calling loop: call the LLM with tools, execute any requested
+/// tool calls, append results to the conversation, and repeat until the model
+/// produces a text-only response (or we hit the max iteration limit).
+async fn run_tool_loop(
+    state: &AppState,
+    user_id: Uuid,
+    model: &str,
+    messages: Vec<ChatMessage>,
+    options: &ChatOptions,
+    tools: &[crate::llm::client::ToolDefinition],
+) -> Vec<ChatMessage> {
+    if tools.is_empty() {
+        return messages;
+    }
+
+    let mut messages = messages;
+    let mut iterations = 0;
+
+    loop {
+        iterations += 1;
+        if iterations > MAX_TOOL_LOOPS {
+            tracing::warn!(%user_id, iterations = iterations - 1, "Tool loop hit max iterations");
+            break;
+        }
+
+        let response = match state
+            .llm
+            .chat_with_tools(model, messages.clone(), Some(options.clone()), tools.to_vec())
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(%user_id, %e, "chat_with_tools failed, falling through to plain chat");
+                messages.push(ChatMessage::assistant(format!(
+                    "[内部提示：工具调用失败，请直接回复用户。错误：{e}]"
+                )));
+                break;
+            }
+        };
+
+        if response.tool_calls.is_empty() {
+            // No tool calls — model produced a text response.
+            // Remove the last assistant message if it was tool-call-only
+            // (the model will re-generate in the streaming call).
+            // Re-add the model's text content as a proper assistant message
+            // so the streaming call continues with full context.
+            if !response.content.is_empty() {
+                messages.push(ChatMessage::assistant(response.content));
+            }
+            break;
+        }
+
+        // Collect tool results
+        let mut tool_results: Vec<(crate::llm::client::ToolCall, String)> = Vec::new();
+        for tc in response.tool_calls {
+            let result = match execute_tool_call(state, user_id, &tc).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(%user_id, tool = %tc.function.name, %e, "Tool execution failed");
+                    format!("工具执行失败：{e}")
+                }
+            };
+            tool_results.push((tc, result));
+        }
+
+        // Add assistant message with tool calls to the conversation
+        let tool_calls: Vec<_> = tool_results.iter().map(|(tc, _)| tc.clone()).collect();
+        let assistant_msg = ChatMessage::assistant_with_tools(
+            response.content,
+            tool_calls,
+        );
+        messages.push(assistant_msg);
+
+        // Add tool result messages
+        for (tc, result) in &tool_results {
+            // Ollama accepts tool_call_id in the message, but we don't have an explicit
+            // ID from the Ollama tool call format. Using the function name as a fallback.
+            let id = format!("call_{}_{iterations}", tc.function.name);
+            messages.push(ChatMessage::tool(result.clone(), id));
+        }
+    }
+
+    messages
 }
 
 // ── Tests ─────────────────────────────────────────────────────────

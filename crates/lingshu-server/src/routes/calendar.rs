@@ -205,23 +205,17 @@ fn extract_json_slice(raw: &str) -> &str {
     text
 }
 
-// ── Handler: parse ─────────────────────────────────────────────────
+// ── Public helpers (reusable from chat route) ─────────────────────
 
-#[utoipa::path(
-    post,
-    path = "/api/v1/calendar/parse",
-    request_body = ParseRequest,
-    responses((status = 201, description = "Parsed and created calendar event", body = EventResponse))
-)]
-async fn parse_calendar(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    auth: Option<AuthUser>,
-    Json(req): Json<ParseRequest>,
-) -> Result<(axum::http::StatusCode, Json<EventResponse>), AppError> {
-    let user_id = auth::require_user(auth).await?;
-    let perms = check_calendar_permission(&state, user_id).await?;
-
-    let settings = llm_settings_for_user(&state, user_id).await;
+/// Parse natural language text and create a calendar event.
+/// Shared by the `/api/v1/calendar/parse` endpoint and the chat tool-calling path.
+pub async fn parse_and_create_event(
+    state: &AppState,
+    user_id: Uuid,
+    text: &str,
+) -> Result<EventResponse, AppError> {
+    let perms = check_calendar_permission(state, user_id).await?;
+    let settings = llm_settings_for_user(state, user_id).await;
     let model = settings.model.clone();
 
     if model.is_empty() {
@@ -265,13 +259,10 @@ async fn parse_calendar(
 输入：{input}
 JSON："###,
         now = now,
-        input = req.text
+        input = text
     );
 
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: prompt,
-    }];
+    let messages = vec![ChatMessage::user(prompt)];
 
     let response = state
         .llm
@@ -283,7 +274,6 @@ JSON："###,
     let parsed: ParsedEvent = serde_json::from_str(slice)
         .map_err(|e| AppError::Validation(format!("Failed to parse calendar JSON: {e}")))?;
 
-    // Convert LLM output to a concrete event and persist immediately.
     let create_req = CreateEventRequest {
         title: parsed.title,
         description: parsed.description,
@@ -292,12 +282,54 @@ JSON："###,
         end_time: parse_time(&parsed.end_time)?,
         attendees: parsed.attendees,
         calendar_name: parsed.calendar_name,
-        source_input: Some(req.text),
+        source_input: Some(text.to_string()),
         parse_confidence: Some(parsed.confidence),
     };
 
     let row = insert_calendar_event(&state.db, user_id, &perms, create_req).await?;
-    Ok((axum::http::StatusCode::CREATED, Json(row.into_response())))
+    Ok(row.into_response())
+}
+
+/// List calendar events for a user. Shared by the `/api/v1/calendar/events`
+/// endpoint and the chat tool-calling path.
+pub async fn list_user_events(
+    state: &AppState,
+    user_id: Uuid,
+    limit: Option<i64>,
+) -> Result<Vec<EventResponse>, AppError> {
+    check_calendar_permission(state, user_id).await?;
+    let limit = limit.unwrap_or(50).min(200);
+
+    let rows: Vec<EventRow> = sqlx::query_as(
+        "SELECT id, title, description, location, start_time, end_time, \
+         attendees, status, calendar_name, parse_confidence, source_input, created_at \
+         FROM calendar_events WHERE user_id = $1 \
+         ORDER BY start_time DESC LIMIT $2",
+    )
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(rows.into_iter().map(EventRow::into_response).collect())
+}
+
+// ── Handler: parse ─────────────────────────────────────────────────
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/calendar/parse",
+    request_body = ParseRequest,
+    responses((status = 201, description = "Parsed and created calendar event", body = EventResponse))
+)]
+async fn parse_calendar(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
+    Json(req): Json<ParseRequest>,
+) -> Result<(axum::http::StatusCode, Json<EventResponse>), AppError> {
+    let user_id = auth::require_user(auth).await?;
+    let event = parse_and_create_event(&state, user_id, &req.text).await?;
+    Ok((axum::http::StatusCode::CREATED, Json(event)))
 }
 
 // ── Handler: list ──────────────────────────────────────────────────
@@ -313,37 +345,8 @@ async fn list_events(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<EventResponse>>, AppError> {
     let user_id = auth::require_user(auth).await?;
-    check_calendar_permission(&state, user_id).await?;
-    let limit = params.limit.unwrap_or(50).min(200);
-
-    let rows: Vec<EventRow> = if let Some(st) = &params.status {
-        sqlx::query_as(
-            "SELECT id, title, description, location, start_time, end_time, \
-             attendees, status, calendar_name, parse_confidence, source_input, created_at \
-             FROM calendar_events WHERE user_id = $1 AND status = $2 \
-             ORDER BY start_time DESC LIMIT $3",
-        )
-        .bind(user_id)
-        .bind(st)
-        .bind(limit)
-        .fetch_all(&state.db)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT id, title, description, location, start_time, end_time, \
-             attendees, status, calendar_name, parse_confidence, source_input, created_at \
-             FROM calendar_events WHERE user_id = $1 \
-             ORDER BY start_time DESC LIMIT $2",
-        )
-        .bind(user_id)
-        .bind(limit)
-        .fetch_all(&state.db)
-        .await?
-    };
-
-    Ok(Json(
-        rows.into_iter().map(EventRow::into_response).collect(),
-    ))
+    let events = list_user_events(&state, user_id, params.limit).await?;
+    Ok(Json(events))
 }
 
 // ── Handler: create ────────────────────────────────────────────────

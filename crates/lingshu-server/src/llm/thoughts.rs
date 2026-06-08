@@ -116,10 +116,7 @@ pub async fn generate_and_save_thoughts(
 
     // 2. Build prompt and call LLM
     let prompt = thought_queue_prompt(&recent_context, &active_goals, &pending_tasks, &now);
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: prompt,
-    }];
+    let messages = vec![ChatMessage::user(prompt)];
 
     let response = llm.chat(model, messages, None).await?;
 

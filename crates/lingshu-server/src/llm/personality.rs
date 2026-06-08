@@ -123,10 +123,7 @@ pub async fn evolve_and_save_personality(
 
     // 3. Build prompt and call LLM
     let prompt = build_personality_evolution_prompt(&current, &memories);
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: prompt,
-    }];
+    let messages = vec![ChatMessage::user(prompt)];
     let response = llm.chat(model, messages, None).await?;
 
     // 4. Parse output

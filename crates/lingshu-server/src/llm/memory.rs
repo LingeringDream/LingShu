@@ -301,10 +301,7 @@ pub async fn extract_and_save(
 
     let prompt = build_memory_extraction_prompt(user_message, assistant_response);
 
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content: prompt,
-    }];
+    let messages = vec![ChatMessage::user(prompt)];
 
     let response = match llm.chat(model, messages, None).await {
         Ok(r) => r,

@@ -50,10 +50,12 @@ impl AppState {
             .connect(&config.database.url)
             .await?;
 
-        // Shared HTTP client — used by both LlmClient and QdrantClient
+        // Shared HTTP client — used by both LlmClient and QdrantClient.
+        // 120 s timeout accounts for LLM model loading latency (9.6 GB models
+        // can take 30+ s of cold-load time on first request).
         let http = reqwest::Client::builder()
             .pool_max_idle_per_host(20)
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120))
             .build()?;
 
         // Redis (optional — skip if URL is empty or connection fails)

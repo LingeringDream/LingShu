@@ -12,13 +12,35 @@ pub struct LlmClient {
     api_base_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+impl ChatMessage {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self { role: "user".into(), content: content.into(), tool_calls: None, tool_call_id: None }
+    }
+    pub fn system(content: impl Into<String>) -> Self {
+        Self { role: "system".into(), content: content.into(), tool_calls: None, tool_call_id: None }
+    }
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self { role: "assistant".into(), content: content.into(), tool_calls: None, tool_call_id: None }
+    }
+    pub fn tool(content: impl Into<String>, tool_call_id: impl Into<String>) -> Self {
+        Self { role: "tool".into(), content: content.into(), tool_calls: None, tool_call_id: Some(tool_call_id.into()) }
+    }
+    pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
+        Self { role: "assistant".into(), content: content.into(), tool_calls: Some(tool_calls), tool_call_id: None }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ChatOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -39,6 +61,55 @@ pub struct ChatChunk {
     pub assistant_message_id: Option<uuid::Uuid>,
 }
 
+// ── Tool / Function Calling types ─────────────────────────────────
+
+/// A function tool definition sent to the LLM.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolDefinition {
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: ToolFunctionDef,
+}
+
+impl ToolDefinition {
+    pub fn new(name: &str, description: &str, parameters: serde_json::Value) -> Self {
+        Self {
+            tool_type: "function".into(),
+            function: ToolFunctionDef {
+                name: name.into(),
+                description: description.into(),
+                parameters,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolFunctionDef {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+/// A tool call requested by the LLM.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolCall {
+    pub function: ToolCallFunction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolCallFunction {
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// The result of a non-streaming chat call that may include tool calls.
+#[derive(Debug)]
+pub struct ChatResponse {
+    pub content: String,
+    pub tool_calls: Vec<ToolCall>,
+}
+
 // ── Ollama-specific types ───────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -48,11 +119,21 @@ struct OllamaChatRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<ChatOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ToolDefinition>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OllamaChatResponse {
-    message: Option<ChatMessage>,
+    message: Option<OllamaMsg>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaMsg {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +305,7 @@ impl LlmClient {
             messages,
             stream: false,
             options,
+            tools: None,
         };
         let resp: OllamaChatResponse = self
             .http
@@ -264,6 +346,102 @@ impl LlmClient {
             .to_string())
     }
 
+    // ── Non-streaming chat with tools ─────────────────────────
+
+    /// Send a non-streaming chat request with tool definitions and
+    /// return both the text content and any tool calls the model requested.
+    /// Provider-agnostic: works with Ollama and OpenAI-compatible APIs.
+    pub async fn chat_with_tools(
+        &self,
+        model: &str,
+        messages: Vec<ChatMessage>,
+        options: Option<ChatOptions>,
+        tools: Vec<ToolDefinition>,
+    ) -> anyhow::Result<ChatResponse> {
+        if self.is_openai() {
+            self.chat_with_tools_openai(model, messages, options, tools).await
+        } else {
+            self.chat_with_tools_ollama(model, messages, options, tools).await
+        }
+    }
+
+    async fn chat_with_tools_ollama(
+        &self,
+        model: &str,
+        messages: Vec<ChatMessage>,
+        options: Option<ChatOptions>,
+        tools: Vec<ToolDefinition>,
+    ) -> anyhow::Result<ChatResponse> {
+        let url = format!("{}/api/chat", self.ollama_url);
+        let req = OllamaChatRequest {
+            model: model.to_string(),
+            messages,
+            stream: false,
+            options,
+            tools: Some(tools),
+        };
+        let resp: OllamaChatResponse = self
+            .http
+            .post(&url)
+            .json(&req)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        let msg = resp.message.unwrap_or(OllamaMsg { content: String::new(), tool_calls: None });
+        Ok(ChatResponse {
+            content: msg.content,
+            tool_calls: msg.tool_calls.unwrap_or_default(),
+        })
+    }
+
+    async fn chat_with_tools_openai(
+        &self,
+        model: &str,
+        messages: Vec<ChatMessage>,
+        options: Option<ChatOptions>,
+        tools: Vec<ToolDefinition>,
+    ) -> anyhow::Result<ChatResponse> {
+        let url = self.openai_chat_completions_url();
+        let req = serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "stream": false,
+            "temperature": options.as_ref().and_then(|o| o.temperature),
+            "max_tokens": options.as_ref().and_then(|o| o.num_predict),
+            "tools": tools,
+        });
+        let mut http_req = self.http.post(&url).json(&req);
+        if let Some(ref key) = self.api_key {
+            http_req = http_req.header("Authorization", format!("Bearer {key}"));
+        }
+
+        #[derive(Deserialize)]
+        struct OpenAIToolResponse {
+            choices: Vec<OpenAIToolChoice>,
+        }
+        #[derive(Deserialize)]
+        struct OpenAIToolChoice {
+            message: OpenAIToolMsg,
+        }
+        #[derive(Deserialize)]
+        struct OpenAIToolMsg {
+            #[serde(default)]
+            content: Option<String>,
+            #[serde(default)]
+            tool_calls: Option<Vec<ToolCall>>,
+        }
+
+        let resp: OpenAIToolResponse = http_req.send().await?.error_for_status()?.json().await?;
+        let msg = resp.choices.into_iter().next().map(|c| c.message);
+        Ok(ChatResponse {
+            content: msg.as_ref().and_then(|m| m.content.clone()).unwrap_or_default(),
+            tool_calls: msg.and_then(|m| m.tool_calls).unwrap_or_default(),
+        })
+    }
+
     // ── Streaming chat ──────────────────────────────────────────
 
     /// Returns a stream of `ChatChunk` items. The caller receives
@@ -294,6 +472,7 @@ impl LlmClient {
             messages,
             stream: true,
             options,
+            tools: None,
         };
         let byte_stream = self
             .http
@@ -534,10 +713,7 @@ mod tests {
         let response = client
             .chat(
                 "test-model",
-                vec![ChatMessage {
-                    role: "user".to_string(),
-                    content: "ping".to_string(),
-                }],
+                vec![ChatMessage::user("ping")],
                 None,
             )
             .await
@@ -567,10 +743,7 @@ mod tests {
         let chunks: Vec<ChatChunk> = client
             .chat_stream(
                 "test-model",
-                vec![ChatMessage {
-                    role: "user".to_string(),
-                    content: "ping".to_string(),
-                }],
+                vec![ChatMessage::user("ping")],
                 None,
             )
             .collect::<Vec<_>>()
