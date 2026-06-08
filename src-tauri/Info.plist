@@ -4,6 +4,8 @@
 <dict>
 	<key>NSCalendarsUsageDescription</key>
 	<string>灵枢 needs calendar access to sync events you've confirmed to Apple Calendar.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>灵枢 needs full calendar access to create and manage events you've confirmed in Apple Calendar. Without this, confirmed events stay in the app only.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>灵枢 needs reminders access to create reminder items for your tasks.</string>
 </dict>
