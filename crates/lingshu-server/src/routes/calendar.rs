@@ -33,6 +33,10 @@ pub fn router() -> Router<AppState> {
             "/api/v1/calendar/events/:id/apple-event",
             routing::post(save_apple_event_id),
         )
+        .route(
+            "/api/v1/calendar/events/:id/external",
+            routing::patch(write_external_event_id),
+        )
 }
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -521,6 +525,63 @@ async fn save_apple_event_id(
             )),
         };
     };
+
+    Ok(Json(row.into_response()))
+}
+
+// ── Handler: write external_event_id ──────────────────────────────────
+
+/// Store the EventKit `eventIdentifier` after syncing to the system calendar.
+///
+/// Called by the frontend after a successful EventKit `create_calendar_event`
+/// Tauri command. Writes the opaque eventIdentifier to `external_event_id`
+/// and sets `synced_to_eventkit = true`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct WriteExternalEventRequest {
+    external_event_id: String,
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/calendar/events/{id}/external",
+    request_body = WriteExternalEventRequest,
+    responses(
+        (status = 200, body = EventResponse, description = "external_event_id saved"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Calendar L1 permission not enabled"),
+        (status = 404, description = "Event not found"),
+        (status = 422, description = "Validation error"),
+    )
+)]
+async fn write_external_event_id(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<WriteExternalEventRequest>,
+) -> Result<Json<EventResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    check_calendar_permission(&state, user_id).await?;
+
+    let external_event_id = req.external_event_id.trim();
+    if external_event_id.is_empty() {
+        return Err(AppError::Validation(
+            "external_event_id must not be empty".into(),
+        ));
+    }
+
+    let row = sqlx::query_as::<_, EventRow>(
+        "UPDATE calendar_events \
+         SET external_event_id = $1, synced_to_eventkit = true, updated_at = NOW() \
+         WHERE id = $2 AND user_id = $3 \
+         RETURNING id, title, description, location, start_time, end_time, \
+         attendees, status, calendar_name, parse_confidence, source_input, created_at",
+    )
+    .bind(external_event_id)
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Event not found".into()))?;
 
     Ok(Json(row.into_response()))
 }
