@@ -102,7 +102,7 @@ SERVER_HOST=127.0.0.1
 ### 4. 运行数据库迁移 · Run database migrations
 
 ```bash
-cargo install sqlx-cli --no-default-features --features postgres,rustls
+cargo install sqlx-cli --version '^0.8' --locked --no-default-features --features postgres,rustls
 sqlx migrate run --source crates/lingshu-server/migrations
 ```
 
