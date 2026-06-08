@@ -1280,14 +1280,11 @@ async fn run_tool_loop(
         };
 
         if response.tool_calls.is_empty() {
-            // No tool calls — model produced a text response.
-            // Remove the last assistant message if it was tool-call-only
-            // (the model will re-generate in the streaming call).
-            // Re-add the model's text content as a proper assistant message
-            // so the streaming call continues with full context.
-            if !response.content.is_empty() {
-                messages.push(ChatMessage::assistant(response.content));
-            }
+            // No tool calls — the tool loop is done. Do NOT push the
+            // model's text response into messages; the subsequent streaming
+            // call will generate the final user-visible response with full
+            // context (including tool results). Pushing it here would make
+            // the streaming LLM see a complete exchange and output empty.
             break;
         }
 
