@@ -86,6 +86,21 @@ function CalendarSection() {
     }
   };
 
+  const handleConfirm = async (ev: CalendarEvent) => {
+    try {
+      const resp = await apiFetch(`/api/v1/calendar/events/${ev.id}/confirm`, { method: 'POST' });
+      if (resp.ok) await fetchEvents();
+    } catch { /* silent */ }
+  };
+
+  const handleDeleteEvent = async (ev: CalendarEvent) => {
+    if (!window.confirm(`确定要删除「${ev.title}」吗？`)) return;
+    try {
+      const resp = await apiFetch(`/api/v1/calendar/events/${ev.id}`, { method: 'DELETE' });
+      if (resp.ok) await fetchEvents();
+    } catch { /* silent */ }
+  };
+
   const handleSync = async (ev: CalendarEvent) => {
     setSyncing((s) => new Set(s).add(ev.id));
     try {
@@ -165,13 +180,25 @@ function CalendarSection() {
                     {fmtTime(ev.start_time)} — {fmtTime(ev.end_time)}
                     {ev.location ? ` · ${ev.location}` : ''}
                   </div>
-                  {inTauri && (
+                  <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                    {ev.status === 'pending_confirmation' && (
+                      <button
+                        onClick={() => handleConfirm(ev)}
+                        style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid #4caf50', borderRadius: 3, background: 'transparent', color: '#4caf50' }}
+                      >确认</button>
+                    )}
                     <button
-                      onClick={() => handleSync(ev)}
-                      disabled={syncing.has(ev.id)}
-                      style={{ marginTop: 4, padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid var(--color-accent, #0a73ff)', borderRadius: 3, background: 'transparent', color: 'var(--color-accent, #0a73ff)' }}
-                    >{syncing.has(ev.id) ? '同步中...' : (syncResults[ev.id] || '同步到系统日历')}</button>
-                  )}
+                      onClick={() => handleDeleteEvent(ev)}
+                      style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid #e05555', borderRadius: 3, background: 'transparent', color: '#e05555' }}
+                    >删除</button>
+                    {inTauri && (
+                      <button
+                        onClick={() => handleSync(ev)}
+                        disabled={syncing.has(ev.id)}
+                        style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid var(--color-accent, #0a73ff)', borderRadius: 3, background: 'transparent', color: 'var(--color-accent, #0a73ff)' }}
+                      >{syncing.has(ev.id) ? '同步中...' : (syncResults[ev.id] || '同步到系统日历')}</button>
+                    )}
+                  </div>
                 </div>
               ))
             )}

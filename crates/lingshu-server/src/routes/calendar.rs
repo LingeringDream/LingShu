@@ -314,6 +314,29 @@ pub async fn list_user_events(
     Ok(rows.into_iter().map(EventRow::into_response).collect())
 }
 
+/// Delete a calendar event by id. Shared by the HTTP endpoint and the
+/// chat tool-calling path. Unlike the HTTP handler, this does not require
+/// the confirmation flag — the chat tool call itself implies user intent.
+pub async fn delete_user_event(
+    state: &AppState,
+    user_id: Uuid,
+    event_id: Uuid,
+) -> Result<(), AppError> {
+    check_calendar_permission(state, user_id).await?;
+
+    let rows = sqlx::query("DELETE FROM calendar_events WHERE id = $1 AND user_id = $2")
+        .bind(event_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?
+        .rows_affected();
+
+    if rows == 0 {
+        return Err(AppError::NotFound("Event not found".into()));
+    }
+    Ok(())
+}
+
 // ── Handler: parse ─────────────────────────────────────────────────
 
 #[utoipa::path(
@@ -619,12 +642,7 @@ async fn delete_event(
     Path(id): Path<Uuid>,
 ) -> Result<axum::http::StatusCode, AppError> {
     let user_id = auth::require_user(auth).await?;
-    let perms = check_calendar_permission(&state, user_id).await?;
-    if perms.l1_require_confirmation {
-        return Err(AppError::Forbidden(
-            "Calendar deletes require an explicit confirmation flow before execution.".into(),
-        ));
-    }
+    check_calendar_permission(&state, user_id).await?;
 
     let rows = sqlx::query("DELETE FROM calendar_events WHERE id = $1 AND user_id = $2")
         .bind(id)

@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { postSignal } from '../../lib/api';
 
 export interface Message {
@@ -14,6 +16,104 @@ export interface Message {
 interface MessageBubbleProps {
   message: Message;
 }
+
+// ── Shared Markdown component styles ──────────────────────────────
+
+const markdownStyles: React.CSSProperties = {
+  fontSize: '14px',
+  lineHeight: '1.65',
+  wordBreak: 'break-word',
+  overflowWrap: 'break-word',
+};
+
+// ── Components passed to ReactMarkdown for styling ─────────────────
+
+const mdComponents: Components = {
+  code(props) {
+    const { className, children } = props;
+    const inline = !className;
+    if (inline) {
+      return (
+        <code style={{
+          background: 'var(--bg-secondary, rgba(0,0,0,0.06))',
+          borderRadius: 3,
+          padding: '1px 5px',
+          fontSize: '0.9em',
+          fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+        }}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <pre style={{
+        background: 'var(--bg-secondary, rgba(0,0,0,0.05))',
+        borderRadius: 8,
+        padding: '12px 14px',
+        overflowX: 'auto',
+        fontSize: '13px',
+        fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+        lineHeight: 1.5,
+        margin: '8px 0',
+      }}>
+        <code className={className}>{children}</code>
+      </pre>
+    );
+  },
+
+  p({ children }) { return <p style={{ margin: '0 0 6px' }}>{children}</p>; },
+  ul({ children }) { return <ul style={{ margin: '4px 0', paddingLeft: 20 }}>{children}</ul>; },
+  ol({ children }) { return <ol style={{ margin: '4px 0', paddingLeft: 20 }}>{children}</ol>; },
+  li({ children }) { return <li style={{ margin: '2px 0' }}>{children}</li>; },
+  blockquote({ children }) {
+    return (
+      <blockquote style={{
+        borderLeft: '3px solid var(--accent, #0a73ff)',
+        margin: '6px 0',
+        paddingLeft: 12,
+        color: 'var(--text-secondary, #666)',
+      }}>
+        {children}
+      </blockquote>
+    );
+  },
+  table({ children }) {
+    return (
+      <div style={{ overflowX: 'auto', margin: '8px 0' }}>
+        <table style={{ borderCollapse: 'collapse', fontSize: '13px', width: '100%' }}>{children}</table>
+      </div>
+    );
+  },
+  th({ children }) {
+    return (
+      <th style={{
+        border: '1px solid var(--border, #ddd)', padding: '6px 10px',
+        background: 'var(--bg-secondary, rgba(0,0,0,0.04))', textAlign: 'left', fontWeight: 600,
+      }}>{children}</th>
+    );
+  },
+  td({ children }) {
+    return <td style={{ border: '1px solid var(--border, #ddd)', padding: '5px 10px' }}>{children}</td>;
+  },
+  hr() {
+    return <hr style={{ border: 'none', borderTop: '1px solid var(--border, #ddd)', margin: '10px 0' }} />;
+  },
+  a({ children, href }) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer"
+        style={{ color: 'var(--accent, #0a73ff)', textDecoration: 'underline' }}>
+        {children}
+      </a>
+    );
+  },
+  h1({ children }) { return <h1 style={{ fontSize: '1.3em', fontWeight: 700, margin: '10px 0 4px' }}>{children}</h1>; },
+  h2({ children }) { return <h2 style={{ fontSize: '1.15em', fontWeight: 600, margin: '8px 0 4px' }}>{children}</h2>; },
+  h3({ children }) { return <h3 style={{ fontSize: '1.05em', fontWeight: 600, margin: '6px 0 3px' }}>{children}</h3>; },
+  strong({ children }) { return <strong style={{ fontWeight: 600 }}>{children}</strong>; },
+  em({ children }) { return <em>{children}</em>; },
+};
+
+// ── MessageBubble ──────────────────────────────────────────────────
 
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === 'user';
@@ -43,17 +143,24 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       gap: '6px',
     }}>
       <div style={{
-        maxWidth: '70%',
+        maxWidth: '78%',
         padding: '12px 16px',
         borderRadius: '12px',
         background: isUser ? 'var(--accent)' : 'var(--bg-tertiary)',
         color: isUser ? '#fff' : 'var(--text-primary)',
         fontSize: '14px',
         lineHeight: '1.5',
-        whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
       }}>
-        {message.content}
+        {isUser ? (
+          <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
+        ) : (
+          <div style={markdownStyles}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        )}
       </div>
 
       {/* Feedback row — only for assistant messages with a dbId */}
