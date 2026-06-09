@@ -24,19 +24,44 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into(), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "user".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into(), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: content.into(), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn tool(content: impl Into<String>, tool_call_id: impl Into<String>) -> Self {
-        Self { role: "tool".into(), content: content.into(), tool_calls: None, tool_call_id: Some(tool_call_id.into()) }
+        Self {
+            role: "tool".into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+        }
     }
     pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
-        Self { role: "assistant".into(), content: content.into(), tool_calls: Some(tool_calls), tool_call_id: None }
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        }
     }
 }
 
@@ -367,7 +392,10 @@ impl LlmClient {
         if let Some(ref key) = self.api_key {
             http_req = http_req.header("Authorization", format!("Bearer {key}"));
         }
-        let resp: OpenAIChatResponse = require_success(http_req.send().await?).await?.json().await?;
+        let resp: OpenAIChatResponse = require_success(http_req.send().await?)
+            .await?
+            .json()
+            .await?;
         Ok(resp
             .choices
             .first()
@@ -389,9 +417,11 @@ impl LlmClient {
         tools: Vec<ToolDefinition>,
     ) -> anyhow::Result<ChatResponse> {
         if self.is_openai() {
-            self.chat_with_tools_openai(model, messages, options, tools).await
+            self.chat_with_tools_openai(model, messages, options, tools)
+                .await
         } else {
-            self.chat_with_tools_ollama(model, messages, options, tools).await
+            self.chat_with_tools_ollama(model, messages, options, tools)
+                .await
         }
     }
 
@@ -420,7 +450,10 @@ impl LlmClient {
             .json()
             .await?;
 
-        let msg = resp.message.unwrap_or(OllamaMsg { content: String::new(), tool_calls: None });
+        let msg = resp.message.unwrap_or(OllamaMsg {
+            content: String::new(),
+            tool_calls: None,
+        });
         Ok(ChatResponse {
             content: msg.content,
             tool_calls: msg.tool_calls.unwrap_or_default(),
@@ -464,11 +497,16 @@ impl LlmClient {
             tool_calls: Option<Vec<ToolCall>>,
         }
 
-        let resp: OpenAIToolResponse =
-            require_success(http_req.send().await?).await?.json().await?;
+        let resp: OpenAIToolResponse = require_success(http_req.send().await?)
+            .await?
+            .json()
+            .await?;
         let msg = resp.choices.into_iter().next().map(|c| c.message);
         Ok(ChatResponse {
-            content: msg.as_ref().and_then(|m| m.content.clone()).unwrap_or_default(),
+            content: msg
+                .as_ref()
+                .and_then(|m| m.content.clone())
+                .unwrap_or_default(),
             tool_calls: msg.and_then(|m| m.tool_calls).unwrap_or_default(),
         })
     }
@@ -768,11 +806,7 @@ mod tests {
         let client = openai_client(format!("{}/v1", server.uri()));
 
         let response = client
-            .chat(
-                "test-model",
-                vec![ChatMessage::user("ping")],
-                None,
-            )
+            .chat("test-model", vec![ChatMessage::user("ping")], None)
             .await
             .expect("chat request should use the configured /v1 endpoint once");
 
@@ -798,11 +832,7 @@ mod tests {
         let client = openai_client(format!("{}/v1", server.uri()));
 
         let chunks: Vec<ChatChunk> = client
-            .chat_stream(
-                "test-model",
-                vec![ChatMessage::user("ping")],
-                None,
-            )
+            .chat_stream("test-model", vec![ChatMessage::user("ping")], None)
             .collect::<Vec<_>>()
             .await
             .into_iter()
@@ -841,7 +871,10 @@ mod tests {
             .find_map(|r| r.err())
             .expect("a 400 response must yield an error");
         let msg = err.to_string();
-        assert!(msg.contains("400"), "error should include the status: {msg}");
+        assert!(
+            msg.contains("400"),
+            "error should include the status: {msg}"
+        );
         assert!(
             msg.contains("valid range is [1, 8192]"),
             "error should include the provider body: {msg}"

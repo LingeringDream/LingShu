@@ -159,7 +159,9 @@ async fn update_llm_settings(
     if let Some(provider) = patch.provider {
         let p = provider.trim().to_lowercase();
         if p != "ollama" && p != "openai" {
-            return Err(AppError::Validation("provider must be 'ollama' or 'openai'".into()));
+            return Err(AppError::Validation(
+                "provider must be 'ollama' or 'openai'".into(),
+            ));
         }
         settings.provider = p;
     }
@@ -237,15 +239,14 @@ pub async fn role_prompt_for_user(state: &AppState, user_id: Uuid) -> String {
         }
     }
     // 2. Database
-    let prompt: String = sqlx::query_scalar(
-        "SELECT role_prompt FROM users WHERE id = $1 AND deleted_at IS NULL",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_default();
+    let prompt: String =
+        sqlx::query_scalar("SELECT role_prompt FROM users WHERE id = $1 AND deleted_at IS NULL")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
     // Populate cache
     {
         let mut map = state.role_prompts.write().await;

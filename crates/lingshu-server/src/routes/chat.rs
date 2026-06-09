@@ -61,8 +61,16 @@ pub async fn chat(
     // Use per-user provider config if set, otherwise fall back to server defaults
     let llm = if settings.provider == "openai" && !settings.api_base_url.is_empty() {
         state.llm.with_overrides(
-            if settings.api_key.is_empty() { None } else { Some(settings.api_key.clone()) },
-            if settings.api_base_url.is_empty() { None } else { Some(settings.api_base_url.clone()) },
+            if settings.api_key.is_empty() {
+                None
+            } else {
+                Some(settings.api_key.clone())
+            },
+            if settings.api_base_url.is_empty() {
+                None
+            } else {
+                Some(settings.api_base_url.clone())
+            },
         )
     } else {
         state.llm.clone()
@@ -99,7 +107,12 @@ pub async fn chat(
     if let Some(sid) = session_id {
         let history = load_chat_history(&state.db, sid, user_id, settings.context_messages).await?;
         for (role, content) in history {
-            messages.push(ChatMessage { role, content, tool_calls: None, tool_call_id: None });
+            messages.push(ChatMessage {
+                role,
+                content,
+                tool_calls: None,
+                tool_call_id: None,
+            });
         }
     }
 
@@ -149,9 +162,8 @@ pub async fn chat(
     // tools and fabricates responses. To be reliable, we detect calendar
     // intents with keyword matching, execute the tool ourselves, and let
     // the LLM only generate the natural-language response around the result.
-    let calendar_hint = preflight_calendar_intent(
-        &state, user_id, &user_message, &settings.model,
-    ).await;
+    let calendar_hint =
+        preflight_calendar_intent(&state, user_id, &user_message, &settings.model).await;
     if let Some(ref hint_msg) = calendar_hint {
         messages.push(ChatMessage::user(hint_msg.clone()));
     }
@@ -172,21 +184,16 @@ pub async fn chat(
             // Stream the pre-generated text character-by-character for visual effect
             let chars: Vec<char> = text.chars().collect();
             let total = chars.len();
-            futures::stream::iter(
-                chars
-                    .into_iter()
-                    .enumerate()
-                    .map(move |(i, c)| {
-                        Ok(ChatChunk {
-                            content: c.to_string(),
-                            done: i + 1 >= total,
-                            assistant_message_id: None,
-                        })
-                    })
-            ).boxed()
+            futures::stream::iter(chars.into_iter().enumerate().map(move |(i, c)| {
+                Ok(ChatChunk {
+                    content: c.to_string(),
+                    done: i + 1 >= total,
+                    assistant_message_id: None,
+                })
+            }))
+            .boxed()
         } else {
-            llm
-                .chat_stream(&model, messages, Some(options))
+            llm.chat_stream(&model, messages, Some(options))
         };
 
     // ── Build the SSE stream with optional assistant collection ──────
@@ -1212,12 +1219,45 @@ async fn preflight_calendar_intent(
     _model: &str,
 ) -> Option<String> {
     // Only act on clear calendar keywords — skip plain chat
-    let is_create = contains_any(message, &["创建", "安排", "添加", "加个", "新建", "帮我记", "提醒我", "排一下", "预定", "预订"]);
+    let is_create = contains_any(
+        message,
+        &[
+            "创建",
+            "安排",
+            "添加",
+            "加个",
+            "新建",
+            "帮我记",
+            "提醒我",
+            "排一下",
+            "预定",
+            "预订",
+        ],
+    );
     let is_delete = contains_any(message, &["删除", "取消", "去掉", "删掉", "移除"]);
-    let is_list   = contains_any(message, &["查看", "列出", "有什么", "有哪些", "查一下", "看一下", "日程", "安排", "日历"]);
+    let is_list = contains_any(
+        message,
+        &[
+            "查看",
+            "列出",
+            "有什么",
+            "有哪些",
+            "查一下",
+            "看一下",
+            "日程",
+            "安排",
+            "日历",
+        ],
+    );
 
     // Must also have time-related or calendar context words
-    let has_calendar_context = contains_any(message, &["日程", "日历", "会议", "开会", "预约", "提醒", "安排", "点", "号", "日", "周", "月", "今天", "明天", "后天", "下周", "上午", "下午", "晚上", "体检", "见", "约"]);
+    let has_calendar_context = contains_any(
+        message,
+        &[
+            "日程", "日历", "会议", "开会", "预约", "提醒", "安排", "点", "号", "日", "周", "月",
+            "今天", "明天", "后天", "下周", "上午", "下午", "晚上", "体检", "见", "约",
+        ],
+    );
 
     if !has_calendar_context {
         return None;
@@ -1226,7 +1266,8 @@ async fn preflight_calendar_intent(
     // ── DELETE ──────────────────────────────────────────────────
     if is_delete {
         // First list events so we can find the target
-        let events = match crate::routes::calendar::list_user_events(state, user_id, Some(50)).await {
+        let events = match crate::routes::calendar::list_user_events(state, user_id, Some(50)).await
+        {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!(%user_id, %e, "Preflight list for delete failed");
@@ -1235,14 +1276,18 @@ async fn preflight_calendar_intent(
         };
 
         if events.is_empty() {
-            return Some("[系统] 用户想删除日程，但当前没有任何日历事件。请告诉用户日历是空的。".into());
+            return Some(
+                "[系统] 用户想删除日程，但当前没有任何日历事件。请告诉用户日历是空的。".into(),
+            );
         }
 
         // Try to match the user's description to an event
         // The LLM will use these results — we just provide the data
-        let list_text: String = events.iter().map(|e| {
-            format!("[{}] {}（{}）", e.id, e.title, e.start_time)
-        }).collect::<Vec<_>>().join("\n");
+        let list_text: String = events
+            .iter()
+            .map(|e| format!("[{}] {}（{}）", e.id, e.title, e.start_time))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         return Some(format!(
             "[系统] 用户想删除日程。以下是当前的日历事件列表，请你从中找出用户想删除的那一个，然后调用 delete_calendar_event 工具删除它。\n\n{list_text}\n\n请在下一轮调用 delete_calendar_event 工具。"
@@ -1251,7 +1296,8 @@ async fn preflight_calendar_intent(
 
     // ── LIST ────────────────────────────────────────────────────
     if is_list {
-        let events = match crate::routes::calendar::list_user_events(state, user_id, Some(50)).await {
+        let events = match crate::routes::calendar::list_user_events(state, user_id, Some(50)).await
+        {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!(%user_id, %e, "Preflight list failed");
@@ -1260,12 +1306,21 @@ async fn preflight_calendar_intent(
         };
 
         if events.is_empty() {
-            return Some("[系统] 用户查询了日程，但当前没有任何日历事件。请友好地告知用户。".into());
+            return Some(
+                "[系统] 用户查询了日程，但当前没有任何日历事件。请友好地告知用户。".into(),
+            );
         }
 
-        let list_text: String = events.iter().map(|e| {
-            format!("[{}] {}：{} 至 {}（{}）", e.id, e.title, e.start_time, e.end_time, e.status)
-        }).collect::<Vec<_>>().join("\n");
+        let list_text: String = events
+            .iter()
+            .map(|e| {
+                format!(
+                    "[{}] {}：{} 至 {}（{}）",
+                    e.id, e.title, e.start_time, e.end_time, e.status
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
         return Some(format!(
             "[系统] 以下是你为用户查询到的日历事件（共 {} 条）。请用自然的语言整理给用户，不要复述 ID。\n\n{list_text}",
@@ -1370,8 +1425,11 @@ async fn execute_tool_call(
             match crate::routes::calendar::parse_and_create_event(state, user_id, text).await {
                 Ok(event) => Ok(format!(
                     "日程已创建：\n- 标题：{}\n- 时间：{} 至 {}\n- 状态：{}\n- 日历：{}",
-                    event.title, event.start_time, event.end_time,
-                    event.status, event.calendar_name
+                    event.title,
+                    event.start_time,
+                    event.end_time,
+                    event.status,
+                    event.calendar_name
                 )),
                 Err(e) => {
                     let msg = e.to_string();
@@ -1395,7 +1453,11 @@ async fn execute_tool_call(
                                 )
                             })
                             .collect();
-                        Ok(format!("用户日历事件（共 {} 条）：\n{}", events.len(), lines.join("\n")))
+                        Ok(format!(
+                            "用户日历事件（共 {} 条）：\n{}",
+                            events.len(),
+                            lines.join("\n")
+                        ))
                     }
                 }
                 Err(e) => {
@@ -1462,7 +1524,12 @@ async fn run_tool_loop(
 
         tracing::debug!(%user_id, iterations, msg_count = messages.len(), "Calling chat_with_tools");
         let response = match llm
-            .chat_with_tools(model, messages.clone(), Some(options.clone()), tools.to_vec())
+            .chat_with_tools(
+                model,
+                messages.clone(),
+                Some(options.clone()),
+                tools.to_vec(),
+            )
             .await
         {
             Ok(r) => {
@@ -1511,7 +1578,10 @@ async fn run_tool_loop(
 
         // Echo the assistant message (tool calls now carry id + type), then the
         // matching tool results referencing the same ids.
-        messages.push(ChatMessage::assistant_with_tools(response.content, tool_calls));
+        messages.push(ChatMessage::assistant_with_tools(
+            response.content,
+            tool_calls,
+        ));
         for (id, result) in tool_results {
             messages.push(ChatMessage::tool(result, id));
         }
