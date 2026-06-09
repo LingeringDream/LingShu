@@ -222,6 +222,17 @@ pub async fn parse_and_create_event(
         return Err(AppError::Internal(anyhow::anyhow!("Model not configured.")));
     }
 
+    // Use per-user provider overrides so calendar parsing uses the same
+    // LLM backend as chat (e.g. DeepSeek) instead of falling back to Ollama.
+    let llm = if settings.provider == "openai" && !settings.api_base_url.is_empty() {
+        state.llm.with_overrides(
+            if settings.api_key.is_empty() { None } else { Some(settings.api_key.clone()) },
+            if settings.api_base_url.is_empty() { None } else { Some(settings.api_base_url.clone()) },
+        )
+    } else {
+        state.llm.clone()
+    };
+
     let now = Utc::now().to_rfc3339();
     let prompt = format!(
         r###"你是 灵枢（LingShu）的日历解析引擎。请从用户的自然语言输入中提取一个日程事件。
@@ -262,11 +273,27 @@ JSON："###
 
     let messages = vec![ChatMessage::user(prompt)];
 
-    let response = state
-        .llm
-        .chat(&model, messages, None)
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Calendar LLM call failed (model={model}): {e}")))?;
+    let mut response = String::new();
+    let mut last_err = String::new();
+    for attempt in 1..=3 {
+        match llm.chat(&model, messages.clone(), None).await {
+            Ok(r) => {
+                response = r;
+                last_err.clear();
+                break;
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                tracing::warn!(%model, attempt, %last_err, "calendar llm call failed, retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(500 * attempt)).await;
+            }
+        }
+    }
+    if response.is_empty() && !last_err.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Calendar LLM call failed after 3 attempts (model={model}): {last_err}"
+        )));
+    }
 
     let slice = extract_json_slice(&response);
     let parsed: ParsedEvent = serde_json::from_str(slice)
