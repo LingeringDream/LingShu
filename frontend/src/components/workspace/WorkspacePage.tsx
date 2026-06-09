@@ -399,8 +399,26 @@ function ProjectsSection() {
   const [editName, setEditName] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [collapsed, setCollapsed] = useState(false);
+  const [confirmingDeleteProject, setConfirmingDeleteProject] = useState<string | null>(null);
 
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
+
+  // Cancel project delete confirmation on Escape / click outside
+  useEffect(() => {
+    if (!confirmingDeleteProject) return;
+    const cancel = () => setConfirmingDeleteProject(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cancel(); };
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-delete-project-btn]')) cancel();
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onClick);
+    };
+  }, [confirmingDeleteProject]);
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -414,9 +432,13 @@ function ProjectsSection() {
     setEditingId(null);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('确定删除此项目及其中所有任务？')) return;
-    await deleteProject(id);
+  const handleDeleteClick = (id: string) => {
+    if (confirmingDeleteProject !== id) {
+      setConfirmingDeleteProject(id);
+      return;
+    }
+    setConfirmingDeleteProject(null);
+    deleteProject(id);
   };
 
   const startEdit = (p: Project) => {
@@ -472,7 +494,17 @@ function ProjectsSection() {
                       </div>
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button onClick={() => startEdit(p)} style={{ padding: '2px 6px', fontSize: 11, border: '1px solid #ccc', borderRadius: 3, background: 'transparent', cursor: 'pointer' }}>编辑</button>
-                        <button onClick={() => handleDelete(p.id)} style={{ padding: '2px 6px', fontSize: 11, border: '1px solid #e05555', borderRadius: 3, background: 'transparent', color: '#e05555', cursor: 'pointer' }}>删除</button>
+                        <button
+                          data-delete-project-btn
+                          onClick={() => handleDeleteClick(p.id)}
+                          style={{
+                            padding: '2px 6px', fontSize: 11, cursor: 'pointer',
+                            border: `1px solid ${confirmingDeleteProject === p.id ? '#fff' : '#e05555'}`,
+                            borderRadius: 3,
+                            background: confirmingDeleteProject === p.id ? '#e05555' : 'transparent',
+                            color: confirmingDeleteProject === p.id ? '#fff' : '#e05555',
+                          }}
+                        >{confirmingDeleteProject === p.id ? '确认删除？' : '删除'}</button>
                       </div>
                     </div>
                   )}
