@@ -48,17 +48,27 @@ jobs:
         run: npm run tauri build
         working-directory: frontend
 
-      # ── Ad-hoc code sign the .dmg (avoids Gatekeeper "damaged" error) ──
-      - name: Codesign .dmg (ad-hoc)
+      # ── Ad-hoc sign (reduces some Gatekeeper paths) ────────────
+      - name: Codesign app
         run: |
-          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
-          codesign --force --sign - "$DMG"
+          codesign --force --deep --sign - \
+            "src-tauri/target/release/bundle/macos/灵枢 LingShu.app"
 
       # ── Create GitHub Release ─────────────────────────────────
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           name: "灵枢 LingShu ${{ github.ref_name }}"
+          body: |
+            macOS desktop app (self-contained).
+
+            **Install:**
+            1. Open DMG → drag to Applications
+            2. First launch: right-click → Open, or run:
+               `xattr -cr /Applications/灵枢\ LingShu.app`
+            3. Requires Docker Desktop + Ollama running locally
+
+            **Requires:** macOS 14+ (Apple Silicon)
           files: |
             src-tauri/target/release/bundle/dmg/*.dmg
           generate_release_notes: true
