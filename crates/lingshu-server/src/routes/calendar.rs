@@ -266,7 +266,7 @@ JSON："###
         .llm
         .chat(&model, messages, None)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Calendar parse failed: {e}")))?;
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Calendar LLM call failed (model={model}): {e}")))?;
 
     let slice = extract_json_slice(&response);
     let parsed: ParsedEvent = serde_json::from_str(slice)
