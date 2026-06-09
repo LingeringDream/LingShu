@@ -145,6 +145,8 @@ export const useChatStore = create<ChatState>()(
                         },
                         () => {},
                       );
+                      // Calendar was modified — notify components to refresh
+                      window.dispatchEvent(new CustomEvent('calendar-changed'));
                     }
                     if (data.done) {
                       // Streaming complete — capture the backend message id for feedback

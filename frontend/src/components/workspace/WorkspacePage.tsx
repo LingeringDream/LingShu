@@ -64,6 +64,13 @@ function CalendarSection() {
 
   useEffect(() => { fetchEvents(); setInTauri(isTauri()); }, [fetchEvents]);
 
+  // Refresh calendar list when chat modifies events (e.g. delete via tool call)
+  useEffect(() => {
+    const handler = () => fetchEvents();
+    window.addEventListener('calendar-changed', handler);
+    return () => window.removeEventListener('calendar-changed', handler);
+  }, [fetchEvents]);
+
   // Cancel delete confirmation when clicking elsewhere or pressing Escape
   useEffect(() => {
     if (!confirmingDelete) return;
