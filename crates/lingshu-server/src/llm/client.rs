@@ -218,6 +218,21 @@ impl LlmClient {
         self.api_base_url.is_some()
     }
 
+    /// Create a temporary [`LlmClient`] that overrides API credentials for a
+    /// single user/request, reusing the shared HTTP connection pool.
+    pub fn with_overrides(
+        &self,
+        api_key: Option<String>,
+        api_base_url: Option<String>,
+    ) -> LlmClient {
+        LlmClient {
+            http: self.http.clone(),
+            ollama_url: self.ollama_url.clone(),
+            api_key: api_key.or(self.api_key.clone()),
+            api_base_url: api_base_url.or(self.api_base_url.clone()),
+        }
+    }
+
     // ── Embeddings ─────────────────────────────────────────────
 
     /// Generate an embedding vector for `text`.
@@ -337,7 +352,7 @@ impl LlmClient {
         if let Some(ref key) = self.api_key {
             http_req = http_req.header("Authorization", format!("Bearer {key}"));
         }
-        let resp: OpenAIChatResponse = http_req.send().await?.error_for_status()?.json().await?;
+        let resp: OpenAIChatResponse = require_success(http_req.send().await?).await?.json().await?;
         Ok(resp
             .choices
             .first()
@@ -434,7 +449,8 @@ impl LlmClient {
             tool_calls: Option<Vec<ToolCall>>,
         }
 
-        let resp: OpenAIToolResponse = http_req.send().await?.error_for_status()?.json().await?;
+        let resp: OpenAIToolResponse =
+            require_success(http_req.send().await?).await?.json().await?;
         let msg = resp.choices.into_iter().next().map(|c| c.message);
         Ok(ChatResponse {
             content: msg.as_ref().and_then(|m| m.content.clone()).unwrap_or_default(),
@@ -482,6 +498,7 @@ impl LlmClient {
             .into_stream()
             .map_ok(|resp| resp.bytes_stream())
             .try_flatten()
+            .map_err(anyhow::Error::from)
             .boxed();
         parse_byte_stream(byte_stream, parse_ollama_line)
     }
@@ -504,13 +521,15 @@ impl LlmClient {
         if let Some(ref key) = self.api_key {
             http_req = http_req.header("Authorization", format!("Bearer {key}"));
         }
-        let byte_stream = http_req
-            .send()
-            .into_stream()
-            .map(|result| result.and_then(|resp| resp.error_for_status()))
-            .map_ok(|resp| resp.bytes_stream())
-            .try_flatten()
-            .boxed();
+        // Send and check the status BEFORE streaming bytes, so a 4xx body (the
+        // real reason — unknown model, max_tokens out of range, bad key, …) is
+        // surfaced instead of a bare "400 Bad Request".
+        let byte_stream = futures::stream::once(async move {
+            let resp = require_success(http_req.send().await?).await?;
+            Ok::<_, anyhow::Error>(resp.bytes_stream().map_err(anyhow::Error::from))
+        })
+        .try_flatten()
+        .boxed();
         parse_byte_stream(byte_stream, parse_openai_line)
     }
 
@@ -525,6 +544,29 @@ impl LlmClient {
     }
 }
 
+// ── Error helpers ───────────────────────────────────────────────────
+
+/// Turn a non-2xx response into an error that includes the provider's body.
+///
+/// OpenAI-compatible APIs (including DeepSeek) put the real reason for a 4xx —
+/// unknown model, `max_tokens` out of the allowed range, malformed messages,
+/// bad API key — in the JSON body. `reqwest::Response::error_for_status`
+/// discards that body and leaves only "400 Bad Request", which is undebuggable.
+/// This reads and surfaces it (truncated to keep logs/errors readable).
+async fn require_success(resp: reqwest::Response) -> anyhow::Result<reqwest::Response> {
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(resp);
+    }
+    let body = resp.text().await.unwrap_or_default();
+    let snippet: String = body.trim().chars().take(600).collect();
+    if snippet.is_empty() {
+        Err(anyhow::anyhow!("LLM API error: {status}"))
+    } else {
+        Err(anyhow::anyhow!("LLM API error {status}: {snippet}"))
+    }
+}
+
 // ── Stream parsing helpers ──────────────────────────────────────────
 
 type ParseFn = fn(&str) -> Option<ChatChunk>;
@@ -533,7 +575,7 @@ type ParseFn = fn(&str) -> Option<ChatChunk>;
 /// line-based parser. Both Ollama NDJSON and OpenAI SSE use newline-
 /// delimited frames, so the buffering logic is shared.
 fn parse_byte_stream(
-    byte_stream: futures::stream::BoxStream<'static, Result<bytes::Bytes, reqwest::Error>>,
+    byte_stream: futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>,
     parse_line: ParseFn,
 ) -> futures::stream::BoxStream<'static, Result<ChatChunk, anyhow::Error>> {
     let state = (byte_stream, bytes::BytesMut::new(), false);
@@ -757,6 +799,62 @@ mod tests {
             Some("pong")
         );
         assert!(chunks.last().is_some_and(|chunk| chunk.done));
+    }
+
+    /// A streaming 4xx must surface the provider's response body (the real
+    /// reason), not a bare status. Regression for DeepSeek "400 Bad Request"
+    /// where `error_for_status` hid the explanation.
+    #[tokio::test]
+    async fn openai_stream_surfaces_error_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {"message": "Invalid max_tokens value, the valid range is [1, 8192]"}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = openai_client(server.uri());
+        let results = client
+            .chat_stream("deepseek-chat", vec![ChatMessage::user("ping")], None)
+            .collect::<Vec<_>>()
+            .await;
+
+        let err = results
+            .into_iter()
+            .find_map(|r| r.err())
+            .expect("a 400 response must yield an error");
+        let msg = err.to_string();
+        assert!(msg.contains("400"), "error should include the status: {msg}");
+        assert!(
+            msg.contains("valid range is [1, 8192]"),
+            "error should include the provider body: {msg}"
+        );
+    }
+
+    /// Same guarantee for the non-streaming path.
+    #[tokio::test]
+    async fn openai_chat_surfaces_error_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {"message": "Model Not Exist"}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = openai_client(server.uri());
+        let err = client
+            .chat("nope-model", vec![ChatMessage::user("ping")], None)
+            .await
+            .expect_err("a 400 must be an error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("400") && msg.contains("Model Not Exist"),
+            "error should include status and provider body: {msg}"
+        );
     }
 
     // ── Embed tests ──────────────────────────────────────────────
