@@ -237,3 +237,32 @@ impl DepRow {
         }
     }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_dependency_type_is_finish_to_start() {
+        assert_eq!(default_dep_type(), "finish_to_start");
+    }
+
+    #[test]
+    fn add_dependency_request_defaults() {
+        let did = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let json = serde_json::json!({"depends_on_id": did.to_string()});
+        let req: AddDependencyRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.depends_on_id, did);
+        assert_eq!(req.dependency_type, "finish_to_start");
+    }
+
+    #[test]
+    fn add_dependency_request_custom_type() {
+        let did = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let json = serde_json::json!({"depends_on_id": did.to_string(), "dependency_type": "start_to_start"});
+        let req: AddDependencyRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.dependency_type, "start_to_start");
+    }
+}
