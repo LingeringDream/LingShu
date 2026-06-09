@@ -8,7 +8,7 @@ describe('memoryStore', () => {
       loading: false,
       error: null,
       searchQuery: '',
-      typeFilter: null,
+      typeFilter: '',
     });
   });
 
@@ -17,7 +17,7 @@ describe('memoryStore', () => {
     expect(state.memories).toEqual([]);
     expect(state.loading).toBe(false);
     expect(state.searchQuery).toBe('');
-    expect(state.typeFilter).toBeNull();
+    expect(state.typeFilter).toBe('');
   });
 
   it('setSearchQuery updates search query', () => {
@@ -29,7 +29,7 @@ describe('memoryStore', () => {
     useMemoryStore.getState().setTypeFilter('preference');
     expect(useMemoryStore.getState().typeFilter).toBe('preference');
 
-    useMemoryStore.getState().setTypeFilter(null);
-    expect(useMemoryStore.getState().typeFilter).toBeNull();
+    useMemoryStore.getState().setTypeFilter('');
+    expect(useMemoryStore.getState().typeFilter).toBe('');
   });
 });
