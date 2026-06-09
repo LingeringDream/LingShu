@@ -72,6 +72,8 @@ pub struct EventResponse {
     pub parse_confidence: Option<f32>,
     pub source_input: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub apple_event_id: Option<String>,
+    pub external_event_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -161,7 +163,8 @@ async fn insert_calendar_event(
           attendees, calendar_name, parse_confidence, source_input, status) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at",
+         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         apple_event_id, external_event_id",
     )
     .bind(user_id)
     .bind(&req.title)
@@ -226,8 +229,16 @@ pub async fn parse_and_create_event(
     // LLM backend as chat (e.g. DeepSeek) instead of falling back to Ollama.
     let llm = if settings.provider == "openai" && !settings.api_base_url.is_empty() {
         state.llm.with_overrides(
-            if settings.api_key.is_empty() { None } else { Some(settings.api_key.clone()) },
-            if settings.api_base_url.is_empty() { None } else { Some(settings.api_base_url.clone()) },
+            if settings.api_key.is_empty() {
+                None
+            } else {
+                Some(settings.api_key.clone())
+            },
+            if settings.api_base_url.is_empty() {
+                None
+            } else {
+                Some(settings.api_base_url.clone())
+            },
         )
     } else {
         state.llm.clone()
@@ -327,7 +338,8 @@ pub async fn list_user_events(
 
     let rows: Vec<EventRow> = sqlx::query_as(
         "SELECT id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at \
+         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         apple_event_id, external_event_id \
          FROM calendar_events WHERE user_id = $1 \
          ORDER BY start_time DESC LIMIT $2",
     )
@@ -446,7 +458,8 @@ async fn update_event(
          updated_at=NOW() \
          WHERE id=$8 AND user_id=$9 \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at",
+         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         apple_event_id, external_event_id",
     )
     .bind(&req.title)
     .bind(&req.description)
@@ -495,7 +508,8 @@ async fn confirm_event(
         "UPDATE calendar_events SET status = 'confirmed', updated_at = NOW() \
          WHERE id = $1 AND user_id = $2 AND status = 'pending_confirmation' \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at",
+         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         apple_event_id, external_event_id",
     )
     .bind(id)
     .bind(user_id)
@@ -553,7 +567,8 @@ async fn save_apple_event_id(
         "UPDATE calendar_events SET apple_event_id = $1, updated_at = NOW() \
          WHERE id = $2 AND user_id = $3 AND status = 'confirmed' \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at",
+         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         apple_event_id, external_event_id",
     )
     .bind(apple_event_id)
     .bind(id)
@@ -626,7 +641,8 @@ async fn write_external_event_id(
          SET external_event_id = $1, synced_to_eventkit = true, updated_at = NOW() \
          WHERE id = $2 AND user_id = $3 AND status = 'confirmed' \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at",
+         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         apple_event_id, external_event_id",
     )
     .bind(external_event_id)
     .bind(id)
@@ -698,6 +714,8 @@ struct EventRow {
     parse_confidence: Option<f32>,
     source_input: Option<String>,
     created_at: DateTime<Utc>,
+    apple_event_id: Option<String>,
+    external_event_id: Option<String>,
 }
 
 impl EventRow {
@@ -715,6 +733,8 @@ impl EventRow {
             parse_confidence: self.parse_confidence,
             source_input: self.source_input,
             created_at: self.created_at,
+            apple_event_id: self.apple_event_id,
+            external_event_id: self.external_event_id,
         }
     }
 }
