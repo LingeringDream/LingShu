@@ -48,14 +48,24 @@ impl Default for PermissionSettings {
     }
 }
 
+/// Load permissions for a user: in-memory → DB → default.
 pub async fn permissions_for_user(state: &AppState, user_id: Uuid) -> PermissionSettings {
-    state
-        .permissions
-        .read()
-        .await
-        .get(&user_id)
-        .cloned()
-        .unwrap_or_default()
+    // 1. In-memory cache
+    {
+        let map = state.permissions.read().await;
+        if let Some(perms) = map.get(&user_id) {
+            return perms.clone();
+        }
+    }
+
+    // 2. Database (migration 0022)
+    if let Some(perms) = load_permissions_from_db(state, user_id).await {
+        let mut map = state.permissions.write().await;
+        map.insert(user_id, perms.clone());
+        return perms;
+    }
+
+    PermissionSettings::default()
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -66,6 +76,30 @@ pub struct PermissionPatch {
     pub l2_whitelist_only: Option<bool>,
     pub l3_accessibility: Option<bool>,
     pub l4_autonomous: Option<bool>,
+}
+
+// ── DB helpers ─────────────────────────────────────────────────────
+
+async fn load_permissions_from_db(state: &AppState, user_id: Uuid) -> Option<PermissionSettings> {
+    let row: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT permissions FROM users WHERE id = $1 AND deleted_at IS NULL")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+    row.and_then(|v| serde_json::from_value(v).ok())
+}
+
+async fn save_permissions_to_db(state: &AppState, user_id: Uuid, perms: &PermissionSettings) {
+    let json = serde_json::to_value(perms).unwrap_or_default();
+    let _ = sqlx::query(
+        "UPDATE users SET permissions = $1, updated_at = now() WHERE id = $2 AND deleted_at IS NULL",
+    )
+    .bind(&json)
+    .bind(user_id)
+    .execute(&state.db)
+    .await;
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
@@ -118,6 +152,9 @@ async fn update_permissions(
     if let Some(v) = patch.l4_autonomous {
         settings.l4_autonomous = v;
     }
+
+    // Persist so permissions survive restarts
+    save_permissions_to_db(&state, user_id, settings).await;
 
     Ok(Json(settings.clone()))
 }

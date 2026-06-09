@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../../lib/api';
 import { useProjectStore, type Project } from '../../stores/projectStore';
 import { isTauri } from '../../lib/tauri';
-import { syncEventToAppleCalendar } from '../../lib/eventkit';
+import { syncEventToAppleCalendar, deleteAppleCalendarEvent } from '../../lib/eventkit';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -16,6 +16,7 @@ interface CalendarEvent {
   status: string;
   calendar_name: string;
   parse_confidence?: number;
+  apple_event_id?: string;
   external_event_id?: string;
 }
 
@@ -96,6 +97,11 @@ function CalendarSection() {
   const handleDeleteEvent = async (ev: CalendarEvent) => {
     if (!window.confirm(`确定要删除「${ev.title}」吗？`)) return;
     try {
+      // If the event was synced to Apple Calendar, delete it there first
+      const appleId = ev.external_event_id || ev.apple_event_id;
+      if (appleId) {
+        await deleteAppleCalendarEvent(appleId);
+      }
       const resp = await apiFetch(`/api/v1/calendar/events/${ev.id}`, { method: 'DELETE' });
       if (resp.ok) await fetchEvents();
     } catch { /* silent */ }

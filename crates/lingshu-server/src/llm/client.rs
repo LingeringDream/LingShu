@@ -12,14 +12,42 @@ pub struct LlmClient {
     api_base_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
+    #[serde(default)]
     pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+}
+
+/// Custom serialisation: when the message carries `tool_calls`, omit
+/// `content` entirely. OpenAI accepts `null`, but DeepSeek rejects both
+/// `""` ("invalid type: map, expected a string") and `null` (same error
+/// because it misinterprets absent-as-null). Omitting the field is the
+/// only format both providers consistently accept.
+impl Serialize for ChatMessage {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let field_count = 1usize
+            + if self.tool_calls.is_some() { 0 } else { 1 }
+            + if self.tool_calls.is_some() { 1 } else { 0 }
+            + if self.tool_call_id.is_some() { 1 } else { 0 };
+        let mut st = s.serialize_struct("ChatMessage", field_count)?;
+        st.serialize_field("role", &self.role)?;
+        if self.tool_calls.is_none() {
+            st.serialize_field("content", &self.content)?;
+        }
+        if let Some(ref tc) = self.tool_calls {
+            st.serialize_field("tool_calls", tc)?;
+        }
+        if let Some(ref id) = self.tool_call_id {
+            st.serialize_field("tool_call_id", id)?;
+        }
+        st.end()
+    }
 }
 
 impl ChatMessage {
@@ -140,7 +168,10 @@ fn default_tool_call_type() -> String {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolCallFunction {
     pub name: String,
-    #[serde(deserialize_with = "deserialize_tool_arguments")]
+    #[serde(
+        deserialize_with = "deserialize_tool_arguments",
+        serialize_with = "serialize_tool_arguments"
+    )]
     pub arguments: serde_json::Value,
 }
 
@@ -157,6 +188,17 @@ where
         serde_json::Value::String(s) => serde_json::from_str(s).map_err(serde::de::Error::custom),
         _ => Ok(v),
     }
+}
+
+/// Serialise arguments back to a JSON-encoded string. DeepSeek requires
+/// `"arguments"` to be a string in echoed tool-call messages; a native
+/// JSON object triggers "invalid type: map, expected a string". Ollama
+/// accepts both forms.
+fn serialize_tool_arguments<S: serde::Serializer>(
+    v: &serde_json::Value,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&serde_json::to_string(v).unwrap_or_default())
 }
 
 /// The result of a non-streaming chat call that may include tool calls.
@@ -492,6 +534,8 @@ impl LlmClient {
             "max_tokens": options.as_ref().and_then(|o| o.num_predict),
             "tools": tools,
         });
+        tracing::debug!(body = %serde_json::to_string_pretty(&req).unwrap_or_default(), "chat_with_tools request");
+
         let mut http_req = self.http.post(&url).json(&req);
         if let Some(ref key) = self.api_key {
             http_req = http_req.header("Authorization", format!("Bearer {key}"));
