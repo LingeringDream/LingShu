@@ -12,14 +12,39 @@ pub struct LlmClient {
     api_base_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
+    #[serde(default)]
     pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+}
+
+/// Custom serialisation: when the message carries `tool_calls`, serialise
+/// `content` as `null` so OpenAI-compatible APIs accept the payload.
+/// An empty string triggers "invalid type: map, expected a string" on some
+/// providers because they interpret `""` as an empty JSON object.
+impl Serialize for ChatMessage {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("ChatMessage", 4)?;
+        st.serialize_field("role", &self.role)?;
+        if self.tool_calls.is_some() {
+            st.serialize_field("content", &serde_json::Value::Null)?;
+        } else {
+            st.serialize_field("content", &self.content)?;
+        }
+        if let Some(ref tc) = self.tool_calls {
+            st.serialize_field("tool_calls", tc)?;
+        }
+        if let Some(ref id) = self.tool_call_id {
+            st.serialize_field("tool_call_id", id)?;
+        }
+        st.end()
+    }
 }
 
 impl ChatMessage {
