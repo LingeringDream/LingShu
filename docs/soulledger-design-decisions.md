@@ -100,9 +100,11 @@ PRD 真正缺的不是"推理循环",是 **thought 的状态机**。
 
 ## 5. 实现顺序建议
 
-1. 先补**埋点**(上述各节"必须采集的信号"),其余机制都依赖它来日后校准。
-2. 记忆留存:落地决策树,接好 dedup+衰减(衰减 DB 接线已有提示词)。
-3. 遗忘护栏:给遗忘扫描加 `source_memory_ids` 引用豁免。
-4. 人格:加显式反馈 UI 入口 → 反馈样本 → (最后)再谈自动演化。
-5. Thought Queue:补状态机 + 触发器读状态 + 每日批处理。
-6. LLM-as-judge / 语义合并:作为离线批处理,最后做。
+> 更新于 2026-06-09：以下各项均已完成实现。
+
+1. ✅ **埋点**：`signal_events` 表（migration 0015），已接入 memory、personality、chat 路径。
+2. ✅ **记忆留存**：决策树 + dedup + 衰减全部落地（`llm/memory.rs`、`llm/dedup.rs`、`llm/forgetting.rs`）。
+3. ✅ **遗忘护栏**：`source_memory_ids` 引用豁免已加入遗忘扫描 + consolidation 来源保护（`llm/forgetting.rs`、`llm/consolidation.rs`）。
+4. ✅ **人格**：用户滑块 + 显式反馈样本 + 自动演化（24h 冷却 + 保守 clamp）（`llm/personality.rs`）。
+5. ✅ **Thought Queue**：状态机 + 生命周期守卫 + snooze 调度 + 活跃上限 + 每日维护扫描（`llm/thoughts.rs`、`routes/thoughts.rs`）。
+6. ✅ **LLM-as-judge / 语义合并**：离线 consolidation，生成 `tier='derived'` 记忆、软降级源、保留来源链（migration 0018 + `llm/consolidation.rs`）。
