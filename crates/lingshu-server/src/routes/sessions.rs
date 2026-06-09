@@ -140,3 +140,40 @@ pub async fn delete_session(
 
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn session_response_serialization() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let now = Utc::now();
+        let resp = SessionResponse {
+            id,
+            title: Some("Chat about calendar".into()),
+            message_count: 42,
+            created_at: now,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["id"], id.to_string());
+        assert_eq!(json["message_count"], 42);
+    }
+
+    #[test]
+    fn session_response_no_title() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let now = Utc::now();
+        let resp = SessionResponse {
+            id,
+            title: None,
+            message_count: 0,
+            created_at: now,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert!(json["title"].is_null());
+    }
+}

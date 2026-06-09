@@ -60,3 +60,36 @@ async fn ensure_local_user(state: &AppState) -> Result<Uuid, AppError> {
     .await
     .map_err(AppError::Database)
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_user_constants_are_non_empty() {
+        assert!(!LOCAL_USER_EMAIL.is_empty());
+        assert!(!LOCAL_USER_DISPLAY_NAME.is_empty());
+        assert!(!LOCAL_USER_PASSWORD_MARKER.is_empty());
+    }
+
+    #[test]
+    fn local_user_is_internal_domain() {
+        assert!(LOCAL_USER_EMAIL.ends_with("@lingshu.internal"));
+    }
+
+    #[test]
+    fn auth_response_serialization() {
+        let id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let resp = AuthResponse {
+            user_id: id,
+            token: "eyJ.test.token".into(),
+            display_name: "test".into(),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["user_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(json["token"], "eyJ.test.token");
+        assert_eq!(json["display_name"], "test");
+    }
+}

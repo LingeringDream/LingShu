@@ -103,3 +103,41 @@ pub async fn update_me(
         role: user.3,
     }))
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_response_serialization() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let resp = UserResponse {
+            id,
+            email: "test@example.com".into(),
+            display_name: "Test User".into(),
+            role: "owner".into(),
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["email"], "test@example.com");
+        assert_eq!(json["role"], "owner");
+    }
+
+    #[test]
+    fn update_user_request_partial() {
+        let json = serde_json::json!({"display_name": "New Name"});
+        let req: UpdateUserRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.display_name.unwrap(), "New Name");
+        assert!(req.preferences.is_none());
+    }
+
+    #[test]
+    fn update_user_request_all_fields() {
+        let prefs = serde_json::json!({"theme": "dark", "language": "zh"});
+        let json = serde_json::json!({"display_name": "Updated", "preferences": prefs});
+        let req: UpdateUserRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.display_name.unwrap(), "Updated");
+        assert!(req.preferences.is_some());
+    }
+}

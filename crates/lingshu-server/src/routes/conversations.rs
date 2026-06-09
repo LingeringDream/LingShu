@@ -181,3 +181,45 @@ pub async fn delete_conversation(
 
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn create_conversation_request_defaults() {
+        let json = serde_json::json!({});
+        let req: CreateConversationRequest = serde_json::from_value(json).unwrap();
+        assert!(req.title.is_none());
+        assert!(req.project_id.is_none());
+    }
+
+    #[test]
+    fn create_conversation_request_with_fields() {
+        let pid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let json = serde_json::json!({"title": "My Chat", "project_id": pid.to_string()});
+        let req: CreateConversationRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.title.unwrap(), "My Chat");
+        assert_eq!(req.project_id, Some(pid));
+    }
+
+    #[test]
+    fn conversation_response_serialization() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let uid = uuid::Uuid::parse_str("660e8400-e29b-41d4-a716-446655440001").unwrap();
+        let now = Utc::now();
+        let resp = ConversationResponse {
+            id,
+            user_id: uid,
+            project_id: None,
+            title: Some("Test Conversation".into()),
+            created_at: now,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["id"], id.to_string());
+        assert_eq!(json["title"], "Test Conversation");
+    }
+}

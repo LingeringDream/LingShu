@@ -229,3 +229,65 @@ async fn evolve_personality(
         snapshot: outcome.snapshot.map(SnapshotResponse::from),
     }))
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::personality::PersonalityTraits;
+    use chrono::Utc;
+
+    #[test]
+    fn snapshot_response_from_model() {
+        let id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let user_id = Uuid::parse_str("660e8400-e29b-41d4-a716-446655440001").unwrap();
+        let now = Utc::now();
+        let traits = PersonalityTraits {
+            directness: 0.7,
+            warmth: 0.6,
+            proactivity: 0.5,
+            risk_tolerance: 0.4,
+            verbosity: 0.3,
+            formality: 0.8,
+            humor: 0.2,
+        };
+        let snapshot = PersonalitySnapshot {
+            id,
+            user_id,
+            trait_values: serde_json::to_value(&traits).unwrap(),
+            change_reason: Some("user requested more formal tone".into()),
+            source_memory_ids: vec![Uuid::new_v4()],
+            is_active: true,
+            created_at: now,
+        };
+        let resp = SnapshotResponse::from(snapshot);
+        assert_eq!(resp.id, id);
+        assert_eq!(resp.user_id, user_id);
+        assert_eq!(resp.change_reason.unwrap(), "user requested more formal tone");
+        assert!(resp.is_active);
+    }
+
+    #[test]
+    fn create_snapshot_request_defaults() {
+        let traits = PersonalityTraits::default();
+        let req = CreateSnapshotRequest {
+            trait_values: traits,
+            change_reason: None,
+            source_memory_ids: vec![],
+        };
+        assert!(req.change_reason.is_none());
+        assert!(req.source_memory_ids.is_empty());
+    }
+
+    #[test]
+    fn evolve_personality_response_no_snapshot() {
+        let resp = EvolvePersonalityResponse {
+            created: false,
+            reason: "no significant changes detected".into(),
+            snapshot: None,
+        };
+        assert!(!resp.created);
+        assert!(resp.snapshot.is_none());
+    }
+}
