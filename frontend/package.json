@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint src --ext .ts,.tsx",
     "type-check": "tsc --noEmit",
-    "tauri": "tauri"
+    "tauri": "cd .. && tauri"
   },
   "dependencies": {
     "@ant-design/cssinjs": "^1.21.0",

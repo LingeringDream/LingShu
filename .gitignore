@@ -67,6 +67,7 @@ tarpaulin-report.html
 src-tauri/target/
 src-tauri/gen/
 src-tauri/icons/icon.iconset/
+src-tauri/binaries/lingshu-server-*
 
 # Misc
 *.tmp

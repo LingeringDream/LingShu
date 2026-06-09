@@ -8,15 +8,17 @@ license = "MIT"
 # NOT part of the root cargo workspace — Tauri pulls its own tokio & deps
 # to avoid version conflicts with the axum backend. Build with:
 #   cd src-tauri && cargo build
-# or via the Tauri CLI:
-#   npx tauri dev / npx tauri build
+# or via the Tauri CLI (from frontend/):
+#   npm run tauri dev / npm run tauri build
 [workspace]
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", features = ["net", "time"] }
 
 # macOS EventKit bridge (Phase B)
 [target.'cfg(target_os = "macos")'.dependencies]

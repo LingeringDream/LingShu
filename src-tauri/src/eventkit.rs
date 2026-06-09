@@ -209,12 +209,11 @@ mod imp {
             let result: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
             let result_clone = result.clone();
 
-            let block = block2::RcBlock::new(
-                move |granted: objc2::runtime::Bool, _error: *mut NSError| {
+            let block =
+                block2::RcBlock::new(move |granted: objc2::runtime::Bool, _error: *mut NSError| {
                     let mut r = result_clone.lock().unwrap();
                     *r = Some(granted.as_bool());
-                },
-            );
+                });
 
             let ptr: *mut block2::DynBlock<_> =
                 &*block as *const block2::DynBlock<_> as *mut block2::DynBlock<_>;

@@ -5,6 +5,10 @@
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
-    "opener:default"
+    "opener:default",
+    "shell:default",
+    "shell:allow-execute",
+    "shell:allow-spawn",
+    "shell:allow-kill"
   ]
 }

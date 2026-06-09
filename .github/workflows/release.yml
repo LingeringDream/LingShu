@@ -1,0 +1,68 @@
+name: Release
+
+# Trigger on version tags, e.g. v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-macos:
+    name: Build macOS App
+    runs-on: macos-latest
+    permissions:
+      contents: write # needed to create/upload release assets
+    steps:
+      - uses: actions/checkout@v5
+
+      # ── Rust ──────────────────────────────────────────────────
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      # ── Node ──────────────────────────────────────────────────
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      # ── Build server sidecar ──────────────────────────────────
+      - name: Build backend (release)
+        run: cargo build -p lingshu-server --release
+
+      - name: Place sidecar binary
+        run: |
+          mkdir -p src-tauri/binaries
+          cp target/release/lingshu-server src-tauri/binaries/lingshu-server-aarch64-apple-darwin
+          chmod +x src-tauri/binaries/lingshu-server-aarch64-apple-darwin
+
+      # ── Build Tauri .app + .dmg ───────────────────────────────
+      - name: Build Tauri app
+        run: npm run tauri build
+        working-directory: frontend
+
+      # ── Ad-hoc code sign the .dmg (avoids Gatekeeper "damaged" error) ──
+      - name: Codesign .dmg (ad-hoc)
+        run: |
+          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
+          codesign --force --sign - "$DMG"
+
+      # ── Create GitHub Release ─────────────────────────────────
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "灵枢 LingShu ${{ github.ref_name }}"
+          files: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
