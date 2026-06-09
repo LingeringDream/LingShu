@@ -78,15 +78,37 @@ pub async fn llm_settings_for_user(state: &AppState, user_id: Uuid) -> LlmSettin
             return s.clone();
         }
     }
-    // 2. Redis
+    // 2. Redis cache
     let key = crate::cache::llm_settings_cache_key(user_id);
     if let Some(cached) = crate::cache::get_json::<LlmSettings>(&state.redis, &key).await {
         let mut map = state.llm_settings.write().await;
         map.insert(user_id, cached.clone());
         return cached;
     }
-    // 3. Fallback: config defaults
+    // 3. PostgreSQL — durable source of truth, survives restarts even with no Redis.
+    if let Some(stored) = load_llm_settings_from_db(state, user_id).await {
+        // Warm both caches so subsequent reads skip the DB.
+        crate::cache::set_json(&state.redis, &key, &stored, None).await;
+        let mut map = state.llm_settings.write().await;
+        map.insert(user_id, stored.clone());
+        return stored;
+    }
+    // 4. Fallback: config defaults
     state.default_llm_settings()
+}
+
+/// Load persisted LLM settings from `users.llm_settings`. The column defaults to
+/// `'{}'`, which is not a complete `LlmSettings`; any value that fails to
+/// deserialize is treated as "not configured yet" (→ `None`).
+async fn load_llm_settings_from_db(state: &AppState, user_id: Uuid) -> Option<LlmSettings> {
+    let raw: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT llm_settings FROM users WHERE id = $1 AND deleted_at IS NULL")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+    raw.and_then(|v| serde_json::from_value::<LlmSettings>(v).ok())
 }
 
 /// Partial update — all fields optional. Only provided fields are applied.
@@ -178,6 +200,17 @@ async fn update_llm_settings(
 
     let result = settings.clone();
     drop(all_settings);
+
+    // Durable persistence — survives restarts even when Redis is unavailable.
+    // This is the whole point: without it, settings live only in memory/Redis
+    // and every backend restart forces the user to re-enter their model config.
+    let value = serde_json::to_value(&result)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize LLM settings: {e}")))?;
+    sqlx::query("UPDATE users SET llm_settings = $1, updated_at = NOW() WHERE id = $2")
+        .bind(value)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
 
     // Write-through to Redis (no TTL — config persists until explicitly changed)
     crate::cache::set_json(
