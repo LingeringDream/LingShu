@@ -64,6 +64,23 @@ function CalendarSection() {
 
   useEffect(() => { fetchEvents(); setInTauri(isTauri()); }, [fetchEvents]);
 
+  // Cancel delete confirmation when clicking elsewhere or pressing Escape
+  useEffect(() => {
+    if (!confirmingDelete) return;
+    const cancel = () => setConfirmingDelete(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cancel(); };
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-delete-btn]')) cancel();
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onClick);
+    };
+  }, [confirmingDelete]);
+
   const handleParse = async () => {
     if (!text.trim()) return;
     setParsing(true); setError(null); setFeedback(null);
@@ -214,6 +231,7 @@ function CalendarSection() {
                       >确认</button>
                     )}
                     <button
+                      data-delete-btn
                       onClick={() => handleDeleteClick(ev)}
                       style={{
                         padding: '2px 8px', fontSize: 11, cursor: 'pointer',
