@@ -256,10 +256,8 @@ pub async fn parse_and_create_event(
 ## 重要
 严格返回一个 JSON 对象，不要包含 markdown 标记或额外解释。
 
-输入：{input}
-JSON："###,
-        now = now,
-        input = text
+输入：{text}
+JSON："###
     );
 
     let messages = vec![ChatMessage::user(prompt)];

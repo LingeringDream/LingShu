@@ -23,20 +23,49 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct LlmSettings {
-    /// Ollama model name (e.g. "gemma4:e4b", "qwen2.5:7b")
+    /// LLM provider: "ollama" (local) or "openai" (cloud / OpenAI-compatible)
+    #[serde(default = "default_provider")]
+    pub provider: String,
+    /// API key for cloud providers. Empty = use server default from env.
+    #[serde(default)]
+    pub api_key: String,
+    /// API base URL for OpenAI-compatible providers (e.g. https://api.openai.com).
+    /// Empty = use server default from env.
+    #[serde(default)]
+    pub api_base_url: String,
+    /// Model name (e.g. "gemma4:e4b", "qwen2.5:7b", "gpt-4o")
     pub model: String,
     /// Generation temperature (0.0–2.0)
     pub temperature: f32,
-    /// Max output tokens
+    /// Max output tokens per generation.
+    /// Cloud models may support 64 K–128 K+ output tokens; raise this to match.
     pub max_tokens: u32,
+    /// Number of recent conversation turns to load as context.
+    /// Default 20 is fine for small local models. Large-context cloud models
+    /// (e.g. 1 M-token Gemini, 200 K Claude) can handle hundreds of turns —
+    /// raise this field to take full advantage of the model's context window.
+    #[serde(default = "default_context_messages")]
+    pub context_messages: u32,
+}
+
+fn default_provider() -> String {
+    "ollama".into()
+}
+
+fn default_context_messages() -> u32 {
+    20
 }
 
 impl Default for LlmSettings {
     fn default() -> Self {
         Self {
+            provider: "ollama".into(),
+            api_key: String::new(),
+            api_base_url: String::new(),
             model: String::new(),
             temperature: 0.7,
-            max_tokens: 2048,
+            max_tokens: 4096,
+            context_messages: 20,
         }
     }
 }
@@ -63,9 +92,13 @@ pub async fn llm_settings_for_user(state: &AppState, user_id: Uuid) -> LlmSettin
 /// Partial update — all fields optional. Only provided fields are applied.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LlmSettingsPatch {
+    pub provider: Option<String>,
+    pub api_key: Option<String>,
+    pub api_base_url: Option<String>,
     pub model: Option<String>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    pub context_messages: Option<u32>,
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
@@ -101,6 +134,19 @@ async fn update_llm_settings(
         .entry(user_id)
         .or_insert_with(|| state.default_llm_settings());
 
+    if let Some(provider) = patch.provider {
+        let p = provider.trim().to_lowercase();
+        if p != "ollama" && p != "openai" {
+            return Err(AppError::Validation("provider must be 'ollama' or 'openai'".into()));
+        }
+        settings.provider = p;
+    }
+    if let Some(key) = patch.api_key {
+        settings.api_key = key.trim().to_string();
+    }
+    if let Some(url) = patch.api_base_url {
+        settings.api_base_url = url.trim().trim_end_matches('/').to_string();
+    }
     if let Some(model) = patch.model {
         if model.trim().is_empty() {
             return Err(AppError::Validation("model must not be empty".into()));
@@ -116,12 +162,18 @@ async fn update_llm_settings(
         settings.temperature = t;
     }
     if let Some(n) = patch.max_tokens {
-        if n == 0 || n > 32768 {
-            return Err(AppError::Validation(
-                "max_tokens must be between 1 and 32768".into(),
-            ));
+        if n == 0 {
+            return Err(AppError::Validation("max_tokens must be at least 1".into()));
         }
         settings.max_tokens = n;
+    }
+    if let Some(n) = patch.context_messages {
+        if n == 0 || n > 10_000 {
+            return Err(AppError::Validation(
+                "context_messages must be between 1 and 10000".into(),
+            ));
+        }
+        settings.context_messages = n;
     }
 
     let result = settings.clone();

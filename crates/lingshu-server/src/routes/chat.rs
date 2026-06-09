@@ -58,6 +58,16 @@ pub async fn chat(
         )));
     }
 
+    // Use per-user provider config if set, otherwise fall back to server defaults
+    let llm = if settings.provider == "openai" && !settings.api_base_url.is_empty() {
+        state.llm.with_overrides(
+            if settings.api_key.is_empty() { None } else { Some(settings.api_key.clone()) },
+            if settings.api_base_url.is_empty() { None } else { Some(settings.api_base_url.clone()) },
+        )
+    } else {
+        state.llm.clone()
+    };
+
     let session_id = req.session_id;
     let user_message = req.message.clone();
 
@@ -65,7 +75,7 @@ pub async fn chat(
     let memory_context = fetch_memory_context(
         &state.db,
         &state.vector,
-        &state.llm,
+        &llm,
         &state.config.llm.embed_model,
         user_id,
         &user_message,
@@ -83,9 +93,11 @@ pub async fn chat(
     );
     let mut messages = vec![ChatMessage::system(system_prompt)];
 
-    // Load chat history if session_id provided (verify ownership first)
+    // Load chat history if session_id provided (verify ownership first).
+    // context_messages is configurable per user — raise it when using a
+    // large-context cloud model (e.g. 200 for 1 M-token Gemini/Claude).
     if let Some(sid) = session_id {
-        let history = load_chat_history(&state.db, sid, user_id).await?;
+        let history = load_chat_history(&state.db, sid, user_id, settings.context_messages).await?;
         for (role, content) in history {
             messages.push(ChatMessage { role, content, tool_calls: None, tool_call_id: None });
         }
@@ -149,7 +161,7 @@ pub async fn chat(
     let model = settings.model.clone();
     tracing::debug!(%user_id, tool_count = tools.len(), "Entering tool loop");
     let (updated_messages, final_text) =
-        run_tool_loop(&state, user_id, &model, messages, &options, &tools).await;
+        run_tool_loop(&state, &llm, user_id, &model, messages, &options, &tools).await;
     messages = updated_messages;
     tracing::debug!(%user_id, msg_count = messages.len(), has_final = final_text.is_some(), "Tool loop done");
 
@@ -173,8 +185,7 @@ pub async fn chat(
                     })
             ).boxed()
         } else {
-            state
-                .llm
+            llm
                 .chat_stream(&model, messages, Some(options))
         };
 
@@ -185,7 +196,7 @@ pub async fn chat(
 
     let sid_for_stream = session_id;
     let db_clone = state.db.clone();
-    let llm_clone = state.llm.clone();
+    let llm_clone = llm.clone();
     let redis_clone = state.redis.clone();
     let vector_clone = state.vector.clone();
     let model_name = settings.model.clone();
@@ -919,6 +930,7 @@ async fn load_chat_history(
     db: &sqlx::PgPool,
     conversation_id: Uuid,
     user_id: Uuid,
+    limit: u32,
 ) -> Result<Vec<(String, String)>, AppError> {
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM conversations \
@@ -938,11 +950,12 @@ async fn load_chat_history(
              SELECT role, content, created_at FROM messages \
              WHERE conversation_id = $1 \
              ORDER BY created_at DESC \
-             LIMIT 20 \
+             LIMIT $2 \
          ) recent_messages \
          ORDER BY created_at ASC",
     )
     .bind(conversation_id)
+    .bind(limit as i64)
     .fetch_all(db)
     .await?;
 
@@ -1273,8 +1286,7 @@ async fn preflight_calendar_intent(
             Err(e) => {
                 tracing::warn!(%user_id, %e, "Preflight create failed");
                 return Some(format!(
-                    "[系统] 尝试为用户创建日程但失败了（{}）。请如实告知用户，建议检查权限或稍后重试。",
-                    e
+                    "[系统] 尝试为用户创建日程但失败了（{e}）。请如实告知用户，建议检查权限或稍后重试。"
                 ));
             }
         }
@@ -1425,6 +1437,7 @@ async fn execute_tool_call(
 /// should use it directly instead of making another streaming call.
 async fn run_tool_loop(
     state: &AppState,
+    llm: &crate::llm::client::LlmClient,
     user_id: Uuid,
     model: &str,
     messages: Vec<ChatMessage>,
@@ -1448,8 +1461,7 @@ async fn run_tool_loop(
         }
 
         tracing::debug!(%user_id, iterations, msg_count = messages.len(), "Calling chat_with_tools");
-        let response = match state
-            .llm
+        let response = match llm
             .chat_with_tools(model, messages.clone(), Some(options.clone()), tools.to_vec())
             .await
         {
