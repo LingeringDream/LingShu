@@ -6,13 +6,17 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
+    #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
     pub redis: RedisConfig,
     #[serde(default)]
     pub qdrant: QdrantConfig,
+    #[serde(default)]
     pub llm: LlmConfig,
+    #[serde(default)]
     pub security: SecurityConfig,
     #[serde(default)]
     pub cors: CorsConfig,
@@ -25,12 +29,29 @@ pub struct ServerConfig {
     #[serde(default = "default_port")]
     pub port: u16,
 }
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            host: default_host(),
+            port: default_port(),
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
+    #[serde(default = "default_database_url")]
     pub url: String,
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
+}
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: default_database_url(),
+            max_connections: default_max_connections(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -47,6 +68,7 @@ pub struct QdrantConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct LlmConfig {
+    #[serde(default = "default_ollama_url")]
     pub ollama_url: String,
     #[serde(default = "default_model")]
     pub default_model: String,
@@ -58,6 +80,18 @@ pub struct LlmConfig {
     pub api_base_url: Option<String>,
     #[serde(default = "default_embed_dim")]
     pub embed_dim: u64,
+}
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            ollama_url: default_ollama_url(),
+            default_model: default_model(),
+            embed_model: default_embed_model(),
+            api_key: None,
+            api_base_url: None,
+            embed_dim: default_embed_dim(),
+        }
+    }
 }
 
 fn default_embed_dim() -> u64 {
@@ -76,14 +110,19 @@ fn default_embed_model() -> String {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct SecurityConfig {
+    #[serde(default = "default_jwt_secret")]
     pub jwt_secret: String,
     /// Key for integration token-at-rest encryption (AES-256-GCM, see `crate::crypto`).
-    ///
-    /// Optional so the server can still start without it, but `POST /api/v1/integrations`
-    /// rejects writes with `AppError::Internal` until an operator sets `ENCRYPTION_KEY` —
-    /// tokens are never persisted in the clear. Set it before connecting any integration.
     #[serde(default)]
     pub encryption_key: Option<String>,
+}
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            jwt_secret: default_jwt_secret(),
+            encryption_key: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -126,6 +165,15 @@ fn default_port() -> u16 {
 }
 fn default_max_connections() -> u32 {
     20
+}
+fn default_database_url() -> String {
+    "postgres://lingshu:lingshu@localhost:5432/lingshu".to_string()
+}
+fn default_ollama_url() -> String {
+    "http://localhost:11434".to_string()
+}
+fn default_jwt_secret() -> String {
+    "lingshu-local-dev".to_string()
 }
 
 impl AppConfig {

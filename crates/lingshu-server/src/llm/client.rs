@@ -168,7 +168,10 @@ fn default_tool_call_type() -> String {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolCallFunction {
     pub name: String,
-    #[serde(deserialize_with = "deserialize_tool_arguments")]
+    #[serde(
+        deserialize_with = "deserialize_tool_arguments",
+        serialize_with = "serialize_tool_arguments"
+    )]
     pub arguments: serde_json::Value,
 }
 
@@ -185,6 +188,17 @@ where
         serde_json::Value::String(s) => serde_json::from_str(s).map_err(serde::de::Error::custom),
         _ => Ok(v),
     }
+}
+
+/// Serialise arguments back to a JSON-encoded string. DeepSeek requires
+/// `"arguments"` to be a string in echoed tool-call messages; a native
+/// JSON object triggers "invalid type: map, expected a string". Ollama
+/// accepts both forms.
+fn serialize_tool_arguments<S: serde::Serializer>(
+    v: &serde_json::Value,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&serde_json::to_string(v).unwrap_or_default())
 }
 
 /// The result of a non-streaming chat call that may include tool calls.
