@@ -275,10 +275,8 @@ pub async fn chat(
                         // character-by-character streaming of tool-loop output).
                         // Include any pending Apple Calendar event deletes so the
                         // frontend can sync them via EventKit.
-                        let apple_deletes_final = apple_deletes_ref
-                            .lock()
-                            .ok()
-                            .and_then(|mut g| g.take());
+                        let apple_deletes_final =
+                            apple_deletes_ref.lock().ok().and_then(|mut g| g.take());
                         return Ok(Event::default().data(
                             serde_json::to_string(&ChatChunk {
                                 content: chunk.content,
@@ -1505,10 +1503,7 @@ async fn execute_tool_call(
                 Err(_) => return Ok((format!("无效的事件 ID：{event_id_str}"), Vec::new())),
             };
             match crate::routes::calendar::delete_user_event(state, user_id, event_id).await {
-                Ok(apple_ids) => Ok((
-                    format!("已删除日历事件 {event_id}"),
-                    apple_ids,
-                )),
+                Ok(apple_ids) => Ok((format!("已删除日历事件 {event_id}"), apple_ids)),
                 Err(e) => {
                     let msg = e.to_string();
                     tracing::warn!(%user_id, %event_id, %msg, "Calendar delete failed via chat tool");

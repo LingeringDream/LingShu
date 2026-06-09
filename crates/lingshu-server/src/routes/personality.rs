@@ -264,7 +264,10 @@ mod tests {
         let resp = SnapshotResponse::from(snapshot);
         assert_eq!(resp.id, id);
         assert_eq!(resp.user_id, user_id);
-        assert_eq!(resp.change_reason.unwrap(), "user requested more formal tone");
+        assert_eq!(
+            resp.change_reason.unwrap(),
+            "user requested more formal tone"
+        );
         assert!(resp.is_active);
     }
 

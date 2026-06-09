@@ -192,7 +192,10 @@ mod tests {
         let restored: PermissionSettings = serde_json::from_value(json).unwrap();
         assert_eq!(restored.l0_enabled, orig.l0_enabled);
         assert_eq!(restored.l1_calendar, orig.l1_calendar);
-        assert_eq!(restored.l1_require_confirmation, orig.l1_require_confirmation);
+        assert_eq!(
+            restored.l1_require_confirmation,
+            orig.l1_require_confirmation
+        );
         assert_eq!(restored.l2_automation, orig.l2_automation);
         assert_eq!(restored.l2_whitelist_only, orig.l2_whitelist_only);
         assert_eq!(restored.l3_accessibility, orig.l3_accessibility);
@@ -220,7 +223,7 @@ mod tests {
         // Only l1_calendar should change; l1_require_confirmation stays default
         assert!(settings.l1_calendar);
         assert!(settings.l1_require_confirmation); // unchanged default
-        assert!(!settings.l2_automation);          // unchanged default
+        assert!(!settings.l2_automation); // unchanged default
     }
 
     #[test]
@@ -235,12 +238,24 @@ mod tests {
             l4_autonomous: Some(false),
         };
         // Apply all fields
-        if let Some(v) = patch.l1_calendar { settings.l1_calendar = v; }
-        if let Some(v) = patch.l1_require_confirmation { settings.l1_require_confirmation = v; }
-        if let Some(v) = patch.l2_automation { settings.l2_automation = v; }
-        if let Some(v) = patch.l2_whitelist_only { settings.l2_whitelist_only = v; }
-        if let Some(v) = patch.l3_accessibility { settings.l3_accessibility = v; }
-        if let Some(v) = patch.l4_autonomous { settings.l4_autonomous = v; }
+        if let Some(v) = patch.l1_calendar {
+            settings.l1_calendar = v;
+        }
+        if let Some(v) = patch.l1_require_confirmation {
+            settings.l1_require_confirmation = v;
+        }
+        if let Some(v) = patch.l2_automation {
+            settings.l2_automation = v;
+        }
+        if let Some(v) = patch.l2_whitelist_only {
+            settings.l2_whitelist_only = v;
+        }
+        if let Some(v) = patch.l3_accessibility {
+            settings.l3_accessibility = v;
+        }
+        if let Some(v) = patch.l4_autonomous {
+            settings.l4_autonomous = v;
+        }
 
         assert!(settings.l1_calendar);
         assert!(!settings.l1_require_confirmation);

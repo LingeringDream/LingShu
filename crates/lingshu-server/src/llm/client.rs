@@ -735,7 +735,7 @@ fn parse_byte_stream(
                                 content: String::new(),
                                 done: true,
                                 assistant_message_id: None,
-                            apple_calendar_deletes: None,
+                                apple_calendar_deletes: None,
                             })),
                             (stream, bytes::BytesMut::new(), true),
                         ));
@@ -787,7 +787,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
             content,
             done: true,
             assistant_message_id: None,
-                            apple_calendar_deletes: None,
+            apple_calendar_deletes: None,
         });
     }
     let content = parsed.message?.content;
@@ -798,7 +798,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
         content,
         done: false,
         assistant_message_id: None,
-                            apple_calendar_deletes: None,
+        apple_calendar_deletes: None,
     })
 }
 
@@ -814,7 +814,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
             content: String::new(),
             done: true,
             assistant_message_id: None,
-                            apple_calendar_deletes: None,
+            apple_calendar_deletes: None,
         });
     }
     let json_str = line.strip_prefix("data: ")?;
@@ -829,7 +829,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
         content,
         done,
         assistant_message_id: None,
-                            apple_calendar_deletes: None,
+        apple_calendar_deletes: None,
     })
 }
 

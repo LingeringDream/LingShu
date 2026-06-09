@@ -98,6 +98,6 @@ mod tests {
         let t: PersonalityTraits = serde_json::from_value(json).unwrap();
         assert!((t.warmth - 0.9).abs() < f32::EPSILON);
         assert!((t.directness - 0.5).abs() < f32::EPSILON); // default
-        assert!((t.humor - 0.5).abs() < f32::EPSILON);       // default
+        assert!((t.humor - 0.5).abs() < f32::EPSILON); // default
     }
 }

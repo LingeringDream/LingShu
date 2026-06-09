@@ -367,17 +367,16 @@ pub async fn delete_user_event(
 
     // Look up Apple Calendar IDs *before* deleting so the frontend can
     // also remove the event from the system calendar via EventKit.
-    let apple_ids: Vec<String> =
-        sqlx::query_as::<_, (Option<String>, Option<String>)>(
-            "SELECT external_event_id, apple_event_id \
+    let apple_ids: Vec<String> = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT external_event_id, apple_event_id \
              FROM calendar_events WHERE id = $1 AND user_id = $2",
-        )
-        .bind(event_id)
-        .bind(user_id)
-        .fetch_optional(&state.db)
-        .await?
-        .map(|(ext, apple)| [ext, apple].into_iter().flatten().collect())
-        .unwrap_or_default();
+    )
+    .bind(event_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .map(|(ext, apple)| [ext, apple].into_iter().flatten().collect())
+    .unwrap_or_default();
 
     let rows = sqlx::query("DELETE FROM calendar_events WHERE id = $1 AND user_id = $2")
         .bind(event_id)

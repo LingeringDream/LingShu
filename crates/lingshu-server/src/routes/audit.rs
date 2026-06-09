@@ -132,7 +132,8 @@ mod tests {
 
     #[test]
     fn audit_params_with_filters() {
-        let json = serde_json::json!({"resource_type": "calendar_event", "limit": 50, "offset": 10});
+        let json =
+            serde_json::json!({"resource_type": "calendar_event", "limit": 50, "offset": 10});
         let params: AuditParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.resource_type.unwrap(), "calendar_event");
         assert_eq!(params.limit.unwrap(), 50);
