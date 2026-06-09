@@ -92,9 +92,24 @@ pub struct ToolFunctionDef {
 }
 
 /// A tool call requested by the LLM.
+///
+/// OpenAI-compatible providers (OpenAI, DeepSeek, …) require `id` and `type`
+/// on every tool call — both in the response they send and in the assistant
+/// message echoed back on the next turn. Ollama omits them, so both default:
+/// `id` to empty (the caller fills a synthetic one before echoing) and `type`
+/// to `"function"`. Without these fields the echoed message fails DeepSeek
+/// validation with `messages[N]: missing field id`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolCall {
+    #[serde(default)]
+    pub id: String,
+    #[serde(rename = "type", default = "default_tool_call_type")]
+    pub tool_type: String,
     pub function: ToolCallFunction,
+}
+
+fn default_tool_call_type() -> String {
+    "function".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -855,6 +870,39 @@ mod tests {
             msg.contains("400") && msg.contains("Model Not Exist"),
             "error should include status and provider body: {msg}"
         );
+    }
+
+    // ── Tool-call serialization ──────────────────────────────────
+
+    /// OpenAI/DeepSeek tool calls carry `id` + `type`; both must survive a
+    /// deserialize→serialize round trip or the echoed assistant message fails
+    /// DeepSeek validation with "missing field id".
+    #[test]
+    fn tool_call_round_trips_openai_id_and_type() {
+        let json = serde_json::json!({
+            "id": "call_abc123",
+            "type": "function",
+            "function": {"name": "create_event", "arguments": "{\"title\":\"x\"}"}
+        });
+        let tc: ToolCall = serde_json::from_value(json).expect("deserialize openai tool_call");
+        assert_eq!(tc.id, "call_abc123");
+        assert_eq!(tc.tool_type, "function");
+
+        let out = serde_json::to_value(&tc).expect("serialize");
+        assert_eq!(out["id"], "call_abc123");
+        assert_eq!(out["type"], "function");
+        assert_eq!(out["function"]["name"], "create_event");
+    }
+
+    /// Ollama omits `id`/`type`; they must default so deserialization succeeds.
+    #[test]
+    fn tool_call_defaults_for_ollama_shape() {
+        let json = serde_json::json!({
+            "function": {"name": "create_event", "arguments": {"title": "x"}}
+        });
+        let tc: ToolCall = serde_json::from_value(json).expect("deserialize ollama tool_call");
+        assert_eq!(tc.id, "");
+        assert_eq!(tc.tool_type, "function");
     }
 
     // ── Embed tests ──────────────────────────────────────────────

@@ -1486,9 +1486,19 @@ async fn run_tool_loop(
             break;
         }
 
-        // Collect tool results
-        let mut tool_results: Vec<(crate::llm::client::ToolCall, String)> = Vec::new();
-        for tc in &response.tool_calls {
+        // Ensure every tool call carries an id: OpenAI/DeepSeek require it on
+        // the echoed assistant message, and each tool result must reference the
+        // same id. Ollama omits ids, so synthesise a stable one when missing.
+        let mut tool_calls = response.tool_calls;
+        for (i, tc) in tool_calls.iter_mut().enumerate() {
+            if tc.id.trim().is_empty() {
+                tc.id = format!("call_{iterations}_{i}");
+            }
+        }
+
+        // Execute each tool, pairing the result with its call id.
+        let mut tool_results: Vec<(String, String)> = Vec::new();
+        for tc in &tool_calls {
             let result = match execute_tool_call(state, user_id, tc).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -1496,21 +1506,14 @@ async fn run_tool_loop(
                     format!("工具执行失败：{e}")
                 }
             };
-            tool_results.push((tc.clone(), result));
+            tool_results.push((tc.id.clone(), result));
         }
 
-        // Add assistant message with tool calls to the conversation
-        let tool_calls: Vec<_> = tool_results.iter().map(|(tc, _)| tc.clone()).collect();
-        let assistant_msg = ChatMessage::assistant_with_tools(
-            response.content,
-            tool_calls,
-        );
-        messages.push(assistant_msg);
-
-        // Add tool result messages
-        for (tc, result) in &tool_results {
-            let id = format!("call_{}_{iterations}", tc.function.name);
-            messages.push(ChatMessage::tool(result.clone(), id));
+        // Echo the assistant message (tool calls now carry id + type), then the
+        // matching tool results referencing the same ids.
+        messages.push(ChatMessage::assistant_with_tools(response.content, tool_calls));
+        for (id, result) in tool_results {
+            messages.push(ChatMessage::tool(result, id));
         }
     }
 
