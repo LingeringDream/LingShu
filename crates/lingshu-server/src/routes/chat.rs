@@ -172,10 +172,10 @@ pub async fn chat(
     let tools = calendar_tools();
     let model = settings.model.clone();
     tracing::debug!(%user_id, tool_count = tools.len(), "Entering tool loop");
-    let (updated_messages, final_text) =
+    let (updated_messages, final_text, apple_calendar_deletes) =
         run_tool_loop(&state, &llm, user_id, &model, messages, &options, &tools).await;
     messages = updated_messages;
-    tracing::debug!(%user_id, msg_count = messages.len(), has_final = final_text.is_some(), "Tool loop done");
+    tracing::debug!(%user_id, msg_count = messages.len(), has_final = final_text.is_some(), apple_deletes = apple_calendar_deletes.len(), "Tool loop done");
 
     // When the tool loop produced a final text response, stream it directly
     // instead of making another LLM call. Otherwise, stream as normal.
@@ -189,6 +189,7 @@ pub async fn chat(
                     content: c.to_string(),
                     done: i + 1 >= total,
                     assistant_message_id: None,
+                    apple_calendar_deletes: None,
                 })
             }))
             .boxed()
@@ -200,6 +201,15 @@ pub async fn chat(
     let assistant_accumulator: Arc<Mutex<AssistantStreamAccumulator>> =
         Arc::new(Mutex::new(AssistantStreamAccumulator::new()));
     let stream_finalized = Arc::new(Mutex::new(false));
+
+    // Apple Calendar event IDs that the frontend needs to delete from EventKit.
+    // Wrapped in Option so .take() can move them into the final SSE chunk exactly once.
+    let apple_deletes: Option<Vec<String>> = if apple_calendar_deletes.is_empty() {
+        None
+    } else {
+        Some(apple_calendar_deletes)
+    };
+    let apple_deletes_ref = Arc::new(Mutex::new(apple_deletes));
 
     let sid_for_stream = session_id;
     let db_clone = state.db.clone();
@@ -220,6 +230,7 @@ pub async fn chat(
         let model = model_name.clone();
         let embed_model = embed_model_name.clone();
         let user_message = um_clone.clone();
+        let apple_deletes_ref = Arc::clone(&apple_deletes_ref);
 
         async move {
             match result {
@@ -262,11 +273,18 @@ pub async fn chat(
                         // frontend can anchor feedback to this specific message.
                         // Preserve the original content (may be non-empty from
                         // character-by-character streaming of tool-loop output).
+                        // Include any pending Apple Calendar event deletes so the
+                        // frontend can sync them via EventKit.
+                        let apple_deletes_final = apple_deletes_ref
+                            .lock()
+                            .ok()
+                            .and_then(|mut g| g.take());
                         return Ok(Event::default().data(
                             serde_json::to_string(&ChatChunk {
                                 content: chunk.content,
                                 done: true,
                                 assistant_message_id,
+                                apple_calendar_deletes: apple_deletes_final,
                             })
                             .unwrap_or_default(),
                         ));
@@ -296,6 +314,7 @@ pub async fn chat(
                             content: format!("[stream error: {e}]"),
                             done: true,
                             assistant_message_id: None,
+                            apple_calendar_deletes: None,
                         })
                         .unwrap_or_default(),
                     ))
@@ -1410,7 +1429,9 @@ async fn execute_tool_call(
     state: &AppState,
     user_id: Uuid,
     tool_call: &crate::llm::client::ToolCall,
-) -> Result<String, AppError> {
+) -> Result<(String, Vec<String>), AppError> {
+    // Apple Calendar event IDs that the frontend should delete via EventKit.
+    // Only populated by `delete_calendar_event`. Other tools return `Vec::new()`.
     match tool_call.function.name.as_str() {
         "create_calendar_event" => {
             let text = tool_call
@@ -1420,21 +1441,24 @@ async fn execute_tool_call(
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             if text.is_empty() {
-                return Ok("错误：未提供创建日历事件所需的文本。".into());
+                return Ok(("错误：未提供创建日历事件所需的文本。".into(), Vec::new()));
             }
             match crate::routes::calendar::parse_and_create_event(state, user_id, text).await {
-                Ok(event) => Ok(format!(
-                    "日程已创建：\n- 标题：{}\n- 时间：{} 至 {}\n- 状态：{}\n- 日历：{}",
-                    event.title,
-                    event.start_time,
-                    event.end_time,
-                    event.status,
-                    event.calendar_name
+                Ok(event) => Ok((
+                    format!(
+                        "日程已创建：\n- 标题：{}\n- 时间：{} 至 {}\n- 状态：{}\n- 日历：{}",
+                        event.title,
+                        event.start_time,
+                        event.end_time,
+                        event.status,
+                        event.calendar_name
+                    ),
+                    Vec::new(),
                 )),
                 Err(e) => {
                     let msg = e.to_string();
                     tracing::warn!(%user_id, %text, %msg, "Calendar parse failed via chat tool");
-                    Ok(format!("创建日历事件失败：{msg}"))
+                    Ok((format!("创建日历事件失败：{msg}"), Vec::new()))
                 }
             }
         }
@@ -1442,7 +1466,7 @@ async fn execute_tool_call(
             match crate::routes::calendar::list_user_events(state, user_id, Some(20)).await {
                 Ok(events) => {
                     if events.is_empty() {
-                        Ok("当前没有即将到来的日历事件。".into())
+                        Ok(("当前没有即将到来的日历事件。".into(), Vec::new()))
                     } else {
                         let lines: Vec<String> = events
                             .iter()
@@ -1453,16 +1477,19 @@ async fn execute_tool_call(
                                 )
                             })
                             .collect();
-                        Ok(format!(
-                            "用户日历事件（共 {} 条）：\n{}",
-                            events.len(),
-                            lines.join("\n")
+                        Ok((
+                            format!(
+                                "用户日历事件（共 {} 条）：\n{}",
+                                events.len(),
+                                lines.join("\n")
+                            ),
+                            Vec::new(),
                         ))
                     }
                 }
                 Err(e) => {
                     tracing::warn!(%user_id, %e, "Calendar list failed via chat tool");
-                    Ok(format!("查询日历事件失败：{e}"))
+                    Ok((format!("查询日历事件失败：{e}"), Vec::new()))
                 }
             }
         }
@@ -1475,18 +1502,21 @@ async fn execute_tool_call(
                 .unwrap_or_default();
             let event_id = match Uuid::parse_str(event_id_str) {
                 Ok(id) => id,
-                Err(_) => return Ok(format!("无效的事件 ID：{event_id_str}")),
+                Err(_) => return Ok((format!("无效的事件 ID：{event_id_str}"), Vec::new())),
             };
             match crate::routes::calendar::delete_user_event(state, user_id, event_id).await {
-                Ok(()) => Ok(format!("已删除日历事件 {event_id}")),
+                Ok(apple_ids) => Ok((
+                    format!("已删除日历事件 {event_id}"),
+                    apple_ids,
+                )),
                 Err(e) => {
                     let msg = e.to_string();
                     tracing::warn!(%user_id, %event_id, %msg, "Calendar delete failed via chat tool");
-                    Ok(format!("删除日历事件失败：{msg}"))
+                    Ok((format!("删除日历事件失败：{msg}"), Vec::new()))
                 }
             }
         }
-        other => Ok(format!("未知工具：{other}")),
+        other => Ok((format!("未知工具：{other}"), Vec::new())),
     }
 }
 
@@ -1494,9 +1524,10 @@ async fn execute_tool_call(
 /// tool calls, append results to the conversation, and repeat until the model
 /// produces a text-only response (or we hit the max iteration limit).
 ///
-/// Returns `(messages, final_text)` where `final_text` is the model's last
-/// non-tool text response, if any. When `final_text` is `Some`, the caller
-/// should use it directly instead of making another streaming call.
+/// Returns `(messages, final_text, apple_calendar_deletes)` where
+/// `final_text` is the model's last non-tool text response, if any, and
+/// `apple_calendar_deletes` contains EventKit `eventIdentifier`s that the
+/// frontend should delete from the system calendar.
 async fn run_tool_loop(
     state: &AppState,
     llm: &crate::llm::client::LlmClient,
@@ -1505,12 +1536,13 @@ async fn run_tool_loop(
     messages: Vec<ChatMessage>,
     options: &ChatOptions,
     tools: &[crate::llm::client::ToolDefinition],
-) -> (Vec<ChatMessage>, Option<String>) {
+) -> (Vec<ChatMessage>, Option<String>, Vec<String>) {
     if tools.is_empty() {
-        return (messages, None);
+        return (messages, None, Vec::new());
     }
 
     let mut messages = messages;
+    let mut apple_calendar_deletes: Vec<String> = Vec::new();
     let mut iterations = 0;
 
     tracing::debug!(%user_id, tool_count = tools.len(), "Tool loop starting");
@@ -1538,7 +1570,7 @@ async fn run_tool_loop(
             }
             Err(e) => {
                 tracing::warn!(%user_id, %e, "chat_with_tools failed, falling through to plain chat");
-                return (messages, None);
+                return (messages, None, apple_calendar_deletes);
             }
         };
 
@@ -1547,7 +1579,7 @@ async fn run_tool_loop(
             // Return it so the caller can stream it directly without
             // making a redundant LLM call.
             if !response.content.is_empty() {
-                return (messages, Some(response.content));
+                return (messages, Some(response.content), apple_calendar_deletes);
             }
             // Empty content with no tool calls — fall through to streaming.
             break;
@@ -1566,13 +1598,16 @@ async fn run_tool_loop(
         // Execute each tool, pairing the result with its call id.
         let mut tool_results: Vec<(String, String)> = Vec::new();
         for tc in &tool_calls {
-            let result = match execute_tool_call(state, user_id, tc).await {
-                Ok(r) => r,
+            let (result, apple_ids) = match execute_tool_call(state, user_id, tc).await {
+                Ok((text, ids)) => (text, ids),
                 Err(e) => {
                     tracing::warn!(%user_id, tool = %tc.function.name, %e, "Tool execution failed");
-                    format!("工具执行失败：{e}")
+                    (format!("工具执行失败：{e}"), Vec::new())
                 }
             };
+            if !apple_ids.is_empty() {
+                apple_calendar_deletes.extend(apple_ids);
+            }
             tool_results.push((tc.id.clone(), result));
         }
 
@@ -1587,7 +1622,7 @@ async fn run_tool_loop(
         }
     }
 
-    (messages, None)
+    (messages, None, apple_calendar_deletes)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────

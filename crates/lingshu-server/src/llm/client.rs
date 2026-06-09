@@ -112,6 +112,11 @@ pub struct ChatChunk {
     /// when the session_id was not provided, or when persistence failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_message_id: Option<uuid::Uuid>,
+    /// Apple Calendar event IDs (EventKit `eventIdentifier`) that the frontend
+    /// should delete from the system calendar. Populated after a chat-tool
+    /// `delete_calendar_event` call removes an event that had been synced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apple_calendar_deletes: Option<Vec<String>>,
 }
 
 // ── Tool / Function Calling types ─────────────────────────────────
@@ -730,6 +735,7 @@ fn parse_byte_stream(
                                 content: String::new(),
                                 done: true,
                                 assistant_message_id: None,
+                            apple_calendar_deletes: None,
                             })),
                             (stream, bytes::BytesMut::new(), true),
                         ));
@@ -739,6 +745,7 @@ fn parse_byte_stream(
                             content: String::new(),
                             done: true,
                             assistant_message_id: None,
+                            apple_calendar_deletes: None,
                         }),
                         (stream, buf, true),
                     ));
@@ -780,6 +787,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
             content,
             done: true,
             assistant_message_id: None,
+                            apple_calendar_deletes: None,
         });
     }
     let content = parsed.message?.content;
@@ -790,6 +798,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
         content,
         done: false,
         assistant_message_id: None,
+                            apple_calendar_deletes: None,
     })
 }
 
@@ -805,6 +814,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
             content: String::new(),
             done: true,
             assistant_message_id: None,
+                            apple_calendar_deletes: None,
         });
     }
     let json_str = line.strip_prefix("data: ")?;
@@ -819,6 +829,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
         content,
         done,
         assistant_message_id: None,
+                            apple_calendar_deletes: None,
     })
 }
 

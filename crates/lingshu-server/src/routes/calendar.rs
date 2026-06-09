@@ -354,12 +354,30 @@ pub async fn list_user_events(
 /// Delete a calendar event by id. Shared by the HTTP endpoint and the
 /// chat tool-calling path. Unlike the HTTP handler, this does not require
 /// the confirmation flag — the chat tool call itself implies user intent.
+///
+/// Returns any Apple Calendar event identifiers (EventKit `eventIdentifier`s)
+/// that were stored on the event. The caller should arrange for the frontend
+/// to delete those system-calendar events as well.
 pub async fn delete_user_event(
     state: &AppState,
     user_id: Uuid,
     event_id: Uuid,
-) -> Result<(), AppError> {
+) -> Result<Vec<String>, AppError> {
     check_calendar_permission(state, user_id).await?;
+
+    // Look up Apple Calendar IDs *before* deleting so the frontend can
+    // also remove the event from the system calendar via EventKit.
+    let apple_ids: Vec<String> =
+        sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT external_event_id, apple_event_id \
+             FROM calendar_events WHERE id = $1 AND user_id = $2",
+        )
+        .bind(event_id)
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?
+        .map(|(ext, apple)| [ext, apple].into_iter().flatten().collect())
+        .unwrap_or_default();
 
     let rows = sqlx::query("DELETE FROM calendar_events WHERE id = $1 AND user_id = $2")
         .bind(event_id)
@@ -371,7 +389,7 @@ pub async fn delete_user_event(
     if rows == 0 {
         return Err(AppError::NotFound("Event not found".into()));
     }
-    Ok(())
+    Ok(apple_ids)
 }
 
 // ── Handler: parse ─────────────────────────────────────────────────
