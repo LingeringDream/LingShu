@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-06-10
+
+### Permissions Persistence
+
+- `feat(permissions)`: persist L0–L4 permission tiers to PostgreSQL (migration 0022, `users.permissions` JSONB) with DB load/save; tiers now survive server restarts.
+
+### Calendar
+
+- `feat(calendar)`: delete events with double-click confirmation; cancel via click-away or Escape.
+- `feat(calendar)`: sync event deletions to the Apple system calendar via the EventKit bridge.
+- `feat(calendar)`: refresh the event list when chat tool-calls modify events (`calendar-changed` event).
+- `refactor(calendar)`: remove the standalone `CalendarPanel` component; calendar UI now lives as `CalendarSection` inside `WorkspacePage`.
+
+### Projects
+
+- `feat(projects)`: add delete confirmation (cancel via click-away or Escape).
+
+### Testing
+
+- `test`: add frontend Vitest suite covering stores (chat, memory, project), `lib` (api, tauri, eventkit), and the `MessageBubble` component.
+- `test`: add unit tests across backend route modules (audit, project_members, task_dependencies, settings, calendar, etc.).
+
+### Documentation
+
+- Updated `README.md`, `README.en.md`, `CLAUDE.md`, `docs/mvp-status.md`, and `CHANGELOG.md`: migrations 001–0022, permission persistence, calendar UI consolidation, 65 OpenAPI operations, and expanded test inventory.
+
 ## 2026-06-09
 
 ### LLM Settings Persistence
