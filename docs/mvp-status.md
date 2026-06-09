@@ -1,7 +1,7 @@
 # LingShu MVP 完成度对照 · MVP Status vs PRD
 
 > 对照 `CLAUDE.md` 的 MVP 范围与 `AI-PersonalAssistant-PRD.md`，记录截至当前的实现状态、
-> 已知局限与剩余可选项。日期：2026-06-09。
+> 已知局限与剩余可选项。日期：2026-06-10。
 > 图例：✅ 已实现并测试 · ◐ 已实现但有验证缺口/局限 · ⏳ 未做（可选/非 MVP）
 
 ## 一、MVP 四大件（CLAUDE.md 范围）
@@ -9,9 +9,9 @@
 | 能力 | 状态 | 说明 |
 |------|------|------|
 | macOS 桌面壳 + 桌面宠物 | ✅ | Tauri 2，main 控制面板窗口 + pet 透明置顶可拖拽浮窗（原生 `startDragging`）；浏览器模式优雅降级 |
-| Apple Calendar | ✅ | 自然语言解析 → 落 PG → L1 逐次确认流 → EventKit 写入系统日历 + 回写 `external_event_id`；macOS 14+ `NSCalendarsFullAccessUsageDescription` 已配置 |
+| Apple Calendar | ✅ | 自然语言解析 → 落 PG → L1 逐次确认流 → EventKit 写入/删除系统日历 + 回写 `external_event_id`；事件删除/修改双击确认与 Apple 日历同步删除已实现；macOS 14+ `NSCalendarsFullAccessUsageDescription` 已配置 |
 | SoulLedger | ✅ | 见第二节，七项机制全部落地 |
-| 权限分级 L0–L4 | ◐ | 数据模型 + API + 日历处 L1 强制 + 审计日志 + LLM 设置已持久化至 PostgreSQL；**权限分级运行时设置仍仅存内存**（重启回默认） |
+| 权限分级 L0–L4 | ✅ | 数据模型 + API + 日历处 L1 强制 + 审计日志；**权限设置已持久化至 PostgreSQL**（migration 0022，`users.permissions` JSONB，重启保留） |
 
 ## 二、SoulLedger 机制（对照设计决策文档）
 
@@ -44,20 +44,21 @@
 | 集成令牌加密 | ✅ | AES-256-GCM 静态加密（`TokenCipher` 启动派生一次缓存），响应不回传任何 token |
 | SQL 注入 | ✅ | 全部参数化、按 `user_id` 作用域 |
 | 路由参数 | ✅ | 已修 axum 0.7 `:param` 语法（此前 `{id}` 致 by-id 路由全 404）+ router 级回归测试 |
-| 测试 | ✅ | **223** 单元 + DB 集成 + 路由回归（0 失败 / 15 ignored）；clippy `--all-targets --all-features -D warnings` 零警告 |
+| 测试 | ✅ | 后端 **300+** 测试函数（单元 + DB 集成 + 路由回归，16 项 DB 门控 ignored）+ 前端 Vitest 套件（stores / lib / 组件，18 项）；clippy `--all-targets --all-features -D warnings` 零警告 |
 | CI | ✅ | Rust lint/test、前端 type-check/build、Docker（GHCR 小写）、sqlx-cli 锁 0.8.x、actions v5 |
 
 ## 五、待办 / 验证缺口 / 可选增强
 
 1. **WebSocket 回声桩替换**（可选，非 MVP）：桌面宠物状态 / 主动建议实时推送，目前 `ws/handler.rs` 仍是回声。
-2. **权限分级设置持久化**（可选增强）：权限运行时设置目前仍存内存，重启回默认（LLM 设置已于 2026-06-09 完成持久化）。
-3. **Thought 跨会话实体计数触发器**（设计文档 §3 follow-up，可选）：让主动建议更精准，纯后端。
-4. **前端 ESLint 接入**：当前 `npm run lint` 未配置 ESLint 9 flat config。
-5. **OpenAPI 契约门禁**：严格 committed spec + frontend generated client + diff gate 仍待 Phase 1。
+2. **Thought 跨会话实体计数触发器**（设计文档 §3 follow-up，可选）：让主动建议更精准，纯后端。
+3. **前端 ESLint 接入**：当前 `npm run lint` 未配置 ESLint 9 flat config。
+4. **OpenAPI 契约门禁**：严格 committed spec + frontend generated client + diff gate 仍待 Phase 1。
+
+> 已完成（原待办）：LLM 设置持久化（2026-06-09，migration 0021）、权限分级设置持久化（2026-06-10，migration 0022）。
 
 ## 六、结论
 
 CLAUDE.md 定义的 MVP 范围（桌面壳 + Apple Calendar + SoulLedger + 权限分级）在代码层面**已全部落地**，
-后端经 223 项单元/集成/回归测试通过。Apple Calendar EventKit 写入 + external_event_id 回写已完整实现。
-Chat 侧工具调用、角色提示词、Markdown 渲染与 LLM 设置持久化均已完工。
+后端含 300+ 单元/集成/回归测试函数，前端新增 Vitest 套件。Apple Calendar EventKit 写入/删除 + external_event_id 回写已完整实现。
+Chat 侧工具调用、角色提示词、Markdown 渲染，以及 LLM 设置与权限分级的 PostgreSQL 持久化均已完工。
 剩余均为可选增强与非 MVP 项。
