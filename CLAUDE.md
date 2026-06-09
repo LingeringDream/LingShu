@@ -9,13 +9,13 @@ macOS desktop pet AI assistant. MVP: floating desktop avatar, Apple Calendar sch
 | Path | Purpose |
 |------|---------|
 | `crates/lingshu-server/src/main.rs` | Backend entry point |
-| `crates/lingshu-server/migrations/` | Database migrations (001–0021) |
-| `crates/lingshu-server/src/llm/` | SoulLedger: memory, forgetting, personality, thoughts, consolidation, dedup, prompts, client |
-| `crates/lingshu-server/src/routes/` | API routes (19 modules, 34 registered paths) |
+| `crates/lingshu-server/migrations/` | Database migrations (001–0022) |
+| `crates/lingshu-server/src/llm/` | SoulLedger: memory, forgetting, personality, thoughts, consolidation, dedup, prompts, semantic, ollama, client |
+| `crates/lingshu-server/src/routes/` | API routes (19 modules, 65 OpenAPI operations) |
 | `crates/lingshu-vector/src/` | Vector search (Qdrant) |
 | `frontend/src/main.tsx` | Frontend entry point (main window) |
 | `frontend/src/pet.tsx` | Pet window entry point |
-| `frontend/src/components/` | React components (10 module directories) |
+| `frontend/src/components/` | React components (9 module directories; calendar UI lives in workspace/) |
 | `src-tauri/src/main.rs` | Tauri desktop entry (main + pet windows) |
 | `src-tauri/src/eventkit.rs` | EventKit bridge (macOS Calendar) |
 | `docker/docker-compose.dev.yml` | Dev environment orchestration |
@@ -50,9 +50,9 @@ cd frontend && npm ci && npm run dev
 # Run migrations
 sqlx migrate run --source crates/lingshu-server/migrations
 
-# Test (223 passed / 0 failed / 15 ignored)
+# Test (300+ backend test fns, 16 DB-gated ignored)
 cargo test --workspace
-cd frontend && npm run type-check && npm run build
+cd frontend && npm run test && npm run type-check && npm run build
 
 # Tauri desktop build (macOS)
 cd src-tauri && cargo build
@@ -68,5 +68,5 @@ curl http://localhost:8080/api/v1/system/health
 - Tauri 2: set up with `src-tauri/` directory. Desktop shell provides main + pet windows plus EventKit bridge (macOS only). Browser mode gracefully degrades desktop-only features.
 - Infrastructure services (PostgreSQL, Redis, Qdrant) run in Docker. Backend and frontend can run natively or in Docker.
 - API endpoints must be registered in utoipa OpenAPI docs. Strict OpenAPI diffing and generated frontend clients are planned for Phase 1, not currently enforced by CI.
-- LLM settings are persisted to PostgreSQL (migration 0021) so they survive restarts. Permission tier runtime settings are still in-memory.
+- LLM settings are persisted to PostgreSQL (migration 0021) so they survive restarts. Permission tiers are also persisted to PostgreSQL (migration 0022, `users.permissions` JSONB) and survive restarts.
 - Chat supports tool calling (native tool-use loop), role prompts (customizable system prompts), and Markdown rendering (react-markdown + remark-gfm).
