@@ -1083,4 +1083,60 @@ mod tests {
 
         assert_eq!(embedding, vec![0.7_f32, 0.8]);
     }
+
+    // ── ChatChunk serialization ───────────────────────────────────
+
+    #[test]
+    fn chat_chunk_without_apple_deletes() {
+        let chunk = ChatChunk {
+            content: "hello".into(),
+            done: false,
+            assistant_message_id: None,
+            apple_calendar_deletes: None,
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"content\":\"hello\""));
+        assert!(json.contains("\"done\":false"));
+        assert!(!json.contains("apple_calendar_deletes"));
+    }
+
+    #[test]
+    fn chat_chunk_with_apple_deletes() {
+        let chunk = ChatChunk {
+            content: String::new(),
+            done: true,
+            assistant_message_id: None,
+            apple_calendar_deletes: Some(vec!["E2E:123".into(), "E2E:456".into()]),
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"done\":true"));
+        assert!(json.contains("\"apple_calendar_deletes\":[\"E2E:123\",\"E2E:456\"]"));
+    }
+
+    #[test]
+    fn chat_chunk_with_empty_apple_deletes() {
+        let chunk = ChatChunk {
+            content: String::new(),
+            done: true,
+            assistant_message_id: None,
+            apple_calendar_deletes: Some(Vec::new()),
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        // An empty Vec is Some, so it serialises as []
+        assert!(json.contains("\"apple_calendar_deletes\":[]"));
+    }
+
+    #[test]
+    fn chat_chunk_with_assistant_message_id() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let chunk = ChatChunk {
+            content: "done".into(),
+            done: true,
+            assistant_message_id: Some(id),
+            apple_calendar_deletes: None,
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"assistant_message_id\":\"550e8400-e29b-41d4-a716-446655440000\""));
+        assert!(!json.contains("apple_calendar_deletes"));
+    }
 }

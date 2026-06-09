@@ -820,4 +820,107 @@ mod tests {
         let err = validate_event_time(start, end).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
     }
+
+    // ── extract_json_slice ────────────────────────────────────────
+
+    #[test]
+    fn extract_json_plain_object() {
+        let result = extract_json_slice(r#"{"title":"test","confidence":0.9}"#);
+        assert_eq!(result, r#"{"title":"test","confidence":0.9}"#);
+    }
+
+    #[test]
+    fn extract_json_object_with_markdown_fence() {
+        let raw = "```json\n{\"title\":\"test\"}\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"title\":\"test\"}");
+    }
+
+    #[test]
+    fn extract_json_object_with_plain_fence() {
+        let raw = "```\n{\"key\":\"value\"}\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"key\":\"value\"}");
+    }
+
+    #[test]
+    fn extract_json_object_amidst_noise() {
+        let raw = "Sure, here is the result:\n\n{\"title\":\"meeting\",\"time\":\"3pm\"}\n\nHope that helps!";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"title\":\"meeting\",\"time\":\"3pm\"}");
+    }
+
+    #[test]
+    fn extract_json_array() {
+        let result = extract_json_slice(r#"["a","b","c"]"#);
+        assert_eq!(result, r#"["a","b","c"]"#);
+    }
+
+    #[test]
+    fn extract_json_array_in_fence() {
+        // { } takes priority over [ ], so the array brackets are stripped.
+        // This is still valid — the inner object(s) parse fine.
+        let raw = "```json\n[{\"name\":\"A\"},{\"name\":\"B\"}]\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"name\":\"A\"},{\"name\":\"B\"}");
+    }
+
+    #[test]
+    fn extract_json_pure_array_no_objects() {
+        // Pure array with no objects: falls through to [ ] match
+        let raw = "```json\n[\"a\",\"b\"]\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "[\"a\",\"b\"]");
+    }
+
+    #[test]
+    fn extract_json_object_over_array_when_both_present() {
+        // Object { } takes priority over array [ ]
+        let raw = "{\"events\":[1,2,3]}";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"events\":[1,2,3]}");
+    }
+
+    #[test]
+    fn extract_json_nested_braces() {
+        let raw = r#"{"outer":{"inner":"value"}}"#;
+        let result = extract_json_slice(raw);
+        assert_eq!(result, r#"{"outer":{"inner":"value"}}"#);
+    }
+
+    #[test]
+    fn extract_json_no_brackets_fallback() {
+        let raw = "just plain text without any brackets";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, raw);
+    }
+
+    #[test]
+    fn extract_json_empty_string() {
+        let result = extract_json_slice("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn extract_json_only_whitespace() {
+        let result = extract_json_slice("   \n\t  ");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn extract_json_malformed_mismatched_braces() {
+        // `rfind('}')` won't find a closing brace — falls back to array, then raw
+        let raw = "{\"a\":1  missing closing brace";
+        let result = extract_json_slice(raw);
+        // No '}' → no object match → no '[' / ']' → fallback
+        assert_eq!(result, raw.trim());
+    }
+
+    #[test]
+    fn extract_json_llm_apology_then_json() {
+        // Common LLM pattern: apologises then outputs JSON
+        let raw = "抱歉，我无法完成。\n```json\n{\"title\":\"test\"}\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"title\":\"test\"}");
+    }
 }
