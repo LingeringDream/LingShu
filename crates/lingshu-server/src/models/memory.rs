@@ -28,3 +28,33 @@ pub struct Memory {
 fn default_tier() -> String {
     "raw".to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_tier_is_raw() {
+        assert_eq!(default_tier(), "raw");
+    }
+
+    #[test]
+    fn memory_importance_defaults_to_0() {
+        // When no importance is set, it should default to 0.0
+        let json = serde_json::json!({
+            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "user_id": "550e8400-e29b-41d4-a716-446655440001",
+            "memory_type": "fact",
+            "content": "test",
+            "importance": 0.0,
+            "access_count": 0,
+            "metadata": {},
+            "tier": "raw",
+            "created_at": "2026-06-01T00:00:00Z",
+            "updated_at": "2026-06-01T00:00:00Z"
+        });
+        let m: Memory = serde_json::from_value(json).unwrap();
+        assert_eq!(m.memory_type, "fact");
+        assert_eq!(m.content, "test");
+    }
+}

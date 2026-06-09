@@ -310,3 +310,72 @@ async fn update_role_prompt(
         role_prompt: trimmed,
     }))
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn llm_settings_default_provider_is_ollama() {
+        let s = LlmSettings::default();
+        assert_eq!(s.provider, "ollama");
+    }
+
+    #[test]
+    fn llm_settings_default_temperature() {
+        let s = LlmSettings::default();
+        assert!((s.temperature - 0.7).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn llm_settings_default_max_tokens() {
+        let s = LlmSettings::default();
+        assert_eq!(s.max_tokens, 4096);
+    }
+
+    #[test]
+    fn llm_settings_default_context_messages() {
+        let s = LlmSettings::default();
+        assert_eq!(s.context_messages, 20);
+    }
+
+    #[test]
+    fn llm_settings_json_round_trip() {
+        let orig = LlmSettings {
+            provider: "openai".into(),
+            api_key: "sk-test".into(),
+            api_base_url: "https://api.deepseek.com".into(),
+            model: "deepseek-chat".into(),
+            temperature: 1.2,
+            max_tokens: 32000,
+            context_messages: 50,
+        };
+        let json = serde_json::to_value(&orig).unwrap();
+        let restored: LlmSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.provider, "openai");
+        assert_eq!(restored.api_key, "sk-test");
+        assert_eq!(restored.api_base_url, "https://api.deepseek.com");
+        assert_eq!(restored.model, "deepseek-chat");
+        assert!((restored.temperature - 1.2).abs() < f32::EPSILON);
+        assert_eq!(restored.max_tokens, 32000);
+        assert_eq!(restored.context_messages, 50);
+    }
+
+    #[test]
+    fn llm_settings_patch_partial() {
+        // Only provided fields should change
+        let patch = LlmSettingsPatch {
+            provider: Some("openai".into()),
+            api_key: None,
+            api_base_url: None,
+            model: None,
+            temperature: None,
+            max_tokens: None,
+            context_messages: None,
+        };
+        assert_eq!(patch.provider.as_deref(), Some("openai"));
+        assert!(patch.api_key.is_none());
+    }
+}

@@ -53,6 +53,7 @@ function CalendarSection() {
   const [syncResults, setSyncResults] = useState<Record<string, string>>({});
   const [inTauri, setInTauri] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
 
   const fetchEvents = useCallback(async () => {
     try {
@@ -62,6 +63,30 @@ function CalendarSection() {
   }, []);
 
   useEffect(() => { fetchEvents(); setInTauri(isTauri()); }, [fetchEvents]);
+
+  // Refresh calendar list when chat modifies events (e.g. delete via tool call)
+  useEffect(() => {
+    const handler = () => fetchEvents();
+    window.addEventListener('calendar-changed', handler);
+    return () => window.removeEventListener('calendar-changed', handler);
+  }, [fetchEvents]);
+
+  // Cancel delete confirmation when clicking elsewhere or pressing Escape
+  useEffect(() => {
+    if (!confirmingDelete) return;
+    const cancel = () => setConfirmingDelete(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cancel(); };
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-delete-btn]')) cancel();
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onClick);
+    };
+  }, [confirmingDelete]);
 
   const handleParse = async () => {
     if (!text.trim()) return;
@@ -94,8 +119,19 @@ function CalendarSection() {
     } catch { /* silent */ }
   };
 
-  const handleDeleteEvent = async (ev: CalendarEvent) => {
-    if (!window.confirm(`确定要删除「${ev.title}」吗？`)) return;
+  const handleDeleteClick = (ev: CalendarEvent) => {
+    // First click: show inline confirmation (window.confirm is blocked in Tauri)
+    if (confirmingDelete !== ev.id) {
+      setConfirmingDelete(ev.id);
+      return;
+    }
+    // Second click: execute delete
+    executeDelete(ev);
+  };
+
+  const executeDelete = async (ev: CalendarEvent) => {
+    setConfirmingDelete(null);
+    setError(null);
     try {
       // If the event was synced to Apple Calendar, delete it there first
       const appleId = ev.external_event_id || ev.apple_event_id;
@@ -103,8 +139,16 @@ function CalendarSection() {
         await deleteAppleCalendarEvent(appleId);
       }
       const resp = await apiFetch(`/api/v1/calendar/events/${ev.id}`, { method: 'DELETE' });
-      if (resp.ok) await fetchEvents();
-    } catch { /* silent */ }
+      if (resp.ok) {
+        await fetchEvents();
+      } else {
+        const errBody = await resp.json().catch(() => ({}));
+        const msg = (errBody as { error?: { message?: string } }).error?.message ?? `HTTP ${resp.status}`;
+        setError(`删除失败：${msg}`);
+      }
+    } catch (e) {
+      setError(`删除失败：${e instanceof Error ? e.message : '未知错误'}`);
+    }
   };
 
   const handleSync = async (ev: CalendarEvent) => {
@@ -194,9 +238,16 @@ function CalendarSection() {
                       >确认</button>
                     )}
                     <button
-                      onClick={() => handleDeleteEvent(ev)}
-                      style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid #e05555', borderRadius: 3, background: 'transparent', color: '#e05555' }}
-                    >删除</button>
+                      data-delete-btn
+                      onClick={() => handleDeleteClick(ev)}
+                      style={{
+                        padding: '2px 8px', fontSize: 11, cursor: 'pointer',
+                        border: `1px solid ${confirmingDelete === ev.id ? '#fff' : '#e05555'}`,
+                        borderRadius: 3,
+                        background: confirmingDelete === ev.id ? '#e05555' : 'transparent',
+                        color: confirmingDelete === ev.id ? '#fff' : '#e05555',
+                      }}
+                    >{confirmingDelete === ev.id ? '确认删除？' : '删除'}</button>
                     {inTauri && (
                       <button
                         onClick={() => handleSync(ev)}
@@ -355,8 +406,26 @@ function ProjectsSection() {
   const [editName, setEditName] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [collapsed, setCollapsed] = useState(false);
+  const [confirmingDeleteProject, setConfirmingDeleteProject] = useState<string | null>(null);
 
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
+
+  // Cancel project delete confirmation on Escape / click outside
+  useEffect(() => {
+    if (!confirmingDeleteProject) return;
+    const cancel = () => setConfirmingDeleteProject(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cancel(); };
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-delete-project-btn]')) cancel();
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onClick);
+    };
+  }, [confirmingDeleteProject]);
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -370,9 +439,13 @@ function ProjectsSection() {
     setEditingId(null);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('确定删除此项目及其中所有任务？')) return;
-    await deleteProject(id);
+  const handleDeleteClick = (id: string) => {
+    if (confirmingDeleteProject !== id) {
+      setConfirmingDeleteProject(id);
+      return;
+    }
+    setConfirmingDeleteProject(null);
+    deleteProject(id);
   };
 
   const startEdit = (p: Project) => {
@@ -428,7 +501,17 @@ function ProjectsSection() {
                       </div>
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button onClick={() => startEdit(p)} style={{ padding: '2px 6px', fontSize: 11, border: '1px solid #ccc', borderRadius: 3, background: 'transparent', cursor: 'pointer' }}>编辑</button>
-                        <button onClick={() => handleDelete(p.id)} style={{ padding: '2px 6px', fontSize: 11, border: '1px solid #e05555', borderRadius: 3, background: 'transparent', color: '#e05555', cursor: 'pointer' }}>删除</button>
+                        <button
+                          data-delete-project-btn
+                          onClick={() => handleDeleteClick(p.id)}
+                          style={{
+                            padding: '2px 6px', fontSize: 11, cursor: 'pointer',
+                            border: `1px solid ${confirmingDeleteProject === p.id ? '#fff' : '#e05555'}`,
+                            borderRadius: 3,
+                            background: confirmingDeleteProject === p.id ? '#e05555' : 'transparent',
+                            color: confirmingDeleteProject === p.id ? '#fff' : '#e05555',
+                          }}
+                        >{confirmingDeleteProject === p.id ? '确认删除？' : '删除'}</button>
                       </div>
                     </div>
                   )}

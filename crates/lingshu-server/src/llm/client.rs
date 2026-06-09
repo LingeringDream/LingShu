@@ -112,6 +112,11 @@ pub struct ChatChunk {
     /// when the session_id was not provided, or when persistence failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_message_id: Option<uuid::Uuid>,
+    /// Apple Calendar event IDs (EventKit `eventIdentifier`) that the frontend
+    /// should delete from the system calendar. Populated after a chat-tool
+    /// `delete_calendar_event` call removes an event that had been synced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apple_calendar_deletes: Option<Vec<String>>,
 }
 
 // ── Tool / Function Calling types ─────────────────────────────────
@@ -730,6 +735,7 @@ fn parse_byte_stream(
                                 content: String::new(),
                                 done: true,
                                 assistant_message_id: None,
+                                apple_calendar_deletes: None,
                             })),
                             (stream, bytes::BytesMut::new(), true),
                         ));
@@ -739,6 +745,7 @@ fn parse_byte_stream(
                             content: String::new(),
                             done: true,
                             assistant_message_id: None,
+                            apple_calendar_deletes: None,
                         }),
                         (stream, buf, true),
                     ));
@@ -780,6 +787,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
             content,
             done: true,
             assistant_message_id: None,
+            apple_calendar_deletes: None,
         });
     }
     let content = parsed.message?.content;
@@ -790,6 +798,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
         content,
         done: false,
         assistant_message_id: None,
+        apple_calendar_deletes: None,
     })
 }
 
@@ -805,6 +814,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
             content: String::new(),
             done: true,
             assistant_message_id: None,
+            apple_calendar_deletes: None,
         });
     }
     let json_str = line.strip_prefix("data: ")?;
@@ -819,6 +829,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
         content,
         done,
         assistant_message_id: None,
+        apple_calendar_deletes: None,
     })
 }
 
@@ -1071,5 +1082,61 @@ mod tests {
             .expect("OpenAI embed with /v1 already in base URL should work");
 
         assert_eq!(embedding, vec![0.7_f32, 0.8]);
+    }
+
+    // ── ChatChunk serialization ───────────────────────────────────
+
+    #[test]
+    fn chat_chunk_without_apple_deletes() {
+        let chunk = ChatChunk {
+            content: "hello".into(),
+            done: false,
+            assistant_message_id: None,
+            apple_calendar_deletes: None,
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"content\":\"hello\""));
+        assert!(json.contains("\"done\":false"));
+        assert!(!json.contains("apple_calendar_deletes"));
+    }
+
+    #[test]
+    fn chat_chunk_with_apple_deletes() {
+        let chunk = ChatChunk {
+            content: String::new(),
+            done: true,
+            assistant_message_id: None,
+            apple_calendar_deletes: Some(vec!["E2E:123".into(), "E2E:456".into()]),
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"done\":true"));
+        assert!(json.contains("\"apple_calendar_deletes\":[\"E2E:123\",\"E2E:456\"]"));
+    }
+
+    #[test]
+    fn chat_chunk_with_empty_apple_deletes() {
+        let chunk = ChatChunk {
+            content: String::new(),
+            done: true,
+            assistant_message_id: None,
+            apple_calendar_deletes: Some(Vec::new()),
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        // An empty Vec is Some, so it serialises as []
+        assert!(json.contains("\"apple_calendar_deletes\":[]"));
+    }
+
+    #[test]
+    fn chat_chunk_with_assistant_message_id() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let chunk = ChatChunk {
+            content: "done".into(),
+            done: true,
+            assistant_message_id: Some(id),
+            apple_calendar_deletes: None,
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"assistant_message_id\":\"550e8400-e29b-41d4-a716-446655440000\""));
+        assert!(!json.contains("apple_calendar_deletes"));
     }
 }

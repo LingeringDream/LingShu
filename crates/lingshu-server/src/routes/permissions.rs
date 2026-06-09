@@ -158,3 +158,125 @@ async fn update_permissions(
 
     Ok(Json(settings.clone()))
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_permissions_have_l0_only() {
+        let p = PermissionSettings::default();
+        assert!(p.l0_enabled);
+        assert!(!p.l1_calendar);
+        assert!(p.l1_require_confirmation);
+        assert!(!p.l2_automation);
+        assert!(p.l2_whitelist_only);
+        assert!(!p.l3_accessibility);
+        assert!(!p.l4_autonomous);
+    }
+
+    #[test]
+    fn permissions_json_round_trip() {
+        let orig = PermissionSettings {
+            l0_enabled: true,
+            l1_calendar: true,
+            l1_require_confirmation: false,
+            l2_automation: true,
+            l2_whitelist_only: false,
+            l3_accessibility: true,
+            l4_autonomous: false,
+        };
+        let json = serde_json::to_value(&orig).unwrap();
+        let restored: PermissionSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.l0_enabled, orig.l0_enabled);
+        assert_eq!(restored.l1_calendar, orig.l1_calendar);
+        assert_eq!(
+            restored.l1_require_confirmation,
+            orig.l1_require_confirmation
+        );
+        assert_eq!(restored.l2_automation, orig.l2_automation);
+        assert_eq!(restored.l2_whitelist_only, orig.l2_whitelist_only);
+        assert_eq!(restored.l3_accessibility, orig.l3_accessibility);
+        assert_eq!(restored.l4_autonomous, orig.l4_autonomous);
+    }
+
+    #[test]
+    fn permission_patch_partial_update() {
+        let mut settings = PermissionSettings::default();
+        // Apply a patch with only l1_calendar
+        let patch = PermissionPatch {
+            l1_calendar: Some(true),
+            l1_require_confirmation: None,
+            l2_automation: None,
+            l2_whitelist_only: None,
+            l3_accessibility: None,
+            l4_autonomous: None,
+        };
+        if let Some(v) = patch.l1_calendar {
+            settings.l1_calendar = v;
+        }
+        if let Some(v) = patch.l1_require_confirmation {
+            settings.l1_require_confirmation = v;
+        }
+        // Only l1_calendar should change; l1_require_confirmation stays default
+        assert!(settings.l1_calendar);
+        assert!(settings.l1_require_confirmation); // unchanged default
+        assert!(!settings.l2_automation); // unchanged default
+    }
+
+    #[test]
+    fn permission_patch_all_fields() {
+        let mut settings = PermissionSettings::default();
+        let patch = PermissionPatch {
+            l1_calendar: Some(true),
+            l1_require_confirmation: Some(false),
+            l2_automation: Some(true),
+            l2_whitelist_only: Some(false),
+            l3_accessibility: Some(true),
+            l4_autonomous: Some(false),
+        };
+        // Apply all fields
+        if let Some(v) = patch.l1_calendar {
+            settings.l1_calendar = v;
+        }
+        if let Some(v) = patch.l1_require_confirmation {
+            settings.l1_require_confirmation = v;
+        }
+        if let Some(v) = patch.l2_automation {
+            settings.l2_automation = v;
+        }
+        if let Some(v) = patch.l2_whitelist_only {
+            settings.l2_whitelist_only = v;
+        }
+        if let Some(v) = patch.l3_accessibility {
+            settings.l3_accessibility = v;
+        }
+        if let Some(v) = patch.l4_autonomous {
+            settings.l4_autonomous = v;
+        }
+
+        assert!(settings.l1_calendar);
+        assert!(!settings.l1_require_confirmation);
+        assert!(settings.l2_automation);
+        assert!(!settings.l2_whitelist_only);
+        assert!(settings.l3_accessibility);
+        assert!(!settings.l4_autonomous);
+    }
+
+    #[test]
+    fn permission_settings_db_json_null_is_default() {
+        // When the DB returns SQL NULL for the permissions column,
+        // serde_json::from_value(Value::Null) should fail → fallback to defaults.
+        let result: Result<PermissionSettings, _> = serde_json::from_value(serde_json::Value::Null);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn l0_enabled_is_always_true_in_default() {
+        // L0 should never be disabled — it guards basic chat+pet functionality
+        let p = PermissionSettings::default();
+        assert!(p.l0_enabled);
+    }
+}

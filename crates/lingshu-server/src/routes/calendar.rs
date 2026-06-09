@@ -354,12 +354,29 @@ pub async fn list_user_events(
 /// Delete a calendar event by id. Shared by the HTTP endpoint and the
 /// chat tool-calling path. Unlike the HTTP handler, this does not require
 /// the confirmation flag — the chat tool call itself implies user intent.
+///
+/// Returns any Apple Calendar event identifiers (EventKit `eventIdentifier`s)
+/// that were stored on the event. The caller should arrange for the frontend
+/// to delete those system-calendar events as well.
 pub async fn delete_user_event(
     state: &AppState,
     user_id: Uuid,
     event_id: Uuid,
-) -> Result<(), AppError> {
+) -> Result<Vec<String>, AppError> {
     check_calendar_permission(state, user_id).await?;
+
+    // Look up Apple Calendar IDs *before* deleting so the frontend can
+    // also remove the event from the system calendar via EventKit.
+    let apple_ids: Vec<String> = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT external_event_id, apple_event_id \
+             FROM calendar_events WHERE id = $1 AND user_id = $2",
+    )
+    .bind(event_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .map(|(ext, apple)| [ext, apple].into_iter().flatten().collect())
+    .unwrap_or_default();
 
     let rows = sqlx::query("DELETE FROM calendar_events WHERE id = $1 AND user_id = $2")
         .bind(event_id)
@@ -371,7 +388,7 @@ pub async fn delete_user_event(
     if rows == 0 {
         return Err(AppError::NotFound("Event not found".into()));
     }
-    Ok(())
+    Ok(apple_ids)
 }
 
 // ── Handler: parse ─────────────────────────────────────────────────
@@ -801,5 +818,108 @@ mod tests {
         let end = parse_time("2026-06-06T09:00:00Z").unwrap();
         let err = validate_event_time(start, end).unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    // ── extract_json_slice ────────────────────────────────────────
+
+    #[test]
+    fn extract_json_plain_object() {
+        let result = extract_json_slice(r#"{"title":"test","confidence":0.9}"#);
+        assert_eq!(result, r#"{"title":"test","confidence":0.9}"#);
+    }
+
+    #[test]
+    fn extract_json_object_with_markdown_fence() {
+        let raw = "```json\n{\"title\":\"test\"}\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"title\":\"test\"}");
+    }
+
+    #[test]
+    fn extract_json_object_with_plain_fence() {
+        let raw = "```\n{\"key\":\"value\"}\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"key\":\"value\"}");
+    }
+
+    #[test]
+    fn extract_json_object_amidst_noise() {
+        let raw = "Sure, here is the result:\n\n{\"title\":\"meeting\",\"time\":\"3pm\"}\n\nHope that helps!";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"title\":\"meeting\",\"time\":\"3pm\"}");
+    }
+
+    #[test]
+    fn extract_json_array() {
+        let result = extract_json_slice(r#"["a","b","c"]"#);
+        assert_eq!(result, r#"["a","b","c"]"#);
+    }
+
+    #[test]
+    fn extract_json_array_in_fence() {
+        // { } takes priority over [ ], so the array brackets are stripped.
+        // This is still valid — the inner object(s) parse fine.
+        let raw = "```json\n[{\"name\":\"A\"},{\"name\":\"B\"}]\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"name\":\"A\"},{\"name\":\"B\"}");
+    }
+
+    #[test]
+    fn extract_json_pure_array_no_objects() {
+        // Pure array with no objects: falls through to [ ] match
+        let raw = "```json\n[\"a\",\"b\"]\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "[\"a\",\"b\"]");
+    }
+
+    #[test]
+    fn extract_json_object_over_array_when_both_present() {
+        // Object { } takes priority over array [ ]
+        let raw = "{\"events\":[1,2,3]}";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"events\":[1,2,3]}");
+    }
+
+    #[test]
+    fn extract_json_nested_braces() {
+        let raw = r#"{"outer":{"inner":"value"}}"#;
+        let result = extract_json_slice(raw);
+        assert_eq!(result, r#"{"outer":{"inner":"value"}}"#);
+    }
+
+    #[test]
+    fn extract_json_no_brackets_fallback() {
+        let raw = "just plain text without any brackets";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, raw);
+    }
+
+    #[test]
+    fn extract_json_empty_string() {
+        let result = extract_json_slice("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn extract_json_only_whitespace() {
+        let result = extract_json_slice("   \n\t  ");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn extract_json_malformed_mismatched_braces() {
+        // `rfind('}')` won't find a closing brace — falls back to array, then raw
+        let raw = "{\"a\":1  missing closing brace";
+        let result = extract_json_slice(raw);
+        // No '}' → no object match → no '[' / ']' → fallback
+        assert_eq!(result, raw.trim());
+    }
+
+    #[test]
+    fn extract_json_llm_apology_then_json() {
+        // Common LLM pattern: apologises then outputs JSON
+        let raw = "抱歉，我无法完成。\n```json\n{\"title\":\"test\"}\n```";
+        let result = extract_json_slice(raw);
+        assert_eq!(result, "{\"title\":\"test\"}");
     }
 }

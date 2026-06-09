@@ -16,8 +16,8 @@ A macOS desktop-companion AI assistant — a floating desktop pet with long-term
 |----------|-----------|--------|
 | Desktop Pet | Transparent overlay, draggable, snappable floating window; Tauri `startDragging` native drag | ✅ Tauri 2 shell ready |
 | SoulLedger | Layered memory, dedup, forgetting decay (with provenance guardrails), personality evolution, offline LLM semantic consolidation, vector retrieval | ✅ Backend complete |
-| Apple Calendar | Natural-language scheduling, L1 confirmation flow, event CRUD, EventKit system calendar write-back, external_event_id sync | ✅ Backend + bridge complete |
-| Permission Tiers | L0–L4 graduated system access + audit logging | ✅ Backend complete |
+| Apple Calendar | Natural-language scheduling, L1 confirmation flow, event CRUD, EventKit system calendar write-back/delete, external_event_id sync | ✅ Backend + bridge complete |
+| Permission Tiers | L0–L4 graduated system access + audit logging, settings persisted to PostgreSQL | ✅ Backend complete |
 | Thought Queue | State machine + anti-nag suppression + lifecycle guards + daily maintenance + explainable confidence | ✅ Backend complete |
 | Integration Token Encryption | AES-256-GCM at-rest encryption | ✅ Implemented |
 | Signal Telemetry | Append-only event log, wired into memory, personality, and chat paths | ✅ Implemented |
@@ -28,21 +28,22 @@ A macOS desktop-companion AI assistant — a floating desktop pet with long-term
 
 ## Project Status
 
-**Core backend mechanisms are complete; finishing desktop/native integration.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and calendar EventKit write-back are all implemented. Backend passes **223 tests (0 failures / 15 ignored)**.
+**Core backend mechanisms are complete; finishing desktop/native integration.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and calendar EventKit write-back/delete are all implemented. Backend carries **300+ test functions (16 DB-gated ignored)**; the frontend adds a Vitest suite (stores / lib / components, 18 tests).
 
-- ✅ Rust + Axum backend (API, WebSocket, DB migrations 001–0021)
+- ✅ Rust + Axum backend (API, WebSocket, DB migrations 001–0022)
 - ✅ React + TypeScript + Vite frontend (chat + memory/personality/calendar/thought centers + settings + role prompts + workspace)
 - ✅ PostgreSQL + Redis + Qdrant development environment
 - ✅ SoulLedger: memory extraction/dedup, forgetting decay + provenance guardrails, personality evolution, offline LLM semantic consolidation
 - ✅ Semantic memory retrieval (Ollama embeddings + Qdrant, with SQL fallback)
 - ✅ Thought Queue state machine + anti-nag + lifecycle guards + daily maintenance
-- ✅ Permission tiers L0–L4 + audit log
+- ✅ Permission tiers L0–L4 + audit log, settings persisted to PostgreSQL (migration 0022)
 - ✅ Integration token AES-256-GCM at-rest encryption
 - ✅ Signal telemetry event layer, wired into core business paths
 - ✅ Tauri 2 desktop shell (main + pet windows) + EventKit bridge (macOS 14+ `NSCalendarsFullAccessUsageDescription`)
-- ✅ Apple Calendar: NL parse + CRUD + L1 confirmation + EventKit write-back + external_event_id sync
+- ✅ Apple Calendar: NL parse + CRUD + L1 confirmation + EventKit write-back/delete + external_event_id sync
 - ✅ Chat: tool-use loop, role prompts, Markdown rendering, streaming SSE responses
 - ✅ LLM settings persisted to PostgreSQL (model, max_tokens, context_messages, etc. — survives restarts)
+- ✅ Frontend Vitest unit suite (chatStore / memoryStore / projectStore / MessageBubble / api / tauri / eventkit)
 
 Full product spec: [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) (Chinese)
 
@@ -165,7 +166,6 @@ crates/
 frontend/              React + TypeScript + Vite SPA (includes pet window entry)
   src/components/
     avatar/            Desktop pet (PetWindow, AvatarPlaceholder, AvatarControlPanel)
-    calendar/          Calendar panel
     chat/              Chat window (ChatWindow, ChatInput, MessageBubble, ChatSettings, RolePromptSettings)
     layout/            App layout (AppLayout)
     memory/            Memory center (MemoryCenter)
@@ -173,7 +173,7 @@ frontend/              React + TypeScript + Vite SPA (includes pet window entry)
     projects/          Project manager (ProjectManager)
     settings/          Permission settings (PermissionSettings)
     thoughts/          Thought queue (ThoughtQueue)
-    workspace/         Workspace page (WorkspacePage)
+    workspace/         Workspace page (WorkspacePage, includes CalendarSection)
   src/stores/          Zustand state management (chatStore, memoryStore, projectStore)
   src/lib/             API client, EventKit bridge, Tauri utilities
 src-tauri/             Tauri 2 desktop shell (standalone Cargo workspace): main + pet windows, EventKit bridge
@@ -182,7 +182,7 @@ docs/                  Design decisions, MVP status, and other documents
 poc/                   Technology proofs of concept (AGE graph, LLM streaming, Qdrant)
 ```
 
-SoulLedger key modules (`crates/lingshu-server/src/llm/`): `memory.rs` (extraction/dedup), `forgetting.rs` (decay + provenance guardrails), `personality.rs` (personality evolution), `consolidation.rs` (offline semantic merge), `thoughts.rs` (proactive suggestions), `dedup.rs`, `prompts.rs`, `semantic.rs`, `client.rs` (Ollama/OpenAI + embeddings + tool calling).
+SoulLedger key modules (`crates/lingshu-server/src/llm/`): `memory.rs` (extraction/dedup), `forgetting.rs` (decay + provenance guardrails), `personality.rs` (personality evolution), `consolidation.rs` (offline semantic merge), `thoughts.rs` (proactive suggestions), `dedup.rs`, `prompts.rs`, `semantic.rs` (semantic retrieval), `ollama.rs` (Ollama adapter), `client.rs` (Ollama/OpenAI + embeddings + tool calling).
 
 Backend routes (`crates/lingshu-server/src/routes/`): `chat.rs` (chat + tool calling), `calendar.rs`, `memories.rs`, `personality.rs`, `thoughts.rs`, `permissions.rs`, `settings.rs` (LLM settings + role prompts), `integrations.rs`, `signals.rs`, `audit.rs`, `conversations.rs`, `projects.rs`, `tasks.rs`, `users.rs`, `auth.rs`, `system.rs`, `sessions.rs`, `project_members.rs`, `task_dependencies.rs`.
 
@@ -220,11 +220,11 @@ cd frontend && ./node_modules/.bin/tauri dev
 ## Testing
 
 ```bash
-# Backend tests (223 passed / 0 failed / 15 ignored)
+# Backend tests (300+ test functions, 16 DB-gated ignored)
 cargo test --workspace
 
-# Frontend type-check + build
-cd frontend && npm run type-check && npm run build
+# Frontend unit tests (Vitest) + type-check + build
+cd frontend && npm run test && npm run type-check && npm run build
 
 # Tauri build (macOS)
 cd src-tauri && cargo build
@@ -239,13 +239,13 @@ CI (GitHub Actions): Rust fmt/clippy/test, frontend type-check/build, Docker ima
 
 ## API Documentation
 
-OpenAPI 3.0 generated by [utoipa](https://github.com/juhaku/utoipa), covering all **34 registered routes** (system, auth, users, LLM settings, chat, sessions, memories, personality, thoughts, calendar, permissions, integrations, signals, audit, project management, etc.). Swagger UI available at `/swagger-ui` while the backend is running.
+OpenAPI 3.0 generated by [utoipa](https://github.com/juhaku/utoipa), covering all **65 registered operations** (system, auth, users, LLM settings, chat, sessions, memories, personality, thoughts, calendar, permissions, integrations, signals, audit, project management, etc.). Swagger UI available at `/swagger-ui` while the backend is running.
 
 ## Known Limitations
 
 - WebSocket is still an echo stub; real-time push for proactive suggestions is pending.
-- Permission tier runtime settings are currently in-memory, resetting on restart (LLM settings were migrated to PostgreSQL on 2026-06-09).
 - Thought Queue "cross-session entity count" trigger is a future enhancement.
+- Frontend ESLint (ESLint 9 flat config) and an OpenAPI contract gate (committed spec + generated client + diff gate) are still pending for Phase 1.
 
 ## Documentation
 

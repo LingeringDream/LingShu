@@ -58,3 +58,46 @@ impl Default for PersonalityTraits {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_traits_all_0_5() {
+        let t = PersonalityTraits::default();
+        assert!((t.directness - 0.5).abs() < f32::EPSILON);
+        assert!((t.warmth - 0.5).abs() < f32::EPSILON);
+        assert!((t.proactivity - 0.5).abs() < f32::EPSILON);
+        assert!((t.risk_tolerance - 0.5).abs() < f32::EPSILON);
+        assert!((t.verbosity - 0.5).abs() < f32::EPSILON);
+        assert!((t.formality - 0.5).abs() < f32::EPSILON);
+        assert!((t.humor - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn traits_json_round_trip() {
+        let orig = PersonalityTraits {
+            directness: 0.8,
+            warmth: 0.6,
+            proactivity: 0.3,
+            risk_tolerance: 0.9,
+            verbosity: 0.2,
+            formality: 0.7,
+            humor: 0.4,
+        };
+        let json = serde_json::to_value(&orig).unwrap();
+        let restored: PersonalityTraits = serde_json::from_value(json).unwrap();
+        assert!((restored.directness - 0.8).abs() < f32::EPSILON);
+        assert!((restored.humor - 0.4).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn traits_json_missing_fields_get_default() {
+        let json = serde_json::json!({"warmth": 0.9});
+        let t: PersonalityTraits = serde_json::from_value(json).unwrap();
+        assert!((t.warmth - 0.9).abs() < f32::EPSILON);
+        assert!((t.directness - 0.5).abs() < f32::EPSILON); // default
+        assert!((t.humor - 0.5).abs() < f32::EPSILON); // default
+    }
+}

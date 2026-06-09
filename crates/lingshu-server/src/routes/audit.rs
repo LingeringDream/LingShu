@@ -113,3 +113,49 @@ impl AuditRow {
         }
     }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn audit_params_defaults() {
+        let json = serde_json::json!({});
+        let params: AuditParams = serde_json::from_value(json).unwrap();
+        assert!(params.resource_type.is_none());
+        assert!(params.limit.is_none());
+        assert!(params.offset.is_none());
+    }
+
+    #[test]
+    fn audit_params_with_filters() {
+        let json =
+            serde_json::json!({"resource_type": "calendar_event", "limit": 50, "offset": 10});
+        let params: AuditParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.resource_type.unwrap(), "calendar_event");
+        assert_eq!(params.limit.unwrap(), 50);
+        assert_eq!(params.offset.unwrap(), 10);
+    }
+
+    #[test]
+    fn audit_entry_response_serialization() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let now = Utc::now();
+        let resp = AuditEntryResponse {
+            id,
+            user_id: Some(uuid::Uuid::new_v4()),
+            action: "delete".into(),
+            resource_type: "calendar_event".into(),
+            resource_id: Some(uuid::Uuid::new_v4()),
+            details: serde_json::json!({"title": "Meeting"}),
+            ip_address: Some("127.0.0.1".into()),
+            created_at: now,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["action"], "delete");
+        assert_eq!(json["resource_type"], "calendar_event");
+    }
+}

@@ -10,10 +10,28 @@ export function ProjectManager() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editDesc, setEditDesc] = useState('');
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
 
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
+
+  // Cancel delete confirmation on Escape / click outside
+  useEffect(() => {
+    if (!confirmingDelete) return;
+    const cancel = () => setConfirmingDelete(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cancel(); };
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-delete-project-btn]')) cancel();
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onClick);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onClick);
+    };
+  }, [confirmingDelete]);
 
   const handleCreate = async () => {
     if (!name.trim()) return;
@@ -29,9 +47,13 @@ export function ProjectManager() {
     setEditingId(null);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('确定要删除这个项目吗？')) return;
-    await deleteProject(id);
+  const handleDeleteClick = (id: string) => {
+    if (confirmingDelete !== id) {
+      setConfirmingDelete(id);
+      return;
+    }
+    setConfirmingDelete(null);
+    deleteProject(id);
   };
 
   const startEdit = (p: Project) => {
@@ -195,10 +217,17 @@ export function ProjectManager() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleDelete(p.id)}
-                      style={{ padding: '2px 8px', fontSize: 12, border: '1px solid #ecc', borderRadius: 3, background: 'transparent', color: '#c55', cursor: 'pointer' }}
+                      data-delete-project-btn
+                      onClick={() => handleDeleteClick(p.id)}
+                      style={{
+                        padding: '2px 8px', fontSize: 12, cursor: 'pointer',
+                        border: `1px solid ${confirmingDelete === p.id ? '#fff' : '#ecc'}`,
+                        borderRadius: 3,
+                        background: confirmingDelete === p.id ? '#c55' : 'transparent',
+                        color: confirmingDelete === p.id ? '#fff' : '#c55',
+                      }}
                     >
-                      删除
+                      {confirmingDelete === p.id ? '确认删除？' : '删除'}
                     </button>
                   </div>
                 </div>

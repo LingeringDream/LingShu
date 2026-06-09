@@ -254,3 +254,43 @@ pub async fn get_health(
         }
     })))
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn create_project_request_minimal() {
+        let json = serde_json::json!({"name": "My Project"});
+        let req: CreateProjectRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.name, "My Project");
+        assert!(req.description.is_none());
+    }
+
+    #[test]
+    fn create_project_request_with_description() {
+        let json = serde_json::json!({"name": "P", "description": "desc"});
+        let req: CreateProjectRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.description.unwrap(), "desc");
+    }
+
+    #[test]
+    fn project_response_serialization() {
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let now = Utc::now();
+        let resp = ProjectResponse {
+            id,
+            name: "Test".into(),
+            description: Some("A test project".into()),
+            status: "active".into(),
+            health_score: Some(0.85),
+            created_at: now,
+        };
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["name"], "Test");
+        assert_eq!(json["status"], "active");
+    }
+}

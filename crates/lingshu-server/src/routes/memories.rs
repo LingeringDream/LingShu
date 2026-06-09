@@ -411,3 +411,67 @@ fn memory_to_response(m: Memory) -> MemoryResponse {
         updated_at: m.updated_at,
     }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    #[test]
+    fn default_importance_is_0_5() {
+        assert!((default_importance() - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn create_memory_request_defaults() {
+        let req = CreateMemoryRequest {
+            memory_type: "fact".into(),
+            content: "Paris is the capital of France".into(),
+            importance: 0.0, // explicit, should override default
+        };
+        assert_eq!(req.memory_type, "fact");
+        assert_eq!(req.content, "Paris is the capital of France");
+        assert!((req.importance - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn create_memory_request_uses_default_importance() {
+        let json = serde_json::json!({
+            "memory_type": "preference",
+            "content": "I prefer dark mode"
+        });
+        let req: CreateMemoryRequest = serde_json::from_value(json).unwrap();
+        assert!((req.importance - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn memory_to_response_maps_fields() {
+        let id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let now = Utc::now();
+        let m = Memory {
+            id,
+            user_id: Uuid::new_v4(),
+            project_id: None,
+            memory_type: "fact".into(),
+            content: "test content".into(),
+            importance: 0.8,
+            access_count: 3,
+            last_accessed_at: Some(now),
+            vector_id: None,
+            source_memory_ids: vec![],
+            tier: "raw".into(),
+            metadata: serde_json::json!({"source": "chat"}),
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let resp = memory_to_response(m);
+        assert_eq!(resp.id, id);
+        assert_eq!(resp.memory_type, "fact");
+        assert_eq!(resp.content, "test content");
+        assert!((resp.importance - 0.8).abs() < f32::EPSILON);
+    }
+}

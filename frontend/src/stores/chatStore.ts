@@ -132,6 +132,22 @@ export const useChatStore = create<ChatState>()(
                         ),
                       }));
                     }
+                    // Apple Calendar delete sync: when the backend deletes a
+                    // calendar event via the chat tool, it includes any EventKit
+                    // eventIdentifiers that the frontend needs to remove from the
+                    // system calendar.
+                    if (data.apple_calendar_deletes && Array.isArray(data.apple_calendar_deletes)) {
+                      import('../lib/eventkit').then(
+                        ({ deleteAppleCalendarEvent }) => {
+                          for (const id of data.apple_calendar_deletes) {
+                            deleteAppleCalendarEvent(id).catch(() => {});
+                          }
+                        },
+                        () => {},
+                      );
+                      // Calendar was modified — notify components to refresh
+                      window.dispatchEvent(new CustomEvent('calendar-changed'));
+                    }
                     if (data.done) {
                       // Streaming complete — capture the backend message id for feedback
                       const dbId: string | undefined = data.assistant_message_id;

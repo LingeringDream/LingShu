@@ -217,3 +217,32 @@ impl MemberRow {
         }
     }
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_role_is_member() {
+        assert_eq!(default_role(), "member");
+    }
+
+    #[test]
+    fn add_member_request_defaults() {
+        let uid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let json = serde_json::json!({"user_id": uid.to_string()});
+        let req: AddMemberRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.user_id, uid);
+        assert_eq!(req.role, "member");
+    }
+
+    #[test]
+    fn add_member_request_custom_role() {
+        let uid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let json = serde_json::json!({"user_id": uid.to_string(), "role": "admin"});
+        let req: AddMemberRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.role, "admin");
+    }
+}
