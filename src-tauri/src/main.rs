@@ -25,7 +25,6 @@ fn main() {
             eventkit::delete_calendar_event,
         ])
         .setup(|app| {
-            // On macOS, bring the app to the foreground so both windows appear.
             #[cfg(target_os = "macos")]
             {
                 use tauri::ActivationPolicy;

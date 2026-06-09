@@ -4,6 +4,7 @@
   "windows": ["main", "pet"],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     "opener:default"
   ]
 }

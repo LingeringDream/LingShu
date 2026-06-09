@@ -34,7 +34,7 @@ export function AppLayout({ children, activeSection = 'home', onNavigate }: AppL
     <div className="app-shell">
       <header className="app-topbar">
         <div className="topbar-brand">
-          <img className="topbar-logo" src="/brand/lingshu-icon.svg" alt="灵枢" />
+          <img className="topbar-logo" src="/icon.png" alt="灵枢" />
           <h1>个人助理本地控制台</h1>
         </div>
         <div className="topbar-actions">
@@ -47,7 +47,7 @@ export function AppLayout({ children, activeSection = 'home', onNavigate }: AppL
       <div className="app-frame">
         <aside className="app-sidebar">
           <div className="brand-block">
-            <img className="brand-mark" src="/brand/lingshu-icon.svg" alt="" aria-hidden="true" />
+            <img className="brand-mark" src="/icon.png" alt="" aria-hidden="true" />
             <div>
               <div className="brand-title">灵枢</div>
               <div className="brand-subtitle">macOS 桌面 AI 个人助理</div>

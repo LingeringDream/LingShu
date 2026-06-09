@@ -23,7 +23,7 @@ export async function ensureLocalSession(force = false): Promise<LocalSessionRes
   }
 
   if (!localSessionRequest) {
-    localSessionRequest = fetch('/api/v1/auth/local-session', { method: 'POST' })
+    localSessionRequest = fetch(apiBaseUrl() + '/api/v1/auth/local-session', { method: 'POST' })
       .then(async (resp) => {
         if (!resp.ok) {
           const err = await resp.json().catch(() => null);
@@ -68,18 +68,31 @@ export async function postSignal(payload: SignalPayload): Promise<void> {
   }
 }
 
+function apiBaseUrl(): string {
+  // In Tauri (built .app), there's no Vite proxy — use the backend directly.
+  // In Vite dev, relative paths are proxied by the dev server.
+  if (typeof window !== 'undefined' && '__TAURI__' in window) {
+    return 'http://127.0.0.1:8080';
+  }
+  return '';
+}
+
 export async function apiFetch(input: string, init: ApiFetchInit = {}) {
   const headers = { ...(init.headers ?? {}) };
   const session = await ensureLocalSession();
   headers.Authorization = `Bearer ${session.token}`;
 
-  const resp = await fetch(input, { ...init, headers });
+  const url = apiBaseUrl() + input;
+  const resp = await fetch(url, { ...init, headers });
   if (resp.status !== 401) {
     return resp;
   }
 
   const refreshed = await ensureLocalSession(true);
-  return fetch(input, {
+  // Must reuse the same absolute base as the first attempt; a relative `input`
+  // would resolve against the bundled app's `tauri://localhost` origin instead
+  // of the backend.
+  return fetch(url, {
     ...init,
     headers: { ...(init.headers ?? {}), Authorization: `Bearer ${refreshed.token}` },
   });
