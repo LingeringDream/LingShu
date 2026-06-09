@@ -140,7 +140,23 @@ fn default_tool_call_type() -> String {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ToolCallFunction {
     pub name: String,
+    #[serde(deserialize_with = "deserialize_tool_arguments")]
     pub arguments: serde_json::Value,
+}
+
+/// OpenAI/DeepSeek return tool-call arguments as a JSON-encoded string
+/// (e.g. `"arguments": "{\"text\":\"hello\"}"`); Ollama returns a native
+/// JSON object. Normalise both into a `serde_json::Value::Object` so
+/// callers can always use `.get("key")`.
+fn deserialize_tool_arguments<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: serde_json::Value = serde::Deserialize::deserialize(deserializer)?;
+    match &v {
+        serde_json::Value::String(s) => serde_json::from_str(s).map_err(serde::de::Error::custom),
+        _ => Ok(v),
+    }
 }
 
 /// The result of a non-streaming chat call that may include tool calls.
@@ -925,6 +941,11 @@ mod tests {
         assert_eq!(out["id"], "call_abc123");
         assert_eq!(out["type"], "function");
         assert_eq!(out["function"]["name"], "create_event");
+        // After normalisation the string argument must be accessible as an object.
+        assert_eq!(
+            tc.function.arguments.get("title").and_then(|v| v.as_str()),
+            Some("x")
+        );
     }
 
     /// Ollama omits `id`/`type`; they must default so deserialization succeeds.
