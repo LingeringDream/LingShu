@@ -102,10 +102,19 @@ impl Default for CorsConfig {
 
 fn default_cors_origins() -> Vec<String> {
     vec![
+        // Vite dev server / `tauri dev` (loads the frontend over http)
         "http://localhost:5173".to_string(),
         "http://localhost:8080".to_string(),
         "http://127.0.0.1:5173".to_string(),
         "http://127.0.0.1:8080".to_string(),
+        // Bundled Tauri 2 app webview origins. The frontend calls the backend
+        // cross-origin (apiBaseUrl() → http://127.0.0.1:8080), so the packaged
+        // app's custom-scheme origin must be allowed or the local session POST
+        // is blocked by CORS ("本地控制台启动失败").
+        //   macOS / Linux / iOS: tauri://localhost
+        //   Windows / Android:   http://tauri.localhost
+        "tauri://localhost".to_string(),
+        "http://tauri.localhost".to_string(),
     ]
 }
 

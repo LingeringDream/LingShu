@@ -133,4 +133,20 @@ mod tests {
             vec![HeaderValue::from_static("http://localhost:5173")]
         );
     }
+
+    /// The default origins must include the bundled Tauri webview origins,
+    /// otherwise the packaged macOS/Windows app cannot reach the local backend
+    /// (CORS blocks the local-session POST → "本地控制台启动失败"). Every entry
+    /// must also parse as a valid `HeaderValue`, or `allowed_cors_origins`
+    /// silently drops it.
+    #[test]
+    fn default_cors_origins_include_tauri_webview_origins() {
+        let config = crate::config::CorsConfig::default();
+        let origins = allowed_cors_origins(&config);
+
+        // No entry was silently dropped by the filter_map parse.
+        assert_eq!(origins.len(), config.allowed_origins.len());
+        assert!(origins.contains(&HeaderValue::from_static("tauri://localhost")));
+        assert!(origins.contains(&HeaderValue::from_static("http://tauri.localhost")));
+    }
 }
