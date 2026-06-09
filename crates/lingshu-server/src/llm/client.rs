@@ -23,18 +23,21 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
 }
 
-/// Custom serialisation: when the message carries `tool_calls`, serialise
-/// `content` as `null` so OpenAI-compatible APIs accept the payload.
-/// An empty string triggers "invalid type: map, expected a string" on some
-/// providers because they interpret `""` as an empty JSON object.
+/// Custom serialisation: when the message carries `tool_calls`, omit
+/// `content` entirely. OpenAI accepts `null`, but DeepSeek rejects both
+/// `""` ("invalid type: map, expected a string") and `null` (same error
+/// because it misinterprets absent-as-null). Omitting the field is the
+/// only format both providers consistently accept.
 impl Serialize for ChatMessage {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("ChatMessage", 4)?;
+        let field_count = 1usize
+            + if self.tool_calls.is_some() { 0 } else { 1 }
+            + if self.tool_calls.is_some() { 1 } else { 0 }
+            + if self.tool_call_id.is_some() { 1 } else { 0 };
+        let mut st = s.serialize_struct("ChatMessage", field_count)?;
         st.serialize_field("role", &self.role)?;
-        if self.tool_calls.is_some() {
-            st.serialize_field("content", &serde_json::Value::Null)?;
-        } else {
+        if self.tool_calls.is_none() {
             st.serialize_field("content", &self.content)?;
         }
         if let Some(ref tc) = self.tool_calls {
@@ -517,6 +520,8 @@ impl LlmClient {
             "max_tokens": options.as_ref().and_then(|o| o.num_predict),
             "tools": tools,
         });
+        tracing::debug!(body = %serde_json::to_string_pretty(&req).unwrap_or_default(), "chat_with_tools request");
+
         let mut http_req = self.http.post(&url).json(&req);
         if let Some(ref key) = self.api_key {
             http_req = http_req.header("Authorization", format!("Bearer {key}"));
