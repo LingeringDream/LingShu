@@ -68,10 +68,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_user_constants_are_non_empty() {
-        assert!(!LOCAL_USER_EMAIL.is_empty());
-        assert!(!LOCAL_USER_DISPLAY_NAME.is_empty());
-        assert!(!LOCAL_USER_PASSWORD_MARKER.is_empty());
+    fn local_user_constants_have_expected_values() {
+        assert_eq!(LOCAL_USER_EMAIL, "local@lingshu.internal");
+        assert_eq!(LOCAL_USER_DISPLAY_NAME, "本地用户");
+        assert_eq!(LOCAL_USER_PASSWORD_MARKER, "local-session-only");
     }
 
     #[test]
