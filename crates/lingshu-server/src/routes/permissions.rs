@@ -32,6 +32,11 @@ pub struct PermissionSettings {
     pub l3_accessibility: bool,
     /// L4: Screen recording + autonomous click (disabled by default, not in MVP)
     pub l4_autonomous: bool,
+    /// L2 whitelist: allowed app names (e.g. "Calculator") and URL prefixes
+    /// (e.g. "https://github.com"). Enforced when `l2_whitelist_only` is on.
+    /// Empty by default → nothing is allowed until the user adds entries.
+    #[serde(default)]
+    pub l2_whitelist: Vec<String>,
 }
 
 impl Default for PermissionSettings {
@@ -44,7 +49,41 @@ impl Default for PermissionSettings {
             l2_whitelist_only: true,
             l3_accessibility: false,
             l4_autonomous: false,
+            l2_whitelist: Vec::new(),
         }
+    }
+}
+
+impl PermissionSettings {
+    /// Whether an L2 automation target may be acted on.
+    ///
+    /// Requires `l2_automation`. When `l2_whitelist_only` is on (the default),
+    /// the target must match a whitelist entry: apps match case-insensitively
+    /// and exactly; URLs/paths match by case-insensitive prefix (so
+    /// `https://github.com` whitelists `https://github.com/anthropics`).
+    /// Default-deny: empty whitelist allows nothing.
+    pub fn automation_allowed(&self, kind: &str, target: &str) -> bool {
+        if !self.l2_automation {
+            return false;
+        }
+        if !self.l2_whitelist_only {
+            return true;
+        }
+        let t = target.trim().to_lowercase();
+        if t.is_empty() {
+            return false;
+        }
+        self.l2_whitelist.iter().any(|entry| {
+            let e = entry.trim().to_lowercase();
+            if e.is_empty() {
+                return false;
+            }
+            match kind {
+                "open_url" | "open_file" => t.starts_with(&e),
+                // apps: exact match so "Calculator" can't allow "CalculatorEvil"
+                _ => t == e,
+            }
+        })
     }
 }
 
@@ -76,6 +115,7 @@ pub struct PermissionPatch {
     pub l2_whitelist_only: Option<bool>,
     pub l3_accessibility: Option<bool>,
     pub l4_autonomous: Option<bool>,
+    pub l2_whitelist: Option<Vec<String>>,
 }
 
 // ── DB helpers ─────────────────────────────────────────────────────
@@ -152,6 +192,9 @@ async fn update_permissions(
     if let Some(v) = patch.l4_autonomous {
         settings.l4_autonomous = v;
     }
+    if let Some(v) = patch.l2_whitelist {
+        settings.l2_whitelist = v;
+    }
 
     // Persist so permissions survive restarts
     save_permissions_to_db(&state, user_id, settings).await;
@@ -187,6 +230,7 @@ mod tests {
             l2_whitelist_only: false,
             l3_accessibility: true,
             l4_autonomous: false,
+            l2_whitelist: vec!["Calculator".into(), "https://github.com".into()],
         };
         let json = serde_json::to_value(&orig).unwrap();
         let restored: PermissionSettings = serde_json::from_value(json).unwrap();
@@ -200,6 +244,24 @@ mod tests {
         assert_eq!(restored.l2_whitelist_only, orig.l2_whitelist_only);
         assert_eq!(restored.l3_accessibility, orig.l3_accessibility);
         assert_eq!(restored.l4_autonomous, orig.l4_autonomous);
+        assert_eq!(restored.l2_whitelist, orig.l2_whitelist);
+    }
+
+    #[test]
+    fn permissions_json_missing_whitelist_defaults_empty() {
+        // Old rows persisted before l2_whitelist existed must still deserialize
+        // (serde(default) → empty vec) rather than failing.
+        let json = serde_json::json!({
+            "l0_enabled": true,
+            "l1_calendar": false,
+            "l1_require_confirmation": true,
+            "l2_automation": false,
+            "l2_whitelist_only": true,
+            "l3_accessibility": false,
+            "l4_autonomous": false
+        });
+        let p: PermissionSettings = serde_json::from_value(json).unwrap();
+        assert!(p.l2_whitelist.is_empty());
     }
 
     #[test]
@@ -213,6 +275,7 @@ mod tests {
             l2_whitelist_only: None,
             l3_accessibility: None,
             l4_autonomous: None,
+            l2_whitelist: None,
         };
         if let Some(v) = patch.l1_calendar {
             settings.l1_calendar = v;
@@ -236,6 +299,7 @@ mod tests {
             l2_whitelist_only: Some(false),
             l3_accessibility: Some(true),
             l4_autonomous: Some(false),
+            l2_whitelist: Some(vec!["Calculator".into()]),
         };
         // Apply all fields
         if let Some(v) = patch.l1_calendar {
@@ -256,6 +320,9 @@ mod tests {
         if let Some(v) = patch.l4_autonomous {
             settings.l4_autonomous = v;
         }
+        if let Some(v) = patch.l2_whitelist {
+            settings.l2_whitelist = v;
+        }
 
         assert!(settings.l1_calendar);
         assert!(!settings.l1_require_confirmation);
@@ -263,6 +330,7 @@ mod tests {
         assert!(!settings.l2_whitelist_only);
         assert!(settings.l3_accessibility);
         assert!(!settings.l4_autonomous);
+        assert_eq!(settings.l2_whitelist, vec!["Calculator".to_string()]);
     }
 
     #[test]
@@ -278,5 +346,29 @@ mod tests {
         // L0 should never be disabled — it guards basic chat+pet functionality
         let p = PermissionSettings::default();
         assert!(p.l0_enabled);
+    }
+
+    #[test]
+    fn automation_allowed_enforces_l2_and_whitelist() {
+        // Default: l2 off → nothing allowed.
+        let mut p = PermissionSettings::default();
+        assert!(!p.automation_allowed("open_app", "Calculator"));
+
+        // l2 on, whitelist_only on, empty whitelist → still deny (default-deny).
+        p.l2_automation = true;
+        assert!(!p.automation_allowed("open_app", "Calculator"));
+
+        // Whitelisted app matches exactly (case-insensitive); no loose prefix.
+        p.l2_whitelist = vec!["Calculator".into(), "https://github.com".into()];
+        assert!(p.automation_allowed("open_app", "calculator"));
+        assert!(!p.automation_allowed("open_app", "CalculatorEvil"));
+
+        // URL matches by prefix.
+        assert!(p.automation_allowed("open_url", "https://github.com/anthropics"));
+        assert!(!p.automation_allowed("open_url", "https://evil.example.com"));
+
+        // whitelist_only off → anything allowed once l2 is on.
+        p.l2_whitelist_only = false;
+        assert!(p.automation_allowed("open_app", "AnythingGoes"));
     }
 }

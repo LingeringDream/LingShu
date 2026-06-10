@@ -17,6 +17,9 @@ use tauri_plugin_shell::ShellExt;
 #[path = "eventkit.rs"]
 mod eventkit;
 
+#[path = "automation.rs"]
+mod automation;
+
 /// Wrapper so we can shut down the sidecar when the app exits.
 /// `Mutex` is required by `app.manage()` (`T: Sync`). The lock is only
 /// ever contended at program exit (single `Drop` call), so `lock()` never
@@ -58,6 +61,9 @@ fn main() {
             eventkit::create_calendar_event,
             eventkit::update_calendar_event,
             eventkit::delete_calendar_event,
+            automation::open_application,
+            automation::open_url,
+            automation::open_path,
         ])
         .setup(|app| {
             // ── Launch the backend sidecar (bundled .app) ──────────

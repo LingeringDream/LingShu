@@ -4,6 +4,7 @@ import { persist } from 'zustand/middleware';
 import type { Message } from '../components/chat/MessageBubble';
 import { apiFetch } from '../lib/api';
 import { deleteAppleCalendarEvent } from '../lib/eventkit';
+import { runAutomationAction } from '../lib/automation';
 
 interface ChatState {
   messages: Message[];
@@ -144,6 +145,13 @@ export const useChatStore = create<ChatState>()(
                       }
                       // Calendar was modified — notify components to refresh
                       window.dispatchEvent(new CustomEvent('calendar-changed'));
+                    }
+                    // L2 automation actions (open app/url/file) approved by the
+                    // backend — forward each to its Tauri command.
+                    if (data.automation_actions && Array.isArray(data.automation_actions)) {
+                      for (const action of data.automation_actions) {
+                        runAutomationAction(action).catch(() => {});
+                      }
                     }
                     if (data.done) {
                       // Streaming complete — capture the backend message id for feedback

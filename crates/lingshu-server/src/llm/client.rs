@@ -117,6 +117,21 @@ pub struct ChatChunk {
     /// `delete_calendar_event` call removes an event that had been synced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub apple_calendar_deletes: Option<Vec<String>>,
+    /// L2 automation actions for the desktop frontend to execute via Tauri
+    /// (open app / URL / file). Populated only after a chat-tool `open_*` call
+    /// passes the L2 permission + whitelist check. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automation_actions: Option<Vec<AutomationAction>>,
+}
+
+/// A whitelisted L2 automation action for the desktop frontend to execute.
+/// `kind` ∈ {`open_app`, `open_url`, `open_file`}; `target` is the app name,
+/// URL, or file path. Produced server-side only after the permission +
+/// whitelist checks pass, so the frontend may execute it directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutomationAction {
+    pub kind: String,
+    pub target: String,
 }
 
 // ── Tool / Function Calling types ─────────────────────────────────
@@ -736,6 +751,7 @@ fn parse_byte_stream(
                                 done: true,
                                 assistant_message_id: None,
                                 apple_calendar_deletes: None,
+                                automation_actions: None,
                             })),
                             (stream, bytes::BytesMut::new(), true),
                         ));
@@ -746,6 +762,7 @@ fn parse_byte_stream(
                             done: true,
                             assistant_message_id: None,
                             apple_calendar_deletes: None,
+                            automation_actions: None,
                         }),
                         (stream, buf, true),
                     ));
@@ -788,6 +805,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
             done: true,
             assistant_message_id: None,
             apple_calendar_deletes: None,
+            automation_actions: None,
         });
     }
     let content = parsed.message?.content;
@@ -799,6 +817,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
         done: false,
         assistant_message_id: None,
         apple_calendar_deletes: None,
+        automation_actions: None,
     })
 }
 
@@ -815,6 +834,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
             done: true,
             assistant_message_id: None,
             apple_calendar_deletes: None,
+            automation_actions: None,
         });
     }
     let json_str = line.strip_prefix("data: ")?;
@@ -830,6 +850,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
         done,
         assistant_message_id: None,
         apple_calendar_deletes: None,
+        automation_actions: None,
     })
 }
 
@@ -1093,6 +1114,7 @@ mod tests {
             done: false,
             assistant_message_id: None,
             apple_calendar_deletes: None,
+            automation_actions: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"content\":\"hello\""));
@@ -1107,6 +1129,7 @@ mod tests {
             done: true,
             assistant_message_id: None,
             apple_calendar_deletes: Some(vec!["E2E:123".into(), "E2E:456".into()]),
+            automation_actions: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"done\":true"));
@@ -1120,6 +1143,7 @@ mod tests {
             done: true,
             assistant_message_id: None,
             apple_calendar_deletes: Some(Vec::new()),
+            automation_actions: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         // An empty Vec is Some, so it serialises as []
@@ -1134,9 +1158,29 @@ mod tests {
             done: true,
             assistant_message_id: Some(id),
             apple_calendar_deletes: None,
+            automation_actions: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"assistant_message_id\":\"550e8400-e29b-41d4-a716-446655440000\""));
+        assert!(!json.contains("apple_calendar_deletes"));
+        assert!(!json.contains("automation_actions"));
+    }
+
+    #[test]
+    fn chat_chunk_with_automation_actions() {
+        let chunk = ChatChunk {
+            content: String::new(),
+            done: true,
+            assistant_message_id: None,
+            apple_calendar_deletes: None,
+            automation_actions: Some(vec![AutomationAction {
+                kind: "open_app".into(),
+                target: "Calculator".into(),
+            }]),
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains("\"automation_actions\":[{\"kind\":\"open_app\",\"target\":\"Calculator\"}]"));
+        // apple_calendar_deletes is None → skipped
         assert!(!json.contains("apple_calendar_deletes"));
     }
 }
