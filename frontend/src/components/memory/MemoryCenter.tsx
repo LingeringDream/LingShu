@@ -51,8 +51,9 @@ export function MemoryCenter() {
     try {
       await createMemory({ memory_type: newType, content: newContent, importance: 0.7 });
       setNewContent('');
-    } catch {
-      // error shown via store
+    } catch (e) {
+      // createMemory throws — show the error inline
+      setNewContent(`错误: ${e instanceof Error ? e.message : '创建失败'}`);
     }
   };
 
