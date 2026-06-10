@@ -20,6 +20,7 @@ pub fn thought_queue_prompt(
     recent_context: &str, // last N conversation summaries or recent memory deltas
     active_goals: &str,   // user's active goals / projects
     pending_tasks: &str,  // incomplete tasks
+    entity_counts: &str,  // cross-session entity statistics
     now: &str,            // current time, RFC 3339
 ) -> String {
     format!(
@@ -27,6 +28,9 @@ pub fn thought_queue_prompt(
          生成 0-3 条值得向用户提出的主动建议。
 
 当前时间：{now}
+
+## 跨会话实体统计
+{entity_counts}
 
 ## 活跃目标与项目
 {active_goals}
@@ -43,6 +47,7 @@ pub fn thought_queue_prompt(
 3. 检测到日程冲突或遗漏 → 提醒用户注意
 4. 发现高价值记忆候选 → 建议用户确认是否记住
 5. 会议或截止日期临近 → 提前提醒
+6. 任务堆积：待完成任务过多时建议用户优先排序
 
 ## 每条建议必须包含
 - **title**：简短标题（10 字以内）
@@ -445,6 +450,7 @@ mod tests {
             "用户提到想学 Rust",
             "完成 Q3 OKR",
             "写技术方案",
+            "日历事件: 3 总计, 1 即将到来\n项目: 1 活跃\n待完成: 0\n记忆: 5 条\n对话: 1 个会话",
             "2026-06-05T10:00:00+08:00",
         );
         for field in &[

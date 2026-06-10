@@ -1,3 +1,4 @@
+/* global localStorage */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { getAuthToken, setAuthToken } from '../api';
 

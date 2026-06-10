@@ -1,3 +1,4 @@
+/* global Storage */
 import '@testing-library/jest-dom';
 
 // localStorage mock for jsdom (not available in vitest worker threads by default)

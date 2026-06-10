@@ -1,3 +1,4 @@
+/* global CustomEvent */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Message } from '../components/chat/MessageBubble';

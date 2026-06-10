@@ -327,6 +327,16 @@ async fn generate_thoughts(
     .await
     .map_err(AppError::Internal)?;
 
+    if created > 0 {
+        let _ = state
+            .pet_notifications
+            .send(crate::state::PetNotification::new(
+                "thought",
+                "灵枢有新的想法",
+                format!("产生了 {created} 条新建议"),
+            ));
+    }
+
     Ok(Json(GenerateThoughtsResponse { created }))
 }
 

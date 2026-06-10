@@ -112,10 +112,17 @@ pub async fn generate_and_save_thoughts(
     let recent_context = gather_recent_context(db, user_id).await?;
     let active_goals = gather_active_goals(db, user_id).await?;
     let pending_tasks = gather_pending_tasks(db, user_id).await?;
+    let entity_counts = gather_entity_counts(db, user_id).await?;
     let now = chrono::Utc::now().to_rfc3339();
 
     // 2. Build prompt and call LLM
-    let prompt = thought_queue_prompt(&recent_context, &active_goals, &pending_tasks, &now);
+    let prompt = thought_queue_prompt(
+        &recent_context,
+        &active_goals,
+        &pending_tasks,
+        &entity_counts,
+        &now,
+    );
     let messages = vec![ChatMessage::user(prompt)];
 
     let response = llm.chat(model, messages, None).await?;
@@ -243,6 +250,71 @@ async fn gather_pending_tasks(db: &PgPool, user_id: Uuid) -> anyhow::Result<Stri
             .collect::<Vec<_>>()
             .join("\n")
     })
+}
+
+/// Count entities across sessions to give the LLM a quantitative picture
+/// of the user's workspace. This makes thought suggestions more relevant —
+/// e.g. "you have 5 overdue tasks, want me to help prioritise?"
+async fn gather_entity_counts(db: &PgPool, user_id: Uuid) -> anyhow::Result<String> {
+    let calendar_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM calendar_events WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(db)
+            .await?;
+
+    let upcoming_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM calendar_events \
+         WHERE user_id = $1 AND start_time >= NOW()",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    let project_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM projects WHERE owner_id = $1 AND deleted_at IS NULL")
+            .bind(user_id)
+            .fetch_one(db)
+            .await?;
+
+    let pending_task_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM tasks t \
+         JOIN projects p ON t.project_id = p.id \
+         WHERE p.owner_id = $1 \
+           AND t.status NOT IN ('done', 'completed') \
+           AND t.deleted_at IS NULL AND p.deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    let memory_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM memories \
+         WHERE user_id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    let conversation_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM conversations WHERE user_id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    Ok(format!(
+        "日历事件: {} 总计, {} 即将到来\n\
+         项目: {} 活跃\n\
+         待完成任务: {}\n\
+         记忆: {} 条\n\
+         对话: {} 个会话",
+        calendar_count.0,
+        upcoming_count.0,
+        project_count.0,
+        pending_task_count.0,
+        memory_count.0,
+        conversation_count.0,
+    ))
 }
 
 // ── Parsing ───────────────────────────────────────────────────────

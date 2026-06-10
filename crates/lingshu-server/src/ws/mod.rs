@@ -1,6 +1,8 @@
 pub mod handler;
 
-use axum::{extract::ws::WebSocketUpgrade, response::IntoResponse, routing::get, Router};
+use axum::{
+    extract::ws::WebSocketUpgrade, extract::State, response::IntoResponse, routing::get, Router,
+};
 
 use crate::state::AppState;
 
@@ -10,9 +12,9 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/ws", get(ws_upgrade))
 }
 
-/// Upgrade GET /ws to a WebSocket and hand off to the echo handler.
-async fn ws_upgrade(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(handler::handle_socket)
+/// Upgrade GET /ws to a WebSocket and hand off to the broadcast handler.
+async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handler::handle_socket(socket, state))
 }
 
 #[cfg(test)]

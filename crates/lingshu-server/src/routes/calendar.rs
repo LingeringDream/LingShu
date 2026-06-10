@@ -183,6 +183,14 @@ async fn insert_calendar_event(
     Ok(row)
 }
 
+/// Broadcast a pet-window notification for calendar events.
+fn notify_calendar_event(state: &AppState, user_id: Uuid, title: &str, action: &str) {
+    let notification = crate::state::PetNotification::new("calendar", action, title);
+    let _ = state.pet_notifications.send(notification);
+    // Suppress log noise from the unused user_id
+    let _ = user_id;
+}
+
 /// Safe JSON extraction: find a pair of brackets { } or [ ] in LLM output,
 /// guarding against malformed responses.
 fn extract_json_slice(raw: &str) -> &str {
@@ -323,7 +331,9 @@ JSON："###
     };
 
     let row = insert_calendar_event(&state.db, user_id, &perms, create_req).await?;
-    Ok(row.into_response())
+    let response = row.into_response();
+    notify_calendar_event(state, user_id, &response.title, "日程已创建");
+    Ok(response)
 }
 
 /// List calendar events for a user. Shared by the `/api/v1/calendar/events`
@@ -712,6 +722,13 @@ async fn delete_event(
     if rows == 0 {
         return Err(AppError::NotFound("Event not found".into()));
     }
+    let _ = state
+        .pet_notifications
+        .send(crate::state::PetNotification::new(
+            "calendar",
+            "日程已删除",
+            format!("Event {id} removed"),
+        ));
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
