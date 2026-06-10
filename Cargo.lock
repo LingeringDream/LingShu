@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "lingshu-server"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1510,7 +1510,7 @@ dependencies = [
 
 [[package]]
 name = "lingshu-vector"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "reqwest",
