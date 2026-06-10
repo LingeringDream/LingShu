@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "@hazart-pkg/live2d-core": "^1.0.1",
+    "live2d-react": "^0.2.0",
+    "live2dcubismcore": "^1.0.2"
+  }
+}

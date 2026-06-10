@@ -3,7 +3,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::{
@@ -1450,6 +1450,52 @@ fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
             }),
         ),
         ToolDefinition::new(
+            "read_screen",
+            "读取当前前台窗口的屏幕文字（通过 macOS 辅助功能 API）。当用户说「帮我看看屏幕上是什么」「读一下这个页面」「看屏幕内容」「提取屏幕上的文字」时调用。需要先在 系统设置 → 隐私与安全性 → 辅助功能 中授权。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        ),
+        ToolDefinition::new(
+            "read_file",
+            "读取用户电脑上的文本文件（支持 .md .txt .pdf .json .csv 等）。当用户说「帮我看一下...文件」「读一下...文件」「这个文档里写了什么」时调用。只能读取用户主目录下的文件。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "文件的绝对路径，例如 /Users/xxx/Documents/notes.md"
+                    }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDefinition::new(
+            "list_directory",
+            "列出目录中的文件列表。当用户说「我...目录里有什么」「列一下...文件夹」时调用。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "目录的绝对路径，例如 /Users/xxx/Documents"
+                    }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDefinition::new(
+            "get_current_time",
+            "获取当前日期和时间（含时区）。当用户问「现在几点」「今天几号」「今天星期几」「当前时间」等时间相关问题，或需要根据当前时间来推算日程时调用。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        ),
+        ToolDefinition::new(
             "open_app",
             "打开 macOS 上的一个应用程序。当用户说「打开/启动/帮我开...（某 App）」时调用。是否真正执行由系统的 L2 白名单决定：不在白名单内会被安全拒绝，你只需如实转达结果。",
             serde_json::json!({
@@ -1655,6 +1701,207 @@ async fn execute_tool_call(
                     Ok((format!("查询日历事件失败：{e}"), ToolEffects::default()))
                 }
             }
+        }
+        "read_screen" => {
+            // Use osascript to read the frontmost window via System Events.
+            // The user must grant Accessibility permission to the process
+            // running this server (Terminal / lingshu-server).
+            let script = r#"tell application "System Events"
+    set frontApp to first application process whose frontmost is true
+    set appName to name of frontApp
+    set winTitle to ""
+    try
+        set winTitle to title of front window of frontApp
+    end try
+    set selectedText to ""
+    try
+        set focusedElem to focused UI element of front window of frontApp
+        set selectedText to value of focusedElem
+        if selectedText is missing value then set selectedText to ""
+    end try
+    if selectedText is "" then
+        try
+            set selectedText to entire value of focused UI element of front window of frontApp
+        end try
+    end if
+    return appName & "|||" & winTitle & "|||" & selectedText
+end tell"#;
+            match std::process::Command::new("osascript")
+                .args(["-e", script])
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if stdout.is_empty() {
+                        return Ok(("(前台窗口无可读文本)".into(), ToolEffects::default()));
+                    }
+                    let parts: Vec<&str> = stdout.splitn(3, "|||").collect();
+                    let app = parts.first().unwrap_or(&"");
+                    let title = parts.get(1).unwrap_or(&"");
+                    let text = parts.get(2).unwrap_or(&"");
+                    let mut result = format!("[前台应用] {app}\n");
+                    if !title.is_empty() { result.push_str(&format!("[窗口] {title}\n")); }
+                    if !text.is_empty() {
+                        result.push_str(&format!("[内容]\n{text}"));
+                    } else {
+                        result.push_str("[内容]\n(此窗口无 AX 文本元素)");
+                    }
+                    Ok((result, ToolEffects::default()))
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    // Open Accessibility settings to help the user
+                    let _ = std::process::Command::new("open")
+                        .args(["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
+                        .status();
+                    let msg = if stderr.contains("not allowed") || stderr.contains("-25211") {
+                        "辅助功能权限未开启。已打开系统设置 → 辅助功能页面。请将「终端」(Terminal) 或运行灵枢的应用程序添加到允许列表，然后重试。"
+                    } else {
+                        "屏幕阅读失败。已打开辅助功能设置页面，请确认授权后重试。"
+                    };
+                    Ok((msg.to_string(), ToolEffects::default()))
+                }
+                Err(e) => Ok((format!("无法执行: {e}"), ToolEffects::default())),
+            }
+        }
+        "read_file" => {
+            let path = tool_arg(tool_call, "path");
+            if path.is_empty() {
+                return Ok(("错误：未提供文件路径。".into(), ToolEffects::default()));
+            }
+            // Security: only allow files under user's home
+            let home = std::env::var("HOME").unwrap_or_default();
+            let canonical = match std::fs::canonicalize(&path) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Ok((format!("文件不存在或无法访问: {e}"), ToolEffects::default()))
+                }
+            };
+            if !canonical.starts_with(&home) {
+                return Ok((
+                    "安全限制：只能读取用户主目录下的文件。".into(),
+                    ToolEffects::default(),
+                ));
+            }
+            let ext = canonical
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            match ext.as_str() {
+                "txt" | "md" | "json" | "csv" | "log" | "yaml" | "yml" | "toml" | "rs" | "ts"
+                | "tsx" | "js" | "jsx" | "html" | "css" | "py" | "sh" => {
+                    match std::fs::read_to_string(&canonical) {
+                        Ok(content) => {
+                            let truncated = if content.len() > 8000 {
+                                format!(
+                                    "{}...\n\n(内容已截断，共 {} 字符)",
+                                    &content[..8000],
+                                    content.len()
+                                )
+                            } else {
+                                content
+                            };
+                            Ok((
+                                format!("[文件] {}\n---\n{truncated}", canonical.display()),
+                                ToolEffects::default(),
+                            ))
+                        }
+                        Err(e) => Ok((format!("读取失败: {e}"), ToolEffects::default())),
+                    }
+                }
+                "pdf" => {
+                    // Try pdftotext, then textutil
+                    let path_str = path.clone();
+                    for (cmd, args) in [
+                        ("pdftotext", vec!["-layout", path_str.as_str(), "-"]),
+                        (
+                            "textutil",
+                            vec!["-convert", "txt", "-stdout", path_str.as_str()],
+                        ),
+                    ] {
+                        if let Ok(output) = std::process::Command::new(cmd).args(&args).output() {
+                            if output.status.success() {
+                                let text = String::from_utf8_lossy(&output.stdout).into_owned();
+                                if !text.trim().is_empty() {
+                                    return Ok((text, ToolEffects::default()));
+                                }
+                            }
+                        }
+                    }
+                    Ok((
+                        "无法提取 PDF 文本。请安装 pdftotext: brew install poppler".into(),
+                        ToolEffects::default(),
+                    ))
+                }
+                _ => Ok((
+                    format!("不支持的文件类型: .{ext}（支持 .md .txt .pdf .json .csv 等）"),
+                    ToolEffects::default(),
+                )),
+            }
+        }
+        "list_directory" => {
+            let path = tool_arg(tool_call, "path");
+            if path.is_empty() {
+                return Ok(("错误：未提供目录路径。".into(), ToolEffects::default()));
+            }
+            let home = std::env::var("HOME").unwrap_or_default();
+            let p = std::path::Path::new(&path);
+            let canonical = match p.canonicalize() {
+                Ok(c) => c,
+                Err(e) => return Ok((format!("目录不存在: {e}"), ToolEffects::default())),
+            };
+            if !canonical.starts_with(&home) {
+                return Ok((
+                    "安全限制：只能浏览用户主目录下的文件。".into(),
+                    ToolEffects::default(),
+                ));
+            }
+            match std::fs::read_dir(&canonical) {
+                Ok(rd) => {
+                    let mut entries: Vec<String> = Vec::new();
+                    for entry in rd.flatten() {
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        if !name.starts_with('.') {
+                            let prefix = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                "📁"
+                            } else {
+                                "📄"
+                            };
+                            entries.push(format!("{prefix} {name}"));
+                        }
+                    }
+                    entries.sort();
+                    Ok((
+                        format!("{}\n---\n{}", canonical.display(), entries.join("\n")),
+                        ToolEffects::default(),
+                    ))
+                }
+                Err(e) => Ok((format!("读取目录失败: {e}"), ToolEffects::default())),
+            }
+        }
+        "get_current_time" => {
+            let now = Local::now();
+            Ok((
+                format!(
+                    "当前时间：{}\n日期：{}\n星期：{}\n时区：{} (UTC{:+})",
+                    now.format("%Y-%m-%d %H:%M:%S"),
+                    now.format("%Y 年 %m 月 %d 日"),
+                    match now.format("%u").to_string().as_str() {
+                        "1" => "星期一",
+                        "2" => "星期二",
+                        "3" => "星期三",
+                        "4" => "星期四",
+                        "5" => "星期五",
+                        "6" => "星期六",
+                        "7" => "星期日",
+                        _ => "",
+                    },
+                    now.format("%Z"),
+                    now.offset().local_minus_utc() / 3600,
+                ),
+                ToolEffects::default(),
+            ))
         }
         "delete_calendar_event" => {
             let event_id_str = tool_call

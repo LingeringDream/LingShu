@@ -20,6 +20,12 @@ mod eventkit;
 #[path = "automation.rs"]
 mod automation;
 
+#[path = "fileio.rs"]
+mod fileio;
+
+#[path = "screenreader.rs"]
+mod screenreader;
+
 /// Wrapper so we can shut down the sidecar when the app exits.
 /// `Mutex` is required by `app.manage()` (`T: Sync`). The lock is only
 /// ever contended at program exit (single `Drop` call), so `lock()` never
@@ -64,6 +70,10 @@ fn main() {
             automation::open_application,
             automation::open_url,
             automation::open_path,
+            screenreader::read_screen,
+            screenreader::request_accessibility_permission,
+            fileio::read_file,
+            fileio::list_directory,
         ])
         .setup(|app| {
             // ── Launch the backend sidecar (bundled .app) ──────────
@@ -130,6 +140,18 @@ fn main() {
 
             // Position the pet window near the bottom-right of the screen.
             if let Some(pet) = app.get_webview_window("pet") {
+                // macOS: hide pet from Dock window menu & Cmd+Tab
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    let raw = pet.ns_window().expect("NSWindow");
+                    let ns_window = raw as *mut objc2::runtime::AnyObject;
+                    use objc2::msg_send;
+                    // NSWindowCollectionBehaviorTransient     = 1 << 3
+                    // NSWindowCollectionBehaviorIgnoresCycle = 1 << 5
+                    let behavior: isize = msg_send![ns_window, collectionBehavior];
+                    let _: () = msg_send![ns_window, setCollectionBehavior: behavior | (1 << 3) | (1 << 5)];
+                }
+
                 if let Ok(Some(monitor)) = pet.primary_monitor() {
                     let size = monitor.size();
                     let scale = monitor.scale_factor();
