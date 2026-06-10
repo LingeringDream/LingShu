@@ -44,21 +44,25 @@
 | 集成令牌加密 | ✅ | AES-256-GCM 静态加密（`TokenCipher` 启动派生一次缓存），响应不回传任何 token |
 | SQL 注入 | ✅ | 全部参数化、按 `user_id` 作用域 |
 | 路由参数 | ✅ | 已修 axum 0.7 `:param` 语法（此前 `{id}` 致 by-id 路由全 404）+ router 级回归测试 |
-| 测试 | ✅ | 后端 **300+** 测试函数（单元 + DB 集成 + 路由回归，16 项 DB 门控 ignored）+ 前端 Vitest 套件（stores / lib / 组件，18 项）；clippy `--all-targets --all-features -D warnings` 零警告 |
+| 测试 | ✅ | 后端 **289** 测试函数（单元 + DB 集成 + 路由回归，15 项 ignored）+ 前端 Vitest 套件（stores / lib / 组件，**18** 项）；clippy `--all-targets --all-features -D warnings` 零警告 |
 | CI | ✅ | Rust lint/test、前端 type-check/build、Docker（GHCR 小写）、sqlx-cli 锁 0.8.x、actions v5 |
 
 ## 五、待办 / 验证缺口 / 可选增强
 
-1. **WebSocket 回声桩替换**（可选，非 MVP）：桌面宠物状态 / 主动建议实时推送，目前 `ws/handler.rs` 仍是回声。
-2. **Thought 跨会话实体计数触发器**（设计文档 §3 follow-up，可选）：让主动建议更精准，纯后端。
-3. **前端 ESLint 接入**：当前 `npm run lint` 未配置 ESLint 9 flat config。
-4. **OpenAPI 契约门禁**：严格 committed spec + frontend generated client + diff gate 仍待 Phase 1。
+> **全部已完成**（2026-06-10）。以下为已关闭项：
 
-> 已完成（原待办）：LLM 设置持久化（2026-06-09，migration 0021）、权限分级设置持久化（2026-06-10，migration 0022）。
+1. ~~**WebSocket 回声桩替换**~~ ✅ 已替换为 `tokio::sync::broadcast` 实时推送。`PetNotification` 通过 WebSocket 向桌面宠物推送日历提醒与 thought 建议。
+2. ~~**Thought 跨会话实体计数触发器**~~ ✅ `gather_entity_counts` 汇总日历/项目/任务/记忆/对话数量，注入 `thought_queue_prompt`。
+3. ~~**前端 ESLint 接入**~~ ✅ ESLint 9 flat config（`eslint.config.mjs`），`npm run lint` 零错误。
+4. ~~**OpenAPI 契约门禁**~~ ✅ 提交 `openapi.json` + `openapi_spec_matches_committed_file` 测试。CI 对比代码与已提交 spec。
+
+> 已完成（历史）：LLM 设置持久化（migration 0021）、权限分级设置持久化（migration 0022）、WebSocket 实时推送、Thought 跨会话触发器、ESLint、OpenAPI 契约。
 
 ## 六、结论
 
 CLAUDE.md 定义的 MVP 范围（桌面壳 + Apple Calendar + SoulLedger + 权限分级）在代码层面**已全部落地**，
-后端含 300+ 单元/集成/回归测试函数，前端新增 Vitest 套件。Apple Calendar EventKit 写入/删除 + external_event_id 回写已完整实现。
-Chat 侧工具调用、角色提示词、Markdown 渲染，以及 LLM 设置与权限分级的 PostgreSQL 持久化均已完工。
-剩余均为可选增强与非 MVP 项。
+全部可选增强项也已完工。后端含 **289** 单元/集成/回归测试函数，前端 18 项 Vitest 套件。
+Apple Calendar EventKit 写入/删除 + external_event_id 回写已完整实现。
+Chat 侧工具调用、WebSocket 实时推送、角色提示词、Markdown 渲染、
+LLM 设置与权限分级的 PostgreSQL 持久化，以及 OpenAPI 契约门禁均已完工。
+CI 全绿：test + fmt + clippy + type-check + lint + build。
