@@ -171,6 +171,11 @@ async fn update_permissions(
 ) -> Result<Json<PermissionSettings>, AppError> {
     let user_id = auth::require_user(auth).await?;
 
+    // Warm the cache from DB first so a PATCH starts from the user's persisted
+    // settings, not defaults — otherwise a cold-cache PATCH (e.g. first request
+    // after a restart) would clobber fields the client didn't send.
+    let _ = permissions_for_user(&state, user_id).await;
+
     let mut all_settings = state.permissions.write().await;
     let settings = all_settings.entry(user_id).or_default();
 
