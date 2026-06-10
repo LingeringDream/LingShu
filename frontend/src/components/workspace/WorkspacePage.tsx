@@ -54,12 +54,23 @@ function CalendarSection() {
   const [inTauri, setInTauri] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [loadingEvents, setLoadingEvents] = useState(false);
 
   const fetchEvents = useCallback(async () => {
+    setLoadingEvents(true);
     try {
       const resp = await apiFetch('/api/v1/calendar/events?limit=20');
-      if (resp.ok) setEvents(await resp.json());
-    } catch { /* silent */ }
+      if (resp.ok) {
+        setEvents(await resp.json());
+        setError(null);
+      } else {
+        setError('加载日程失败');
+      }
+    } catch {
+      setError('加载日程失败：网络错误');
+    } finally {
+      setLoadingEvents(false);
+    }
   }, []);
 
   useEffect(() => { fetchEvents(); setInTauri(isTauri()); }, [fetchEvents]);
@@ -211,7 +222,9 @@ function CalendarSection() {
 
           {/* Event list */}
           <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-            {events.length === 0 ? (
+            {loadingEvents ? (
+              <p style={{ fontSize: 13, color: 'var(--color-secondary-text, #888)' }}>加载中...</p>
+            ) : events.length === 0 ? (
               <p style={{ fontSize: 13, color: 'var(--color-secondary-text, #888)' }}>暂无日程</p>
             ) : (
               events.map((ev) => (
@@ -322,13 +335,19 @@ function TasksSection() {
         body: JSON.stringify({ status: newStatus }),
       });
       await loadTasks();
-    } catch { /* silent */ }
+    } catch {
+      setError('更新任务状态失败');
+    }
   };
 
   const handleDelete = async (tid: string) => {
     if (!selectedPid) return;
-    try { await apiFetch(`/api/v1/projects/${selectedPid}/tasks/${tid}`, { method: 'DELETE' }); await loadTasks(); }
-    catch { /* silent */ }
+    try {
+      await apiFetch(`/api/v1/projects/${selectedPid}/tasks/${tid}`, { method: 'DELETE' });
+      await loadTasks();
+    } catch {
+      setError('删除任务失败');
+    }
   };
 
   const doneCount = taskList.filter((t) => t.status === 'done' || t.status === 'completed').length;

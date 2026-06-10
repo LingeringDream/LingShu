@@ -177,4 +177,33 @@ mod tests {
             "Expected at least 32 registered path items, got {count}"
         );
     }
+
+    /// CI contract gate: the committed `openapi.json` must match the live code.
+    /// When this fails, run:
+    ///
+    /// ```bash
+    /// curl -s http://localhost:8080/api-docs/openapi.json > openapi.json
+    /// git add openapi.json
+    /// ```
+    #[test]
+    fn openapi_spec_matches_committed_file() {
+        let live = serde_json::to_value(openapi_spec()).expect("OpenApi should serialize");
+        let committed_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../openapi.json");
+        let committed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&committed_path).unwrap_or_default())
+                .unwrap_or(serde_json::Value::Null);
+
+        if live != committed {
+            // Only fail if the committed file exists (CI has it, local may not)
+            if committed_path.exists() {
+                panic!(
+                    "OpenAPI spec is out of date.\n\
+                     Expected:  {}\n\
+                     Run: curl -s http://localhost:8080/api-docs/openapi.json > openapi.json",
+                    committed_path.display()
+                );
+            }
+        }
+    }
 }

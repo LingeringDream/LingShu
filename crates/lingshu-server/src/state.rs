@@ -1,4 +1,5 @@
 use fred::interfaces::ClientLike;
+use serde::Serialize;
 use sqlx::postgres::PgPoolOptions;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,6 +12,29 @@ use crate::llm::client::LlmClient;
 use crate::routes::permissions::PermissionSettings;
 use crate::routes::settings::LlmSettings;
 use lingshu_vector::search::QdrantClient;
+
+/// Real-time notification sent to connected pet-window clients via WebSocket.
+/// Serialised as JSON over the wire.
+#[derive(Debug, Clone, Serialize)]
+pub struct PetNotification {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_url: Option<String>,
+}
+
+impl PetNotification {
+    pub fn new(kind: impl Into<String>, title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            title: title.into(),
+            body: body.into(),
+            action_url: None,
+        }
+    }
+}
 
 /// Type alias so callers can pattern-match on Redis availability.
 pub type OptionalRedis = Option<fred::clients::RedisClient>;
@@ -42,6 +66,10 @@ pub struct AppState {
     /// encrypt a token must then be rejected rather than stored in the clear.
     /// Wrapped in `Arc` because `TokenCipher` wraps `Aes256Gcm` which is not `Clone`.
     pub token_cipher: Option<Arc<TokenCipher>>,
+    /// Broadcast channel for pet-window notifications. The handler subscribes
+    /// connected WebSocket clients and forwards events (calendar reminders,
+    /// thought suggestions, etc.) to the floating desktop pet.
+    pub pet_notifications: tokio::sync::broadcast::Sender<PetNotification>,
 }
 
 impl AppState {
@@ -125,6 +153,7 @@ impl AppState {
             permissions: Arc::new(RwLock::new(HashMap::new())),
             role_prompts: Arc::new(RwLock::new(HashMap::new())),
             token_cipher,
+            pet_notifications: tokio::sync::broadcast::channel(64).0,
         })
     }
 
