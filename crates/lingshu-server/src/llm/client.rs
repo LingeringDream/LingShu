@@ -122,6 +122,11 @@ pub struct ChatChunk {
     /// passes the L2 permission + whitelist check. Absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automation_actions: Option<Vec<AutomationAction>>,
+    /// L2 permission requests: when automation is denied, the backend asks the
+    /// frontend to show a one-click grant dialog. On accept the frontend adds
+    /// the target to the whitelist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_requests: Option<Vec<PermissionRequest>>,
 }
 
 /// A whitelisted L2 automation action for the desktop frontend to execute.
@@ -132,6 +137,19 @@ pub struct ChatChunk {
 pub struct AutomationAction {
     pub kind: String,
     pub target: String,
+}
+
+/// A request to the user to grant L2 permission for one specific target.
+/// The frontend shows a confirmation dialog; on accept it calls
+/// `PATCH /api/v1/permissions` to add `target` to the whitelist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionRequest {
+    /// "open_app" | "open_url" | "open_file"
+    pub kind: String,
+    /// The app name / URL / file path the user wants to use
+    pub target: String,
+    /// Human-readable reason for the dialog
+    pub reason: String,
 }
 
 // ── Tool / Function Calling types ─────────────────────────────────
@@ -752,6 +770,7 @@ fn parse_byte_stream(
                                 assistant_message_id: None,
                                 apple_calendar_deletes: None,
                                 automation_actions: None,
+                                permission_requests: None,
                             })),
                             (stream, bytes::BytesMut::new(), true),
                         ));
@@ -763,6 +782,7 @@ fn parse_byte_stream(
                             assistant_message_id: None,
                             apple_calendar_deletes: None,
                             automation_actions: None,
+                            permission_requests: None,
                         }),
                         (stream, buf, true),
                     ));
@@ -806,6 +826,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
             assistant_message_id: None,
             apple_calendar_deletes: None,
             automation_actions: None,
+            permission_requests: None,
         });
     }
     let content = parsed.message?.content;
@@ -818,6 +839,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
         assistant_message_id: None,
         apple_calendar_deletes: None,
         automation_actions: None,
+        permission_requests: None,
     })
 }
 
@@ -835,6 +857,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
             assistant_message_id: None,
             apple_calendar_deletes: None,
             automation_actions: None,
+            permission_requests: None,
         });
     }
     let json_str = line.strip_prefix("data: ")?;
@@ -851,6 +874,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
         assistant_message_id: None,
         apple_calendar_deletes: None,
         automation_actions: None,
+        permission_requests: None,
     })
 }
 
@@ -1115,6 +1139,7 @@ mod tests {
             assistant_message_id: None,
             apple_calendar_deletes: None,
             automation_actions: None,
+            permission_requests: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"content\":\"hello\""));
@@ -1130,6 +1155,7 @@ mod tests {
             assistant_message_id: None,
             apple_calendar_deletes: Some(vec!["E2E:123".into(), "E2E:456".into()]),
             automation_actions: None,
+            permission_requests: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"done\":true"));
@@ -1144,6 +1170,7 @@ mod tests {
             assistant_message_id: None,
             apple_calendar_deletes: Some(Vec::new()),
             automation_actions: None,
+            permission_requests: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         // An empty Vec is Some, so it serialises as []
@@ -1159,6 +1186,7 @@ mod tests {
             assistant_message_id: Some(id),
             apple_calendar_deletes: None,
             automation_actions: None,
+            permission_requests: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"assistant_message_id\":\"550e8400-e29b-41d4-a716-446655440000\""));
@@ -1177,6 +1205,7 @@ mod tests {
                 kind: "open_app".into(),
                 target: "Calculator".into(),
             }]),
+            permission_requests: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains(

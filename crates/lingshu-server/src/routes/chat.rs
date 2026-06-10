@@ -16,7 +16,9 @@ use uuid::Uuid;
 
 use crate::auth;
 use crate::error::AppError;
-use crate::llm::client::{AutomationAction, ChatChunk, ChatMessage, ChatOptions};
+use crate::llm::client::{
+    AutomationAction, ChatChunk, ChatMessage, ChatOptions, PermissionRequest,
+};
 use crate::llm::forgetting::{self, ForgettingPolicy};
 use crate::llm::prompts::{personality_prompt, PersonalityValues};
 use crate::models::personality::PersonalityTraits;
@@ -175,7 +177,7 @@ pub async fn chat(
     let (updated_messages, final_text, tool_effects) =
         run_tool_loop(&state, &llm, user_id, &model, messages, &options, &tools).await;
     messages = updated_messages;
-    tracing::debug!(%user_id, msg_count = messages.len(), has_final = final_text.is_some(), apple_deletes = tool_effects.apple_calendar_deletes.len(), automation = tool_effects.automation_actions.len(), "Tool loop done");
+    tracing::debug!(%user_id, msg_count = messages.len(), has_final = final_text.is_some(), apple_deletes = tool_effects.apple_calendar_deletes.len(), automation = tool_effects.automation_actions.len(), perm_req = tool_effects.permission_requests.len(), "Tool loop done");
 
     // When the tool loop produced a final text response, stream it directly
     // instead of making another LLM call. Otherwise, stream as normal.
@@ -191,6 +193,7 @@ pub async fn chat(
                     assistant_message_id: None,
                     apple_calendar_deletes: None,
                     automation_actions: None,
+                    permission_requests: None,
                 })
             }))
             .boxed()
@@ -222,6 +225,14 @@ pub async fn chat(
         };
     let automation_ref = Arc::new(Mutex::new(automation_opt));
 
+    let perm_req_opt: Option<Vec<PermissionRequest>> =
+        if tool_effects.permission_requests.is_empty() {
+            None
+        } else {
+            Some(tool_effects.permission_requests)
+        };
+    let perm_req_ref = Arc::new(Mutex::new(perm_req_opt));
+
     let sid_for_stream = session_id;
     let db_clone = state.db.clone();
     let llm_clone = llm.clone();
@@ -243,6 +254,7 @@ pub async fn chat(
         let user_message = um_clone.clone();
         let apple_deletes_ref = Arc::clone(&apple_deletes_ref);
         let automation_ref = Arc::clone(&automation_ref);
+        let perm_req_ref = Arc::clone(&perm_req_ref);
 
         async move {
             match result {
@@ -291,6 +303,7 @@ pub async fn chat(
                             apple_deletes_ref.lock().ok().and_then(|mut g| g.take());
                         let automation_final =
                             automation_ref.lock().ok().and_then(|mut g| g.take());
+                        let perm_req_final = perm_req_ref.lock().ok().and_then(|mut g| g.take());
                         return Ok(Event::default().data(
                             serde_json::to_string(&ChatChunk {
                                 content: chunk.content,
@@ -298,6 +311,7 @@ pub async fn chat(
                                 assistant_message_id,
                                 apple_calendar_deletes: apple_deletes_final,
                                 automation_actions: automation_final,
+                                permission_requests: perm_req_final,
                             })
                             .unwrap_or_default(),
                         ));
@@ -329,6 +343,7 @@ pub async fn chat(
                             assistant_message_id: None,
                             apple_calendar_deletes: None,
                             automation_actions: None,
+                            permission_requests: None,
                         })
                         .unwrap_or_default(),
                     ))
@@ -1487,6 +1502,8 @@ struct ToolEffects {
     apple_calendar_deletes: Vec<String>,
     /// L2 automation actions (open app/url/file) for the frontend to run.
     automation_actions: Vec<AutomationAction>,
+    /// Permission requests: when automation is denied, ask the user to grant.
+    permission_requests: Vec<PermissionRequest>,
 }
 
 /// Extract a string argument from a tool call, trimmed; "" if missing.
@@ -1548,11 +1565,18 @@ async fn enforce_automation(
         } else {
             "目标不在白名单内"
         };
+        // Include a permission request so the frontend can show a one-click grant dialog
+        let pr = PermissionRequest {
+            kind: kind.to_string(),
+            target: target.to_string(),
+            reason: reason.to_string(),
+        };
         (
-            format!(
-                "无法执行（{reason}）：{target}。可在「设置 → 权限」开启 L2 并将目标加入白名单。"
-            ),
-            ToolEffects::default(),
+            format!("无法执行（{reason}）：{target}。点击下方按钮即可一键授权。"),
+            ToolEffects {
+                permission_requests: vec![pr],
+                ..Default::default()
+            },
         )
     }
 }
@@ -1810,6 +1834,7 @@ async fn run_tool_loop(
                 .apple_calendar_deletes
                 .extend(eff.apple_calendar_deletes);
             effects.automation_actions.extend(eff.automation_actions);
+            effects.permission_requests.extend(eff.permission_requests);
             tool_results.push((tc.id.clone(), result));
         }
 

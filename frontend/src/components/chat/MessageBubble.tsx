@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { postSignal } from '../../lib/api';
+import { apiFetch, postSignal } from '../../lib/api';
+import { runAutomationAction } from '../../lib/automation';
 
 export interface Message {
   id: string;
@@ -11,6 +12,8 @@ export interface Message {
   /** Backend message UUID — set when the assistant response is persisted.
    *  Feedback buttons are disabled when this is undefined. */
   dbId?: string;
+  /** L2 permission requests from the backend — shown as inline grant buttons. */
+  permissionRequests?: Array<{ kind: string; target: string; reason: string }>;
 }
 
 interface MessageBubbleProps {
@@ -163,6 +166,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         )}
       </div>
 
+      {/* Permission grant button — shown when L2 whitelist blocks an action */}
+      {!isUser && message.permissionRequests && message.permissionRequests.length > 0 && (
+        <PermissionGrantButton requests={message.permissionRequests} />
+      )}
+
       {/* Feedback row — only for assistant messages with a dbId */}
       {!isUser && (
         <div style={{
@@ -218,6 +226,74 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Permission Grant Button ──────────────────────────────────────────
+
+interface PermissionRequest {
+  kind: string;
+  target: string;
+  reason: string;
+}
+
+function PermissionGrantButton({ requests }: { requests: PermissionRequest[] }) {
+  const [granted, setGranted] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(false);
+
+  const handleGrant = async (req: PermissionRequest) => {
+    setLoading(true);
+    try {
+      // 1. Add target to whitelist
+      const resp = await apiFetch('/api/v1/permissions');
+      if (!resp.ok) throw new Error('无法读取权限');
+      const perms = await resp.json();
+      const currentWhitelist: string[] = perms.l2_whitelist ?? [];
+      if (!currentWhitelist.includes(req.target)) {
+        currentWhitelist.push(req.target);
+      }
+      await apiFetch('/api/v1/permissions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          l2_automation: true,
+          l2_whitelist: currentWhitelist,
+        }),
+      });
+      // 2. Execute the action
+      await runAutomationAction({ kind: req.kind, target: req.target });
+      setGranted((s) => new Set(s).add(req.target));
+    } catch (e) {
+      console.error('[permission] grant failed:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }}>
+      {requests.map((req, i) => (
+        <button
+          key={i}
+          disabled={loading || granted.has(req.target)}
+          onClick={() => handleGrant(req)}
+          style={{
+            padding: '6px 14px',
+            fontSize: 13,
+            border: '1px solid var(--accent, #0a73ff)',
+            borderRadius: 6,
+            background: granted.has(req.target) ? '#4caf50' : 'var(--accent, #0a73ff)',
+            color: '#fff',
+            cursor: granted.has(req.target) ? 'default' : 'pointer',
+            opacity: loading ? 0.6 : 1,
+          }}
+        >
+          {granted.has(req.target)
+            ? `✅ 已授权并打开 ${req.target}`
+            : `🔓 授予权限并打开 ${req.target}`}
+        </button>
+      ))}
     </div>
   );
 }

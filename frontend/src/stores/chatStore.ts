@@ -146,6 +146,17 @@ export const useChatStore = create<ChatState>()(
                       // Calendar was modified — notify components to refresh
                       window.dispatchEvent(new CustomEvent('calendar-changed'));
                     }
+                    // L2 permission requests: show inline grant button.
+                    // Store on the message so MessageBubble can render it.
+                    if (data.permission_requests && Array.isArray(data.permission_requests)) {
+                      set((state) => ({
+                        messages: state.messages.map((m) =>
+                          m.id === assistantId
+                            ? { ...m, permissionRequests: data.permission_requests }
+                            : m,
+                        ),
+                      }));
+                    }
                     // L2 automation actions (open app/url/file) approved by the
                     // backend — forward each to its Tauri command.
                     if (data.automation_actions && Array.isArray(data.automation_actions)) {
