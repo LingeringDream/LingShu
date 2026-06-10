@@ -1179,7 +1179,9 @@ mod tests {
             }]),
         };
         let json = serde_json::to_string(&chunk).unwrap();
-        assert!(json.contains("\"automation_actions\":[{\"kind\":\"open_app\",\"target\":\"Calculator\"}]"));
+        assert!(json.contains(
+            "\"automation_actions\":[{\"kind\":\"open_app\",\"target\":\"Calculator\"}]"
+        ));
         // apple_calendar_deletes is None → skipped
         assert!(!json.contains("apple_calendar_deletes"));
     }

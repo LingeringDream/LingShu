@@ -214,12 +214,12 @@ pub async fn chat(
 
     // L2 automation actions for the frontend to execute via Tauri — same
     // take()-once-on-final-chunk pattern as the calendar deletes above.
-    let automation_opt: Option<Vec<AutomationAction>> = if tool_effects.automation_actions.is_empty()
-    {
-        None
-    } else {
-        Some(tool_effects.automation_actions)
-    };
+    let automation_opt: Option<Vec<AutomationAction>> =
+        if tool_effects.automation_actions.is_empty() {
+            None
+        } else {
+            Some(tool_effects.automation_actions)
+        };
     let automation_ref = Arc::new(Mutex::new(automation_opt));
 
     let sid_for_stream = session_id;
@@ -1512,20 +1512,22 @@ async fn enforce_automation(
     success_msg: String,
 ) -> (String, ToolEffects) {
     let perms = crate::routes::permissions::permissions_for_user(state, user_id).await;
-    if perms.automation_allowed(kind, target) {
+    // Resolve alias → canonical name (e.g. "Chrome" → "Google Chrome") so
+    // the Tauri side passes the correct name to `open -a`.
+    if let Some(canonical) = perms.resolve_canonical_target(kind, target) {
         crate::routes::audit::record(
             &state.db,
             user_id,
             kind,
             "automation",
             None,
-            serde_json::json!({ "target": target, "result": "allowed" }),
+            serde_json::json!({ "target": &canonical, "original": target, "result": "allowed" }),
         )
         .await;
         let effects = ToolEffects {
             automation_actions: vec![AutomationAction {
                 kind: kind.to_string(),
-                target: target.to_string(),
+                target: canonical,
             }],
             ..Default::default()
         };
@@ -1547,7 +1549,9 @@ async fn enforce_automation(
             "目标不在白名单内"
         };
         (
-            format!("无法执行（{reason}）：{target}。可在「设置 → 权限」开启 L2 并将目标加入白名单。"),
+            format!(
+                "无法执行（{reason}）：{target}。可在「设置 → 权限」开启 L2 并将目标加入白名单。"
+            ),
             ToolEffects::default(),
         )
     }
@@ -1570,7 +1574,10 @@ async fn execute_tool_call(
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             if text.is_empty() {
-                return Ok(("错误：未提供创建日历事件所需的文本。".into(), ToolEffects::default()));
+                return Ok((
+                    "错误：未提供创建日历事件所需的文本。".into(),
+                    ToolEffects::default(),
+                ));
             }
             match crate::routes::calendar::parse_and_create_event(state, user_id, text).await {
                 Ok(event) => Ok((
@@ -1595,7 +1602,10 @@ async fn execute_tool_call(
             match crate::routes::calendar::list_user_events(state, user_id, Some(20)).await {
                 Ok(events) => {
                     if events.is_empty() {
-                        Ok(("当前没有即将到来的日历事件。".into(), ToolEffects::default()))
+                        Ok((
+                            "当前没有即将到来的日历事件。".into(),
+                            ToolEffects::default(),
+                        ))
                     } else {
                         let lines: Vec<String> = events
                             .iter()
@@ -1631,7 +1641,12 @@ async fn execute_tool_call(
                 .unwrap_or_default();
             let event_id = match Uuid::parse_str(event_id_str) {
                 Ok(id) => id,
-                Err(_) => return Ok((format!("无效的事件 ID：{event_id_str}"), ToolEffects::default())),
+                Err(_) => {
+                    return Ok((
+                        format!("无效的事件 ID：{event_id_str}"),
+                        ToolEffects::default(),
+                    ))
+                }
             };
             match crate::routes::calendar::delete_user_event(state, user_id, event_id).await {
                 Ok(apple_ids) => Ok((
@@ -1651,7 +1666,10 @@ async fn execute_tool_call(
         "open_app" => {
             let name = tool_arg(tool_call, "name");
             if name.is_empty() {
-                return Ok(("错误：未提供要打开的 App 名称。".into(), ToolEffects::default()));
+                return Ok((
+                    "错误：未提供要打开的 App 名称。".into(),
+                    ToolEffects::default(),
+                ));
             }
             Ok(enforce_automation(
                 state,
@@ -1686,7 +1704,10 @@ async fn execute_tool_call(
         "open_file" => {
             let path = tool_arg(tool_call, "path");
             if path.is_empty() {
-                return Ok(("错误：未提供要打开的文件路径。".into(), ToolEffects::default()));
+                return Ok((
+                    "错误：未提供要打开的文件路径。".into(),
+                    ToolEffects::default(),
+                ));
             }
             Ok(enforce_automation(
                 state,
@@ -1785,7 +1806,9 @@ async fn run_tool_loop(
                     (format!("工具执行失败：{e}"), ToolEffects::default())
                 }
             };
-            effects.apple_calendar_deletes.extend(eff.apple_calendar_deletes);
+            effects
+                .apple_calendar_deletes
+                .extend(eff.apple_calendar_deletes);
             effects.automation_actions.extend(eff.automation_actions);
             tool_results.push((tc.id.clone(), result));
         }
@@ -1824,7 +1847,10 @@ mod tests {
             "open_url",
             "open_file",
         ] {
-            assert!(names.contains(&expected.to_string()), "missing tool {expected}");
+            assert!(
+                names.contains(&expected.to_string()),
+                "missing tool {expected}"
+            );
         }
     }
 

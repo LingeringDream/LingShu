@@ -58,34 +58,134 @@ impl PermissionSettings {
     /// Whether an L2 automation target may be acted on.
     ///
     /// Requires `l2_automation`. When `l2_whitelist_only` is on (the default),
-    /// the target must match a whitelist entry: apps match case-insensitively
-    /// and exactly; URLs/paths match by case-insensitive prefix (so
-    /// `https://github.com` whitelists `https://github.com/anthropics`).
+    /// the target must match a whitelist entry. Use [`resolve_canonical_target`]
+    /// to get the canonical OS-level name after this check passes.
     /// Default-deny: empty whitelist allows nothing.
     pub fn automation_allowed(&self, kind: &str, target: &str) -> bool {
+        self.resolve_canonical_target(kind, target).is_some()
+    }
+
+    /// Return the canonical form of `target` if it's whitelisted.
+    ///
+    /// Apps: returns the whitelist entry (e.g. "Chrome" → "Google Chrome")
+    /// so the Tauri side can pass the correct name to `open -a`.
+    /// URLs/paths: returns the target unchanged.
+    pub fn resolve_canonical_target(&self, kind: &str, target: &str) -> Option<String> {
         if !self.l2_automation {
-            return false;
+            return None;
         }
         if !self.l2_whitelist_only {
-            return true;
+            return Some(target.to_string());
         }
         let t = target.trim().to_lowercase();
         if t.is_empty() {
-            return false;
+            return None;
         }
-        self.l2_whitelist.iter().any(|entry| {
-            let e = entry.trim().to_lowercase();
-            if e.is_empty() {
-                return false;
+        self.l2_whitelist.iter().find_map(|entry| {
+            let e = entry.trim();
+            let el = e.to_lowercase();
+            if el.is_empty() {
+                return None;
             }
-            match kind {
-                "open_url" | "open_file" => t.starts_with(&e),
-                // apps: exact match so "Calculator" can't allow "CalculatorEvil"
-                _ => t == e,
+            let matched = match kind {
+                "open_url" | "open_file" => t.starts_with(&el),
+                _ => app_name_matches(&t, &el),
+            };
+            if matched {
+                Some(e.to_string())
+            } else {
+                None
             }
         })
     }
 }
+
+/// Normalised app-name matching for L2 whitelist.
+///
+/// Strips `.app` suffix, then tries exact match, known macOS
+/// localised-name aliases, and finally prefix abbreviation
+/// (short whitelist entry matching a longer target, no reverse).
+fn app_name_matches(target: &str, whitelist_entry: &str) -> bool {
+    let t = target.strip_suffix(".app").unwrap_or(target);
+    let w = whitelist_entry
+        .strip_suffix(".app")
+        .unwrap_or(whitelist_entry);
+
+    // 1. Exact normalised match
+    if t == w {
+        return true;
+    }
+
+    // 2. macOS built-in app aliases (English ↔ Chinese, abbreviations)
+    if let Some(aliases) = MACOS_APP_ALIASES.get(w) {
+        if aliases.contains(&t) {
+            return true;
+        }
+    }
+    // Also check reverse: target may be the canonical name
+    if let Some(aliases) = MACOS_APP_ALIASES.get(t) {
+        if aliases.contains(&w) {
+            return true;
+        }
+    }
+
+    // 3. Abbreviation: short whitelist entry (2–5 chars) is allowed to
+    //    match the start of a longer target. "Calc" → "Calculator" ✅
+    //    but "Calculator" → "CalculatorEvil" ❌ (entry too long for an abbrev).
+    // Only when the entry is an abbreviation (≤ 8 chars, shorter than target).
+    if w.len() <= 8 && w.len() < t.len() && t.starts_with(w) {
+        return true;
+    }
+
+    false
+}
+
+/// macOS built-in app name aliases. Only the most common localised
+/// and abbreviated forms are included.
+static MACOS_APP_ALIASES: std::sync::LazyLock<std::collections::HashMap<&str, Vec<&str>>> =
+    std::sync::LazyLock::new(|| {
+        let mut m = std::collections::HashMap::new();
+        m.insert("calculator", vec!["计算器", "calc"]);
+        m.insert("计算器", vec!["calculator", "calc"]);
+        m.insert("safari", vec!["safari browser"]);
+        m.insert("terminal", vec!["终端", "term"]);
+        m.insert("终端", vec!["terminal", "term"]);
+        m.insert(
+            "system settings",
+            vec!["settings", "系统设置", "preferences", "system preferences"],
+        );
+        m.insert("系统设置", vec!["system settings", "settings"]);
+        m.insert("activity monitor", vec!["活动监视器"]);
+        m.insert("活动监视器", vec!["activity monitor"]);
+        m.insert("textedit", vec!["textedit.app", "文本编辑"]);
+        m.insert("文本编辑", vec!["textedit"]);
+        m.insert("finder", vec!["访达"]);
+        m.insert("访达", vec!["finder"]);
+        m.insert("notes", vec!["备忘录", "note"]);
+        m.insert("备忘录", vec!["notes", "note"]);
+        m.insert("reminders", vec!["提醒事项"]);
+        m.insert("提醒事项", vec!["reminders"]);
+        m.insert("calendar", vec!["日历", "ical"]);
+        m.insert("日历", vec!["calendar", "ical"]);
+        m.insert("mail", vec!["邮件", "apple mail"]);
+        m.insert("邮件", vec!["mail", "apple mail"]);
+        m.insert("photos", vec!["照片"]);
+        m.insert("照片", vec!["photos"]);
+        m.insert("music", vec!["音乐", "itunes"]);
+        m.insert("音乐", vec!["music", "itunes"]);
+        m.insert("messages", vec!["信息", "imessage"]);
+        m.insert("信息", vec!["messages", "imessage"]);
+        m.insert("app store", vec!["appstore"]);
+        m.insert("appstore", vec!["app store"]);
+        m.insert("visual studio code", vec!["code", "vscode", "vs code"]);
+        m.insert("vscode", vec!["visual studio code", "code"]);
+        m.insert("google chrome", vec!["chrome", "google chrome.app"]);
+        m.insert("chrome", vec!["google chrome"]);
+        m.insert("firefox", vec!["firefox.app"]);
+        m.insert("obsidian", vec!["obsidian.app"]);
+        m.insert("notion", vec!["notion.app"]);
+        m
+    });
 
 /// Load permissions for a user: in-memory → DB → default.
 pub async fn permissions_for_user(state: &AppState, user_id: Uuid) -> PermissionSettings {
@@ -375,5 +475,63 @@ mod tests {
         // whitelist_only off → anything allowed once l2 is on.
         p.l2_whitelist_only = false;
         assert!(p.automation_allowed("open_app", "AnythingGoes"));
+    }
+
+    #[test]
+    fn app_name_strips_dot_app() {
+        let p = PermissionSettings {
+            l2_automation: true,
+            l2_whitelist_only: true,
+            l2_whitelist: vec!["Safari".into()],
+            ..Default::default()
+        };
+        assert!(p.automation_allowed("open_app", "Safari.app"));
+        assert!(p.automation_allowed("open_app", "safari"));
+    }
+
+    #[test]
+    fn app_name_chinese_alias() {
+        let p = PermissionSettings {
+            l2_automation: true,
+            l2_whitelist_only: true,
+            l2_whitelist: vec!["Calculator".into()],
+            ..Default::default()
+        };
+        // "计算器" is the macOS Chinese localised name for Calculator
+        assert!(p.automation_allowed("open_app", "计算器"));
+        // Reverse: whitelist "计算器" → allows "Calculator"
+        let p2 = PermissionSettings {
+            l2_automation: true,
+            l2_whitelist_only: true,
+            l2_whitelist: vec!["计算器".into()],
+            ..Default::default()
+        };
+        assert!(p2.automation_allowed("open_app", "Calculator"));
+    }
+
+    #[test]
+    fn app_name_abbreviation() {
+        let p = PermissionSettings {
+            l2_automation: true,
+            l2_whitelist_only: true,
+            l2_whitelist: vec!["Calc".into()],
+            ..Default::default()
+        };
+        // "Calc" (4 chars ≤ 8) matches "Calculator" via abbreviation prefix
+        assert!(p.automation_allowed("open_app", "Calculator"));
+        // Exact self-match still works
+        assert!(p.automation_allowed("open_app", "Calc"));
+    }
+
+    #[test]
+    fn app_name_vscode_alias() {
+        let p = PermissionSettings {
+            l2_automation: true,
+            l2_whitelist_only: true,
+            l2_whitelist: vec!["Visual Studio Code".into()],
+            ..Default::default()
+        };
+        assert!(p.automation_allowed("open_app", "Code"));
+        assert!(p.automation_allowed("open_app", "vscode"));
     }
 }
