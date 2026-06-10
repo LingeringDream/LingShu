@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Message } from '../components/chat/MessageBubble';
 import { apiFetch } from '../lib/api';
+import { deleteAppleCalendarEvent } from '../lib/eventkit';
 
 interface ChatState {
   messages: Message[];
@@ -138,14 +139,9 @@ export const useChatStore = create<ChatState>()(
                     // eventIdentifiers that the frontend needs to remove from the
                     // system calendar.
                     if (data.apple_calendar_deletes && Array.isArray(data.apple_calendar_deletes)) {
-                      import('../lib/eventkit').then(
-                        ({ deleteAppleCalendarEvent }) => {
-                          for (const id of data.apple_calendar_deletes) {
-                            deleteAppleCalendarEvent(id).catch(() => {});
-                          }
-                        },
-                        () => {},
-                      );
+                      for (const id of data.apple_calendar_deletes) {
+                        deleteAppleCalendarEvent(id).catch(() => {});
+                      }
                       // Calendar was modified — notify components to refresh
                       window.dispatchEvent(new CustomEvent('calendar-changed'));
                     }
