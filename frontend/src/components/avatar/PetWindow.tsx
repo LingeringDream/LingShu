@@ -166,6 +166,11 @@ export function PetWindow() {
   const [inTauri, setInTauri] = useState(false);
   const draggedRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
+  // Pre-resolved Tauri window handle. We need startDragging() to run
+  // synchronously inside the mousemove handler: on macOS the native drag
+  // (performWindowDragWithEvent:) binds to the live mouse event, so awaiting a
+  // dynamic import first can drop the gesture and the window never moves.
+  const petWindowRef = useRef<{ startDragging: () => Promise<void> } | null>(null);
 
   // ── PixiJS init ─────────────────────────────────────────────────
   useEffect(() => {
@@ -174,18 +179,35 @@ export function PetWindow() {
 
     const app = new Application();
     let disposed = false;
+    let initialized = false;
 
     (async () => {
-      await app.init({
-        width: 200,
-        height: 260,
-        backgroundAlpha: 0,
-        antialias: true,
-        resolution: 2,
-        autoDensity: true,
-      });
-      if (disposed) { app.destroy(); return; }
-      canvasRef.current!.appendChild(app.canvas);
+      try {
+        await app.init({
+          width: 200,
+          height: 260,
+          backgroundAlpha: 0.005, // non-zero so macOS doesn't pass clicks through
+          antialias: true,
+          resolution: 2,
+          autoDensity: true,
+        });
+      } catch (err) {
+        console.error('[pet] PixiJS init failed:', err);
+        return;
+      }
+
+      // The effect was cleaned up (StrictMode double-invoke / HMR / unmount)
+      // while init() was still in flight. Now that init has finished the app
+      // is safe to tear down — calling destroy() on a half-initialized
+      // Application throws "_cancelResize is not a function" and crashes the
+      // whole component.
+      if (disposed) { app.destroy(true); return; }
+
+      const container = canvasRef.current;
+      if (!container) { app.destroy(true); return; }
+
+      initialized = true;
+      container.appendChild(app.canvas);
 
       const pet = new PetCharacter();
       petRef.current = pet;
@@ -214,7 +236,17 @@ export function PetWindow() {
       appRef.current = app;
     })();
 
-    return () => { disposed = true; app.destroy(true); };
+    return () => {
+      disposed = true;
+      // Only destroy once init has completed. If init is still running, the
+      // async block above will destroy the app when it resolves (see the
+      // `disposed` check). Destroying before init throws inside PixiJS.
+      if (initialized) {
+        app.destroy(true);
+        appRef.current = null;
+        petRef.current = null;
+      }
+    };
   }, []);
 
   // ── Mood cycling ────────────────────────────────────────────────
@@ -236,6 +268,18 @@ export function PetWindow() {
     const y = e.clientY - rect.top;
     // Map to pet local space
     petRef.current?.setLookTarget(x * (100 / rect.width), y * (100 / rect.height));
+  }, []);
+
+  // ── Pre-load Tauri window handle for dragging ───────────────────
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) => {
+        if (!cancelled) petWindowRef.current = getCurrentWindow();
+      })
+      .catch((err) => console.error('[pet] failed to load window API:', err));
+    return () => { cancelled = true; };
   }, []);
 
   // ── WebSocket for notifications ─────────────────────────────────
@@ -266,6 +310,18 @@ export function PetWindow() {
   }, [inTauri]);
 
   // ── Drag ────────────────────────────────────────────────────────
+  const startDrag = () => {
+    const w = petWindowRef.current;
+    if (w) {
+      w.startDragging().catch((err) => console.error('[pet] startDragging failed:', err));
+      return;
+    }
+    // Eager load hasn't resolved yet — fall back to a direct import.
+    import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) => getCurrentWindow().startDragging())
+      .catch((err) => console.error('[pet] startDragging failed:', err));
+  };
+
   const handleDragMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0 || !inTauri) return;
     const startX = e.clientX;
@@ -277,9 +333,7 @@ export function PetWindow() {
       if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > DRAG_THRESHOLD_PX) {
         draggedRef.current = true;
         cleanup();
-        import('@tauri-apps/api/window')
-          .then(({ getCurrentWindow }) => getCurrentWindow().startDragging())
-          .catch((err) => console.error('[pet] startDragging failed:', err));
+        startDrag();
       }
     };
     const cleanup = () => {
@@ -317,7 +371,9 @@ export function PetWindow() {
         width: '100vw', height: '100vh',
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
-        background: 'transparent', userSelect: 'none',
+        // transparent window: macOS passes clicks through zero-alpha pixels.
+        // A 1/255 red channel tricks the compositor into keeping events here.
+        background: 'rgba(255,255,255,0.01)', userSelect: 'none',
         WebkitUserSelect: 'none', cursor: 'grab',
       }}
     >
