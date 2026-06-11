@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { apiFetch, postSignal } from '../../lib/api';
 import { runAutomationAction } from '../../lib/automation';
+import { isTauri, invokeTauri } from '../../lib/tauri';
 
 export interface Message {
   id: string;
@@ -245,6 +246,26 @@ function PermissionGrantButton({ requests }: { requests: PermissionRequest[] }) 
   const handleGrant = async (req: PermissionRequest) => {
     setLoading(true);
     try {
+      if (req.kind === 'accessibility') {
+        // Screen reading needs two grants: the in-app L3 tier and the macOS
+        // Accessibility permission. Enable L3 here, then fire the system
+        // prompt from the desktop app (it registers 「灵枢 LingShu」 in the
+        // Accessibility list with the current code signature).
+        await apiFetch('/api/v1/permissions', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ l3_accessibility: true }),
+        });
+        if (isTauri()) {
+          try {
+            await invokeTauri('request_accessibility_permission');
+          } catch (e) {
+            console.error('[permission] accessibility prompt failed:', e);
+          }
+        }
+        setGranted((s) => new Set(s).add(req.target));
+        return;
+      }
       // 1. Add target to whitelist
       const resp = await apiFetch('/api/v1/permissions');
       if (!resp.ok) throw new Error('无法读取权限');
@@ -289,9 +310,13 @@ function PermissionGrantButton({ requests }: { requests: PermissionRequest[] }) 
             opacity: loading ? 0.6 : 1,
           }}
         >
-          {granted.has(req.target)
-            ? `✅ 已授权并打开 ${req.target}`
-            : `🔓 授予权限并打开 ${req.target}`}
+          {req.kind === 'accessibility'
+            ? granted.has(req.target)
+              ? '✅ 已开启 L3 权限——请在系统设置中勾选「灵枢」后重试'
+              : '🔓 开启屏幕识别权限'
+            : granted.has(req.target)
+              ? `✅ 已授权并打开 ${req.target}`
+              : `🔓 授予权限并打开 ${req.target}`}
         </button>
       ))}
     </div>

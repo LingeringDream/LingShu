@@ -127,6 +127,12 @@ pub struct ChatChunk {
     /// the target to the whitelist.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_requests: Option<Vec<PermissionRequest>>,
+    /// Screen-read handoff: set on the final chunk when the model called
+    /// `read_screen` and L3 is granted. The desktop frontend must capture the
+    /// frontmost window's text (in the authorized main-app process) and
+    /// re-send the turn with `screen_context` so the model can answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen_read_request: Option<bool>,
 }
 
 /// A whitelisted L2 automation action for the desktop frontend to execute.
@@ -771,6 +777,7 @@ fn parse_byte_stream(
                                 apple_calendar_deletes: None,
                                 automation_actions: None,
                                 permission_requests: None,
+                                screen_read_request: None,
                             })),
                             (stream, bytes::BytesMut::new(), true),
                         ));
@@ -783,6 +790,7 @@ fn parse_byte_stream(
                             apple_calendar_deletes: None,
                             automation_actions: None,
                             permission_requests: None,
+                            screen_read_request: None,
                         }),
                         (stream, buf, true),
                     ));
@@ -827,6 +835,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
             apple_calendar_deletes: None,
             automation_actions: None,
             permission_requests: None,
+            screen_read_request: None,
         });
     }
     let content = parsed.message?.content;
@@ -840,6 +849,7 @@ fn parse_ollama_line(line: &str) -> Option<ChatChunk> {
         apple_calendar_deletes: None,
         automation_actions: None,
         permission_requests: None,
+        screen_read_request: None,
     })
 }
 
@@ -858,6 +868,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
             apple_calendar_deletes: None,
             automation_actions: None,
             permission_requests: None,
+            screen_read_request: None,
         });
     }
     let json_str = line.strip_prefix("data: ")?;
@@ -875,6 +886,7 @@ fn parse_openai_line(line: &str) -> Option<ChatChunk> {
         apple_calendar_deletes: None,
         automation_actions: None,
         permission_requests: None,
+        screen_read_request: None,
     })
 }
 
@@ -1140,6 +1152,7 @@ mod tests {
             apple_calendar_deletes: None,
             automation_actions: None,
             permission_requests: None,
+            screen_read_request: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"content\":\"hello\""));
@@ -1156,6 +1169,7 @@ mod tests {
             apple_calendar_deletes: Some(vec!["E2E:123".into(), "E2E:456".into()]),
             automation_actions: None,
             permission_requests: None,
+            screen_read_request: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"done\":true"));
@@ -1171,6 +1185,7 @@ mod tests {
             apple_calendar_deletes: Some(Vec::new()),
             automation_actions: None,
             permission_requests: None,
+            screen_read_request: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         // An empty Vec is Some, so it serialises as []
@@ -1187,6 +1202,7 @@ mod tests {
             apple_calendar_deletes: None,
             automation_actions: None,
             permission_requests: None,
+            screen_read_request: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains("\"assistant_message_id\":\"550e8400-e29b-41d4-a716-446655440000\""));
@@ -1206,6 +1222,7 @@ mod tests {
                 target: "Calculator".into(),
             }]),
             permission_requests: None,
+            screen_read_request: None,
         };
         let json = serde_json::to_string(&chunk).unwrap();
         assert!(json.contains(

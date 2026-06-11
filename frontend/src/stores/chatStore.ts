@@ -4,7 +4,7 @@ import { persist } from 'zustand/middleware';
 import type { Message } from '../components/chat/MessageBubble';
 import { apiFetch } from '../lib/api';
 import { deleteAppleCalendarEvent } from '../lib/eventkit';
-import { runAutomationAction } from '../lib/automation';
+import { runAutomationAction, readScreen } from '../lib/automation';
 
 interface ChatState {
   messages: Message[];
@@ -90,112 +90,202 @@ export const useChatStore = create<ChatState>()(
             set({ sessionId: id }),
           );
 
-          const response = await apiFetch('/api/v1/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(
-              sessionId ? { message: content, session_id: sessionId } : { message: content },
-            ),
-          });
+          const baseBody: Record<string, unknown> = sessionId
+            ? { message: content, session_id: sessionId }
+            : { message: content };
 
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
+          // Run one chat request and stream its SSE response into the assistant
+          // bubble. Returns 'screen_read' when the backend asked the desktop
+          // client to capture screen text (the read_screen handoff): the caller
+          // then captures it in the authorized main-app process and runs a
+          // second pass with `screen_context`. Returns 'done' otherwise.
+          const runChatStream = async (
+            body: Record<string, unknown>,
+          ): Promise<'screen_read' | 'done'> => {
+            const response = await apiFetch('/api/v1/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
 
-          // Read SSE stream and update the assistant message incrementally
-          const reader = response.body?.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
 
-          if (reader) {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
+            // Read SSE stream and update the assistant message incrementally
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
-              buffer += decoder.decode(value, { stream: true });
-
-              // Parse complete SSE events from the buffer
+            if (reader) {
               while (true) {
-                const newlineIdx = buffer.indexOf('\n');
-                if (newlineIdx === -1) break;
+                const { done, value } = await reader.read();
+                if (done) break;
 
-                const line = buffer.slice(0, newlineIdx).trim();
-                buffer = buffer.slice(newlineIdx + 1);
+                buffer += decoder.decode(value, { stream: true });
 
-                if (line.startsWith('data: ')) {
-                  try {
-                    const data = JSON.parse(line.slice(6));
-                    if (data.content) {
-                      // Update the assistant message in-place
-                      set((state) => ({
-                        messages: state.messages.map((m) =>
-                          m.id === assistantId
-                            ? { ...m, content: m.content + data.content }
-                            : m,
-                        ),
-                      }));
-                    }
-                    // Apple Calendar delete sync: when the backend deletes a
-                    // calendar event via the chat tool, it includes any EventKit
-                    // eventIdentifiers that the frontend needs to remove from the
-                    // system calendar.
-                    if (data.apple_calendar_deletes && Array.isArray(data.apple_calendar_deletes)) {
-                      for (const id of data.apple_calendar_deletes) {
-                        deleteAppleCalendarEvent(id).catch(() => {});
+                // Parse complete SSE events from the buffer
+                while (true) {
+                  const newlineIdx = buffer.indexOf('\n');
+                  if (newlineIdx === -1) break;
+
+                  const line = buffer.slice(0, newlineIdx).trim();
+                  buffer = buffer.slice(newlineIdx + 1);
+
+                  if (line.startsWith('data: ')) {
+                    try {
+                      const data = JSON.parse(line.slice(6));
+                      if (data.content) {
+                        // Update the assistant message in-place
+                        set((state) => ({
+                          messages: state.messages.map((m) =>
+                            m.id === assistantId
+                              ? { ...m, content: m.content + data.content }
+                              : m,
+                          ),
+                        }));
                       }
-                      // Calendar was modified — notify components to refresh
-                      window.dispatchEvent(new CustomEvent('calendar-changed'));
-                    }
-                    // L2 permission requests: show inline grant button.
-                    // Store on the message so MessageBubble can render it.
-                    if (data.permission_requests && Array.isArray(data.permission_requests)) {
-                      set((state) => ({
-                        messages: state.messages.map((m) =>
-                          m.id === assistantId
-                            ? { ...m, permissionRequests: data.permission_requests }
-                            : m,
-                        ),
-                      }));
-                    }
-                    // L2 automation actions (open app/url/file) approved by the
-                    // backend — forward each to its Tauri command.
-                    if (data.automation_actions && Array.isArray(data.automation_actions)) {
-                      for (const action of data.automation_actions) {
-                        runAutomationAction(action).catch(() => {});
+                      // Apple Calendar delete sync: when the backend deletes a
+                      // calendar event via the chat tool, it includes any EventKit
+                      // eventIdentifiers that the frontend needs to remove from the
+                      // system calendar.
+                      if (data.apple_calendar_deletes && Array.isArray(data.apple_calendar_deletes)) {
+                        for (const id of data.apple_calendar_deletes) {
+                          deleteAppleCalendarEvent(id).catch(() => {});
+                        }
+                        // Calendar was modified — notify components to refresh
+                        window.dispatchEvent(new CustomEvent('calendar-changed'));
                       }
+                      // L2 permission requests: show inline grant button.
+                      // Store on the message so MessageBubble can render it.
+                      if (data.permission_requests && Array.isArray(data.permission_requests)) {
+                        set((state) => ({
+                          messages: state.messages.map((m) =>
+                            m.id === assistantId
+                              ? { ...m, permissionRequests: data.permission_requests }
+                              : m,
+                          ),
+                        }));
+                      }
+                      // L2 automation actions (open app/url/file) approved by the
+                      // backend — forward each to its Tauri command.
+                      if (data.automation_actions && Array.isArray(data.automation_actions)) {
+                        for (const action of data.automation_actions) {
+                          runAutomationAction(action).catch(() => {});
+                        }
+                      }
+                      if (data.done) {
+                        // Screen-read handoff: do NOT finalize — let the caller
+                        // capture screen text and run a second pass.
+                        if (data.screen_read_request) {
+                          return 'screen_read';
+                        }
+                        // Streaming complete — capture the backend message id for feedback
+                        const dbId: string | undefined = data.assistant_message_id;
+                        set((state) => ({
+                          isLoading: false,
+                          streamingId: null,
+                          messages: state.messages.map((m) =>
+                            m.id === assistantId
+                              ? { ...m, dbId }
+                              : m,
+                          ),
+                        }));
+                        return 'done';
+                      }
+                    } catch {
+                      // Skip malformed JSON lines
                     }
-                    if (data.done) {
-                      // Streaming complete — capture the backend message id for feedback
-                      const dbId: string | undefined = data.assistant_message_id;
-                      set((state) => ({
-                        isLoading: false,
-                        streamingId: null,
-                        messages: state.messages.map((m) =>
-                          m.id === assistantId
-                            ? { ...m, dbId }
-                            : m,
-                        ),
-                      }));
-                      return;
-                    }
-                  } catch {
-                    // Skip malformed JSON lines
                   }
                 }
               }
             }
-          }
 
-          // If we exit without a done marker, mark complete anyway
-          set((state) => ({
-            isLoading: false,
-            streamingId: null,
-            messages: state.messages.map((m) =>
-              m.id === assistantId && m.content === ''
-                ? { ...m, content: '（无响应）' }
-                : m,
-            ),
-          }));
+            // If we exit without a done marker, mark complete anyway
+            set((state) => ({
+              isLoading: false,
+              streamingId: null,
+              messages: state.messages.map((m) =>
+                m.id === assistantId && m.content === ''
+                  ? { ...m, content: '（无响应）' }
+                  : m,
+              ),
+            }));
+            return 'done';
+          };
+
+          const outcome = await runChatStream(baseBody);
+          if (outcome === 'screen_read') {
+            // The model asked to read the screen and L3 is granted. Capture the
+            // frontmost window's text in the MAIN-app process (com.lingshu.desktop
+            // — the TCC subject the user can actually authorize), then resend so
+            // the model answers using it.
+            set((state) => ({
+              messages: state.messages.map((m) =>
+                m.id === assistantId ? { ...m, content: '（正在读取屏幕…）' } : m,
+              ),
+            }));
+            let screenText = '';
+            try {
+              screenText = await readScreen();
+            } catch (e) {
+              set((state) => ({
+                isLoading: false,
+                streamingId: null,
+                messages: state.messages.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        content: e instanceof Error ? e.message : '无法读取屏幕。',
+                        permissionRequests: [
+                          {
+                            kind: 'accessibility',
+                            target: '屏幕识别',
+                            reason: '需要在系统设置中为「灵枢」开启辅助功能',
+                          },
+                        ],
+                      }
+                    : m,
+                ),
+              }));
+              return;
+            }
+            if (!screenText || screenText.trim().length === 0) {
+              set((state) => ({
+                isLoading: false,
+                streamingId: null,
+                messages: state.messages.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: '未能读取到屏幕文字（前台窗口可能没有可读文本元素）。请切换到有文字内容的窗口后重试。' }
+                    : m,
+                ),
+              }));
+              return;
+            }
+            // Clear transient status, then run the second pass.
+            set((state) => ({
+              messages: state.messages.map((m) =>
+                m.id === assistantId ? { ...m, content: '' } : m,
+              ),
+            }));
+            const secondOutcome = await runChatStream({ ...baseBody, screen_context: screenText });
+            // If the second pass ended without streaming any content (model error,
+            // empty response, etc.), surface an error so the bubble isn't blank.
+            if (secondOutcome !== 'done') {
+              const current = get().messages.find((m) => m.id === assistantId);
+              if (!current || current.content.trim() === '') {
+                set((state) => ({
+                  isLoading: false,
+                  streamingId: null,
+                  messages: state.messages.map((m) =>
+                    m.id === assistantId
+                      ? { ...m, content: '模型未返回响应。请重试或检查模型配置。' }
+                      : m,
+                  ),
+                }));
+              }
+            }
+          }
         } catch (error) {
           const is404 = error instanceof Error && error.message === 'HTTP 404';
           set((state) => ({

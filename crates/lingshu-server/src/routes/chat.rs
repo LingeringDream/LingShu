@@ -33,6 +33,11 @@ pub fn router() -> Router<AppState> {
 pub struct ChatRequest {
     pub message: String,
     pub session_id: Option<Uuid>,
+    /// Screen text captured client-side (main app process) and fed back so the
+    /// model can answer using it. Set only on the auto-continuation turn after
+    /// a `read_screen` tool call; see the screen-read flow in this module.
+    #[serde(default)]
+    pub screen_context: Option<String>,
 }
 
 // ── Handler ───────────────────────────────────────────────────────
@@ -160,29 +165,93 @@ pub async fn chat(
     };
 
     // ── Calendar intent routing ────────────────────────────────────
-    // Gemma 8B is inconsistent with tool calling — it sometimes ignores
-    // tools and fabricates responses. To be reliable, we detect calendar
-    // intents with keyword matching, execute the tool ourselves, and let
-    // the LLM only generate the natural-language response around the result.
     let calendar_hint =
         preflight_calendar_intent(&state, user_id, &user_message, &settings.model).await;
     if let Some(ref hint_msg) = calendar_hint {
         messages.push(ChatMessage::user(hint_msg.clone()));
     }
 
+    // ── Screen-read preflight ──────────────────────────────────────
+    // Some models ignore the read_screen tool. When the intent is clear,
+    // inject an explicit instruction that the model MUST call the tool.
+    // Screen text captured client-side on the previous turn (read_screen flow):
+    // inject it as context so the model can answer, and drop the read_screen
+    // tool so it doesn't re-trigger the capture handshake on this turn.
+    let screen_context = req.screen_context.clone().filter(|s| !s.trim().is_empty());
+    if let Some(ref sc) = screen_context {
+        messages.push(ChatMessage::user(format!("[屏幕内容]\n{sc}")));
+    }
+
+    // Keyword preflight for screen reading — model-agnostic. When the user
+    // clearly wants the screen read (and this isn't already the capture
+    // continuation turn), trigger the client-capture handoff DIRECTLY rather
+    // than hoping the model emits a read_screen tool call:
+    //   L3 on  → emit screen_read_request; the frontend captures the frontmost
+    //            window's text (authorized main-app process) and resends with
+    //            `screen_context`, then the model answers using it.
+    //   L3 off → return the one-click L3 grant button.
+    let screen_preflight: Option<(Option<String>, ToolEffects)> =
+        if screen_context.is_none() && preflight_screen_read_intent(&user_message) {
+            let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
+            if perms.l3_accessibility {
+                Some((None, ToolEffects { screen_read_request: true, ..Default::default() }))
+            } else {
+                Some((
+                    Some("要读取屏幕需要先开启「L3 屏幕识别」权限。点下方按钮一键开启（首次使用还需在系统弹窗中允许「辅助功能」）。".to_string()),
+                    ToolEffects {
+                        permission_requests: vec![PermissionRequest {
+                            kind: "accessibility".to_string(),
+                            target: "屏幕识别".to_string(),
+                            reason: "L3 屏幕识别权限未开启".to_string(),
+                        }],
+                        ..Default::default()
+                    },
+                ))
+            }
+        } else {
+            None
+        };
+
     // ── Tool calling loop (fallback for complex / chained ops) ─────
-    let tools = chat_tools();
+    let mut tools = chat_tools();
+    if screen_context.is_some() {
+        tools.retain(|t| t.function.name != "read_screen");
+    }
     let model = settings.model.clone();
-    tracing::debug!(%user_id, tool_count = tools.len(), "Entering tool loop");
-    let (updated_messages, final_text, tool_effects) =
-        run_tool_loop(&state, &llm, user_id, &model, messages, &options, &tools).await;
+    let (updated_messages, final_text, tool_effects) = match screen_preflight {
+        Some((ft, eff)) => {
+            tracing::debug!(%user_id, "Screen-intent preflight short-circuit (bypassing tool loop)");
+            (messages, ft, eff)
+        }
+        None => {
+            tracing::debug!(%user_id, tool_count = tools.len(), "Entering tool loop");
+            run_tool_loop(&state, &llm, user_id, &model, messages, &options, &tools).await
+        }
+    };
     messages = updated_messages;
     tracing::debug!(%user_id, msg_count = messages.len(), has_final = final_text.is_some(), apple_deletes = tool_effects.apple_calendar_deletes.len(), automation = tool_effects.automation_actions.len(), perm_req = tool_effects.permission_requests.len(), "Tool loop done");
 
     // When the tool loop produced a final text response, stream it directly
     // instead of making another LLM call. Otherwise, stream as normal.
     let chunk_stream: futures::stream::BoxStream<'static, Result<ChatChunk, anyhow::Error>> =
-        if let Some(text) = final_text {
+        if tool_effects.screen_read_request {
+            // read_screen handoff: emit a single terminal chunk telling the
+            // desktop client to capture screen text (in the authorized main-app
+            // process) and resend with `screen_context`. No LLM call, and the
+            // empty content means nothing is persisted (see finalize()).
+            futures::stream::once(async {
+                Ok(ChatChunk {
+                    content: String::new(),
+                    done: true,
+                    assistant_message_id: None,
+                    apple_calendar_deletes: None,
+                    automation_actions: None,
+                    permission_requests: None,
+                    screen_read_request: Some(true),
+                })
+            })
+            .boxed()
+        } else if let Some(text) = final_text {
             // Stream the pre-generated text character-by-character for visual effect
             let chars: Vec<char> = text.chars().collect();
             let total = chars.len();
@@ -194,6 +263,7 @@ pub async fn chat(
                     apple_calendar_deletes: None,
                     automation_actions: None,
                     permission_requests: None,
+                    screen_read_request: None,
                 })
             }))
             .boxed()
@@ -312,6 +382,9 @@ pub async fn chat(
                                 apple_calendar_deletes: apple_deletes_final,
                                 automation_actions: automation_final,
                                 permission_requests: perm_req_final,
+                                // Propagate the screen-read handoff signal from
+                                // the (single) tool-loop chunk to the client.
+                                screen_read_request: chunk.screen_read_request,
                             })
                             .unwrap_or_default(),
                         ));
@@ -344,6 +417,7 @@ pub async fn chat(
                             apple_calendar_deletes: None,
                             automation_actions: None,
                             permission_requests: None,
+                            screen_read_request: None,
                         })
                         .unwrap_or_default(),
                     ))
@@ -1398,6 +1472,20 @@ async fn preflight_calendar_intent(
     None
 }
 
+/// Detect explicit screen-read intent from the user's message so we can
+/// trigger the `screen_read_request` handoff even when the model ignores
+/// the `read_screen` tool.
+fn preflight_screen_read_intent(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    let triggers = [
+        "看屏幕", "读屏幕", "读一下屏幕", "看看屏幕上", "屏幕上是什么",
+        "屏幕上有", "读屏", "屏幕识别", "提取屏幕", "屏幕内容",
+        "read screen", "read my screen", "what's on screen", "what is on my screen",
+        "帮我看一下屏幕上", "帮我看看屏幕上", "看下屏幕上", "识别屏幕",
+    ];
+    triggers.iter().any(|t| lower.contains(t))
+}
+
 fn contains_any(text: &str, keywords: &[&str]) -> bool {
     keywords.iter().any(|k| text.contains(k))
 }
@@ -1451,7 +1539,7 @@ fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
         ),
         ToolDefinition::new(
             "read_screen",
-            "读取当前前台窗口的屏幕文字（通过 macOS 辅助功能 API）。当用户说「帮我看看屏幕上是什么」「读一下这个页面」「看屏幕内容」「提取屏幕上的文字」时调用。需要先在 系统设置 → 隐私与安全性 → 辅助功能 中授权。",
+            "读取当前前台窗口（自动跳过灵枢自己的窗口）的屏幕文字，通过 macOS 辅助功能 API。当用户说「帮我看看屏幕上是什么」「读一下这个页面」「看屏幕内容」「提取屏幕上的文字」时调用。是否执行由 L3 屏幕识别权限和 macOS 系统授权共同决定；若返回权限错误，如实转达其中的修复步骤即可，不要编造内容。",
             serde_json::json!({
                 "type": "object",
                 "properties": {},
@@ -1550,6 +1638,10 @@ struct ToolEffects {
     automation_actions: Vec<AutomationAction>,
     /// Permission requests: when automation is denied, ask the user to grant.
     permission_requests: Vec<PermissionRequest>,
+    /// `read_screen` handoff: the model wants the screen read and L3 is granted,
+    /// so the desktop client must capture the frontmost window's text in the
+    /// authorized main-app process and resend the turn with `screen_context`.
+    screen_read_request: bool,
 }
 
 /// Extract a string argument from a tool call, trimmed; "" if missing.
@@ -1703,66 +1795,54 @@ async fn execute_tool_call(
             }
         }
         "read_screen" => {
-            // Use osascript to read the frontmost window via System Events.
-            // The user must grant Accessibility permission to the process
-            // running this server (Terminal / lingshu-server).
-            let script = r#"tell application "System Events"
-    set frontApp to first application process whose frontmost is true
-    set appName to name of frontApp
-    set winTitle to ""
-    try
-        set winTitle to title of front window of frontApp
-    end try
-    set selectedText to ""
-    try
-        set focusedElem to focused UI element of front window of frontApp
-        set selectedText to value of focusedElem
-        if selectedText is missing value then set selectedText to ""
-    end try
-    if selectedText is "" then
-        try
-            set selectedText to entire value of focused UI element of front window of frontApp
-        end try
-    end if
-    return appName & "|||" & winTitle & "|||" & selectedText
-end tell"#;
-            match std::process::Command::new("osascript")
-                .args(["-e", script])
-                .output()
-            {
-                Ok(output) if output.status.success() => {
-                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if stdout.is_empty() {
-                        return Ok(("(前台窗口无可读文本)".into(), ToolEffects::default()));
-                    }
-                    let parts: Vec<&str> = stdout.splitn(3, "|||").collect();
-                    let app = parts.first().unwrap_or(&"");
-                    let title = parts.get(1).unwrap_or(&"");
-                    let text = parts.get(2).unwrap_or(&"");
-                    let mut result = format!("[前台应用] {app}\n");
-                    if !title.is_empty() { result.push_str(&format!("[窗口] {title}\n")); }
-                    if !text.is_empty() {
-                        result.push_str(&format!("[内容]\n{text}"));
-                    } else {
-                        result.push_str("[内容]\n(此窗口无 AX 文本元素)");
-                    }
-                    Ok((result, ToolEffects::default()))
-                }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    // Open Accessibility settings to help the user
-                    let _ = std::process::Command::new("open")
-                        .args(["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
-                        .status();
-                    let msg = if stderr.contains("not allowed") || stderr.contains("-25211") {
-                        "辅助功能权限未开启。已打开系统设置 → 辅助功能页面。请将「终端」(Terminal) 或运行灵枢的应用程序添加到允许列表，然后重试。"
-                    } else {
-                        "屏幕阅读失败。已打开辅助功能设置页面，请确认授权后重试。"
-                    };
-                    Ok((msg.to_string(), ToolEffects::default()))
-                }
-                Err(e) => Ok((format!("无法执行: {e}"), ToolEffects::default())),
+            // L3 gate (in-app permission tier) — separate from the macOS
+            // system-level Accessibility grant checked inside the reader.
+            let perms = crate::routes::permissions::permissions_for_user(state, user_id).await;
+            if !perms.l3_accessibility {
+                crate::routes::audit::record(
+                    &state.db,
+                    user_id,
+                    "read_screen_denied",
+                    "screen",
+                    None,
+                    serde_json::json!({ "result": "denied", "reason": "l3_accessibility off" }),
+                )
+                .await;
+                let pr = PermissionRequest {
+                    kind: "accessibility".to_string(),
+                    target: "屏幕识别".to_string(),
+                    reason: "L3 屏幕识别权限未开启".to_string(),
+                };
+                return Ok((
+                    "无法读取屏幕：L3 屏幕识别权限未开启。点击下方按钮一键开启（首次使用还需在系统弹窗中允许「辅助功能」）。"
+                        .into(),
+                    ToolEffects {
+                        permission_requests: vec![pr],
+                        ..Default::default()
+                    },
+                ));
             }
+            // L3 is on. The macOS Accessibility grant is attributed to the main
+            // app process (com.lingshu.desktop), NOT this sidecar — so the read
+            // must happen client-side. Hand off: the handler emits a
+            // `screen_read_request` signal, the desktop captures the frontmost
+            // window's text and resends the turn with `screen_context`.
+            crate::routes::audit::record(
+                &state.db,
+                user_id,
+                "read_screen",
+                "screen",
+                None,
+                serde_json::json!({ "result": "handoff", "mode": "client_capture" }),
+            )
+            .await;
+            Ok((
+                "已请求客户端读取屏幕内容（将在主程序进程中捕获）。".into(),
+                ToolEffects {
+                    screen_read_request: true,
+                    ..Default::default()
+                },
+            ))
         }
         "read_file" => {
             let path = tool_arg(tool_call, "path");
@@ -2082,7 +2162,15 @@ async fn run_tool_loop(
                 .extend(eff.apple_calendar_deletes);
             effects.automation_actions.extend(eff.automation_actions);
             effects.permission_requests.extend(eff.permission_requests);
+            effects.screen_read_request |= eff.screen_read_request;
             tool_results.push((tc.id.clone(), result));
+        }
+
+        // A read_screen call hands off to the desktop client to capture screen
+        // text in the authorized main-app process. Stop here so the handler can
+        // emit the signal; the client will resend with `screen_context`.
+        if effects.screen_read_request {
+            return (messages, None, effects);
         }
 
         // Echo the assistant message (tool calls now carry id + type), then the

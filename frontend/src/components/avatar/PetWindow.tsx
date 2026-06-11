@@ -1,9 +1,14 @@
 /* global WebSocket */
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { Application, Graphics, Text, Container, BlurFilter } from 'pixi.js';
+import { useEffect, useRef, useState } from 'react';
+import { Application, Graphics, Text, Container, BlurFilter, Circle } from 'pixi.js';
 import { isTauri, showMainWindow } from '../../lib/tauri';
 
-const DRAG_THRESHOLD_PX = 4;
+const DRAG_THRESHOLD_PX = 2;
+
+// Pet body center + interactive radius in window CSS coords (200×260).
+const BODY_CX = 100;
+const BODY_CY = 110;
+const BODY_HIT_RADIUS = 64;
 
 type Mood = 'idle' | 'thinking' | 'speaking' | 'happy' | 'sleepy';
 
@@ -24,8 +29,8 @@ class PetCharacter {
   private blushR = new Graphics();
   private glow = new Graphics();
   private animTime = 0;
-  private tx = 0; private ty = 0; // eye target
-  private ex = 0; private ey = 0; // eye current
+  private tx = 0; private ty = 0;
+  private ex = 0; private ey = 0;
   private mood: Mood = 'idle';
   private sc = 1;
   private tsc = 1;
@@ -37,6 +42,8 @@ class PetCharacter {
   setMood(m: Mood) { this.mood = m; this.tsc = 1; }
   lookAt(x: number, y: number) { this.tx = ((x - 50) / 50) * 4; this.ty = ((y - 50) / 50) * 2; }
   bounce() { this.tsc = 1.2; }
+  squish() { this.tsc = 0.85; }
+  relax() { this.tsc = 1.15; }
 
   update(dt: number) {
     this.animTime += dt * 0.05;
@@ -74,7 +81,7 @@ class PetCharacter {
 
     this.container.scale.set(this.sc);
     this.container.pivot.set(50, 50);
-    this.container.position.set(50, 50);
+    this.container.position.set(BODY_CX, BODY_CY);
   }
 }
 
@@ -87,25 +94,21 @@ export function PetWindow() {
   const [bubble, setBubble] = useState<string | null>(null);
   const [inTauri, setInTauri] = useState(false);
   const draggedRef = useRef(false);
+  const bubbleRef = useRef<HTMLDivElement>(null);
 
-  // Pre-load the Tauri window handle so startDragging() can be called
-  // synchronously inside the mousemove handler — macOS requires the drag to be
-  // initiated within the live mouse event, so an async import there is too late.
+  // Pre-load Tauri window handle for synchronous startDragging().
   const petWindowRef = useRef<Awaited<ReturnType<typeof import('@tauri-apps/api/window')['getCurrentWindow']>> | null>(null);
   useEffect(() => {
     if (!isTauri()) return;
     import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
       petWindowRef.current = getCurrentWindow();
     }).catch(() => {});
-    // Silently request accessibility permission for screen reading (L3)
     import('@tauri-apps/api/core').then(({ invoke }) => {
-      invoke('request_accessibility_permission').catch(() => {});
+      invoke('request_accessibility_permission', { prompt: false }).catch(() => {});
     }).catch(() => {});
   }, []);
 
-  // PixiJS lifecycle — cleanup is returned from useEffect (NOT from the async
-  // IIFE), and an `initialized` flag guards against the StrictMode init/destroy
-  // race (app.destroy() before app.init() resolves throws in PixiJS v8).
+  // PixiJS lifecycle — events bound to stage, not to a DOM wrapper.
   useEffect(() => {
     setInTauri(isTauri());
     if (!canvasRef.current) return;
@@ -117,7 +120,7 @@ export function PetWindow() {
 
     (async () => {
       try {
-        await app.init({ width: 200, height: 260, backgroundAlpha: 0.005, antialias: true, resolution: 2, autoDensity: true });
+        await app.init({ width: 200, height: 260, backgroundAlpha: 0, antialias: true, resolution: 2, autoDensity: true });
       } catch (err) {
         console.error('[pet] PixiJS init failed:', err);
         return;
@@ -127,17 +130,63 @@ export function PetWindow() {
       if (!container) { app.destroy(true); return; }
       initialized = true;
       container.appendChild(app.canvas);
+
+      const stage = app.stage;
+      stage.eventMode = 'static';
+      stage.hitArea = new Circle(BODY_CX, BODY_CY, BODY_HIT_RADIUS);
+
       const pet = new PetCharacter();
       petRef.current = pet;
-      pet.container.position.set(50, 80);
-      app.stage.addChild(pet.container);
+      pet.container.position.set(BODY_CX, BODY_CY);
+      stage.addChild(pet.container);
+
       const name = new Text({ text: '灵枢', style: { fontSize: 12, fontWeight: '600', fill: 0xffffff, fontFamily: 'system-ui, sans-serif', align: 'center' } });
-      name.anchor.set(0.5, 0); name.position.set(100, 140);
-      app.stage.addChild(name);
+      name.anchor.set(0.5, 0); name.position.set(BODY_CX, BODY_CY + 58);
+      stage.addChild(name);
+
       app.ticker.add((t) => pet.update(t.deltaTime));
+
       const moods: Mood[] = ['idle', 'thinking', 'idle', 'speaking', 'idle', 'happy', 'sleepy'];
       let i = 0;
       timer = setInterval(() => { i = (i + 1) % moods.length; pet.setMood(moods[i]); }, 5000);
+
+      // ── Stage events (only the circular body area receives them) ──
+
+      stage.on('pointermove', (e: { clientX: number; clientY: number }) => {
+        const r = app.canvas.getBoundingClientRect();
+        if (r.width > 0) pet.lookAt((e.clientX - r.left) * (100 / r.width), (e.clientY - r.top) * (100 / r.height));
+      });
+
+      stage.on('pointerdown', (e: { button: number; clientX: number; clientY: number }) => {
+        if (e.button !== 0 || !isTauri()) return;
+        const sx = e.clientX, sy = e.clientY; draggedRef.current = false;
+        const onMove = (ev: MouseEvent) => {
+          if (draggedRef.current) return;
+          if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > DRAG_THRESHOLD_PX) {
+            draggedRef.current = true; cleanup();
+            document.body.style.cursor = 'grabbing';
+            pet.squish();
+            const done = () => { document.body.style.cursor = ''; pet.relax(); };
+            if (petWindowRef.current) {
+              petWindowRef.current.startDragging().then(done).catch(done);
+            } else {
+              import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().startDragging()).then(done).catch(done);
+            }
+          }
+        };
+        const cleanup = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', cleanup); };
+        window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', cleanup);
+      });
+
+      stage.on('pointerup', () => {
+        if (draggedRef.current) { draggedRef.current = false; return; }
+        pet.bounce(); setBubble('我在呢！'); setTimeout(() => setBubble(null), 2000);
+        if (isTauri()) showMainWindow();
+      });
+
+      stage.on('pointerupoutside', () => { if (draggedRef.current) draggedRef.current = false; });
+
+      stage.cursor = 'grab';
     })();
 
     return () => {
@@ -147,38 +196,6 @@ export function PetWindow() {
     };
   }, []);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    const r = canvasRef.current?.getBoundingClientRect();
-    if (r) petRef.current?.lookAt((e.clientX - r.left) * (100 / r.width), (e.clientY - r.top) * (100 / r.height));
-  }, []);
-
-  const handleClick = useCallback(async () => {
-    if (draggedRef.current) { draggedRef.current = false; return; }
-    petRef.current?.bounce(); setBubble('我在呢！'); setTimeout(() => setBubble(null), 2000);
-    if (inTauri) await showMainWindow();
-  }, [inTauri]);
-
-  const handleDoubleClick = useCallback(() => { if (!draggedRef.current) { petRef.current?.bounce(); setBubble('你好！'); setTimeout(() => setBubble(null), 3000); } }, []);
-
-  // Drag — synchronous startDragging() via the pre-loaded window handle.
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0 || !inTauri) return;
-    const sx = e.clientX, sy = e.clientY; draggedRef.current = false;
-    const onMove = (ev: MouseEvent) => {
-      if (draggedRef.current) return;
-      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > DRAG_THRESHOLD_PX) {
-        draggedRef.current = true; cleanup();
-        if (petWindowRef.current) {
-          petWindowRef.current.startDragging().catch(() => {});
-        } else {
-          import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().startDragging()).catch(() => {});
-        }
-      }
-    };
-    const cleanup = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', cleanup); };
-    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', cleanup);
-  }, [inTauri]);
-
   // WebSocket
   useEffect(() => {
     if (!inTauri) return;
@@ -187,13 +204,63 @@ export function PetWindow() {
     return () => ws.close();
   }, [inTauri]);
 
+  // Shaped click-through: poll cursor and toggle setIgnoreCursorEvents.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let unlistenMoved: (() => void) | null = null;
+    let win: Awaited<ReturnType<typeof import('@tauri-apps/api/window')['getCurrentWindow']>> | null = null;
+    let ignoring = false;
+    let originX = 0, originY = 0, scale = 1;
+
+    (async () => {
+      const { getCurrentWindow, cursorPosition } = await import('@tauri-apps/api/window');
+      if (cancelled) return;
+      win = getCurrentWindow();
+
+      try { const p = await win.outerPosition(); originX = p.x; originY = p.y; } catch { /* */ }
+      try { scale = await win.scaleFactor(); } catch { /* */ }
+      if (cancelled) return;
+      try { unlistenMoved = await win.onMoved(({ payload }) => { originX = payload.x; originY = payload.y; }); } catch { /* */ }
+
+      timer = setInterval(async () => {
+        const w = win;
+        if (cancelled || !w) return;
+        try {
+          const c = await cursorPosition();
+          const rx = (c.x - originX) / scale;
+          const ry = (c.y - originY) / scale;
+          const inside = Math.hypot(rx - BODY_CX, ry - BODY_CY) <= BODY_HIT_RADIUS;
+          if (inside === ignoring) {
+            ignoring = !inside;
+            await w.setIgnoreCursorEvents(ignoring);
+          }
+        } catch { /* leave interactive on error */ }
+      }, 33);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+      if (unlistenMoved) unlistenMoved();
+      win?.setIgnoreCursorEvents(false).catch(() => {});
+    };
+  }, []);
+
   return (
-    <div onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onClick={handleClick} onDoubleClick={handleDoubleClick}
-      style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.01)', userSelect: 'none', WebkitUserSelect: 'none', cursor: 'grab' }}>
-      <div ref={canvasRef} />
-      {bubble && <div style={{ marginTop: 2, padding: '4px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.92)', color: '#333', fontSize: 12, maxWidth: 180, textAlign: 'center', boxShadow: '0 2px 12px rgba(0,0,0,0.12)', animation: 'fadeIn 0.25s ease', pointerEvents: 'none' }}>{bubble}</div>}
-      {!inTauri && <div style={{ marginTop: 6, padding: '2px 8px', borderRadius: 8, background: 'rgba(0,0,0,0.5)', color: '#fffa', fontSize: 10 }}>Tauri 未连接</div>}
-      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }`}</style>
-    </div>
+    <>
+      <div ref={canvasRef}
+        style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', pointerEvents: 'none' }} />
+      {bubble && <div ref={bubbleRef}
+        style={{ position: 'fixed', left: BODY_CX, top: BODY_CY + 68, transform: 'translateX(-50%)',
+          padding: '4px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.92)', color: '#333',
+          fontSize: 12, maxWidth: 180, textAlign: 'center', boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
+          pointerEvents: 'none', animation: 'fadeIn 0.25s ease', zIndex: 1 }}>{bubble}</div>}
+      {!inTauri && <div style={{ position: 'fixed', bottom: 8, left: '50%', transform: 'translateX(-50%)',
+        padding: '2px 8px', borderRadius: 8, background: 'rgba(0,0,0,0.5)', color: '#fffa', fontSize: 10,
+        pointerEvents: 'none' }}>Tauri 未连接</div>}
+      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(4px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }`}</style>
+    </>
   );
 }
