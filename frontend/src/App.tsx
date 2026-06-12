@@ -17,6 +17,7 @@ import {
   publishAvatarControlSettings,
 } from './components/avatar/avatarControls';
 import { ensureLocalSession, apiFetch } from './lib/api';
+import { isTauri, MAIN_NAVIGATE_EVENT } from './lib/tauri';
 import { installChatSessionSync } from './stores/chatStore';
 import { useProjectStore } from './stores/projectStore';
 
@@ -194,6 +195,27 @@ export default function App() {
       loadDashboard();
     }
   }, [sessionState, activeSection, loadDashboard]);
+
+  // Deep-link from the pet window: when the user expands a reply (or opens the
+  // console), jump straight to the requested section (e.g. 'chat') instead of
+  // landing on whatever tab the main window last showed.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | null = null;
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<string>(MAIN_NAVIGATE_EVENT, (event) => {
+          setActiveSection(event.payload as AppSectionKey);
+        }),
+      )
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   // ── Local session gate ────────────────────────────────────────
 

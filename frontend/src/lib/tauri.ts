@@ -56,11 +56,16 @@ export async function invokeTauri<T>(
   }
 }
 
+/** Cross-window event: tell the main window to switch to a given section. */
+export const MAIN_NAVIGATE_EVENT = 'lingshu://navigate-section';
+
 /**
- * Show / focus the main window from the pet window.
+ * Show / focus the main window from the pet window. When `section` is given,
+ * also emit a navigate event so the main window switches to that tab (e.g.
+ * 'chat' so a long reply is actually visible instead of landing on 'home').
  * No-op in browser mode.
  */
-export async function showMainWindow(): Promise<void> {
+export async function showMainWindow(section?: string): Promise<void> {
   if (!isTauri()) return;
 
   try {
@@ -72,6 +77,10 @@ export async function showMainWindow(): Promise<void> {
     if (main) {
       await main.show();
       await main.setFocus();
+      if (section) {
+        const { emitTo } = await import('@tauri-apps/api/event');
+        await emitTo('main', MAIN_NAVIGATE_EVENT, section);
+      }
     }
   } catch (err) {
     console.error('[tauri] showMainWindow failed:', err);

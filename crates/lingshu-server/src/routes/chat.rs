@@ -101,11 +101,17 @@ pub async fn chat(
     let personality_snippet = personality_prompt(&personality_values);
     let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
 
+    // Load the real permission grants once so the system prompt reflects what
+    // the assistant can actually do (reused by the screen-read preflight below).
+    let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
+    let capabilities = capability_section(&perms);
+
     let system_prompt = build_system_prompt(
         &personality_snippet,
         &memory_context,
         &style_exemplar_snippet,
         &role_prompt,
+        &capabilities,
     );
     let mut messages = vec![ChatMessage::system(system_prompt)];
 
@@ -212,7 +218,6 @@ pub async fn chat(
     //   L3 off → return the one-click L3 grant button.
     let screen_preflight: Option<(Option<String>, ToolEffects)> =
         if screen_context.is_none() && preflight_screen_read_intent(&user_message) {
-            let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
             if perms.l3_accessibility {
                 Some((None, ToolEffects { screen_read_request: true, ..Default::default() }))
             } else {
@@ -478,11 +483,51 @@ pub async fn chat(
 /// Personality snippet is always included (default values when no active
 /// snapshot exists); memory context and style exemplars are only appended
 /// when non-empty.
+/// Render the capability + permission picture from the user's *actual* granted
+/// permissions, so the model describes itself accurately instead of guessing.
+///
+/// Two things this prevents, both reported by real users:
+///   1. Demoting the already-shipped **屏幕识别 (L3)** to a "future L4" feature.
+///      The UI and tools call it 「屏幕识别」; the model must treat that term as
+///      the L3 read_screen capability — only 自主点击 (L4) is unreleased.
+///   2. Claiming a permission is unavailable when the user has actually granted
+///      it (the static text used to say "需授权" regardless of real state).
+fn capability_section(perms: &crate::routes::permissions::PermissionSettings) -> String {
+    let state = |on: bool| if on { "已开启" } else { "未开启（需用户授权后可用）" };
+    let l1 = state(perms.l1_calendar);
+    let l2 = state(perms.l2_automation);
+    let l3 = state(perms.l3_accessibility);
+    format!(
+        r#"## 能力范围（你现在就能做的事，通过调用工具实现）
+- 对话交流：回答提问、讨论想法、给出建议
+- 文件阅读：读取用户主目录下的文本文件（.md .txt .pdf .json .csv 等）、列出目录 —— read_file / list_directory
+- 日历管理：创建、查询、删除日程（事件默认「待确认」）—— create_calendar_event / list_calendar_events / delete_calendar_event
+- 屏幕识别：读取当前最前台窗口的屏幕文字（「屏幕识别」与「屏幕阅读」同义）—— read_screen
+- 打开应用 / 网址 / 文件 —— open_app / open_url / open_file
+- 记忆管理：从对话中自动提取重要信息，用户可在记忆中心查看和编辑
+- 时间查询 —— get_current_time
+
+## 权限边界（按等级，附当前真实状态）
+- L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前{l1}
+- L2 本机操作：打开 App、网址、文件 —— 当前{l2}
+- L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前{l3}
+- L4 自主操作：自主连续点击/代替用户操作界面 —— 远期规划，尚未开放
+
+重要：
+1.「屏幕识别 / 屏幕阅读」属于 **L3，已经实现**，绝不要说它是 L4 或「未来才有、尚未开放的功能」。唯一尚未开放的是 L4「自主点击操作」。
+2. 以上「当前未开启」只表示该等级权限尚未授权，**不等于功能不存在**。遇到这种请求时，照常尝试调用对应工具——若工具返回权限错误，如实转达并提示用户去开启对应等级即可，不要谎称已完成，也不要说该功能不存在。"#,
+        l1 = l1,
+        l2 = l2,
+        l3 = l3,
+    )
+}
+
 fn build_system_prompt(
     personality_snippet: &str,
     memory_context: &str,
     style_exemplar_snippet: &str,
     role_prompt: &str,
+    capabilities: &str,
 ) -> String {
     let base = r#"你是灵枢（LingShu），一个运行在 macOS 桌面上的 AI 个人助理。
 
@@ -491,9 +536,10 @@ fn build_system_prompt(
 
 ## 核心人格
 - 亲切但不肉麻：称呼用户为「你」，不要用「主人」之类的称呼。对话自然流畅，像一位相处多年的得力搭档。
-- 适度简洁：默认 2-4 句回复。只有用户要求详细解释时才展开。
+- 简洁优先：回复长度以下方人格参数的「详略度」为准（未注入人格参数时默认 2-4 句）；无论长短都不啰嗦。
 - 中文优先：使用简体中文交流。如果用户用英文提问，用英文回复。
 - 诚实有边界：**绝对禁止编造或假装执行操作**。如果你没有调用工具，就不能说「已创建」「已安排」「已添加」。不知道就说不知道。
+- 有自主性、破坏性操作先确认：你可以主动给建议、主动为日程创建「待确认」草稿（草稿本身就是交给用户裁决的，不必先口头询问）；但**删除、覆盖等不可逆操作，必须先说明清楚并取得用户明确确认后再执行**。
 
 ## 工具使用 — 极其重要，必须遵守
 你有可以调用的工具（tools/function calling）。工具的使用对你的用户完全透明——调用工具后系统会返回真实的执行结果。
@@ -501,23 +547,12 @@ fn build_system_prompt(
 **强制规则：**
 1. 当用户请求创建/安排/添加日程时，你**必须调用 create_calendar_event 工具**。不要先问「需要我帮你创建吗？」——直接调用。
 2. 当用户请求查看/列出日程时，你**必须调用 list_calendar_events 工具**。
-3. 当用户请求删除/取消日程时，你**必须先调用 list_calendar_events 获取事件 ID，然后调用 delete_calendar_event 删除**。不要只说「好的已删除」——必须实际调用工具。
+3. 当用户请求删除/取消日程时：先调用 list_calendar_events 找到目标事件并向用户列出，**明确征求确认（例如「确认删除『X』吗？」）；只有在用户确认后，才调用 delete_calendar_event 执行删除**。在用户确认前不要调用删除工具；用户确认后必须真正调用工具，不要假装删除。
 4. **禁止在没有调用工具的情况下说「已为你创建」「已安排」「已删除」等话**——这是欺骗用户。如果你不确定工具是否调用成功，如实说明。
 5. 工具执行后，根据系统返回的真实结果（而非你的猜测）来回复用户。
-
-## 能力范围
-- 对话交流：回答提问、讨论想法、提供建议
-- 日历管理：通过工具创建、查询、删除日程。事件默认为「待确认」状态
-- 记忆管理：从对话中自动提取重要信息，用户可在记忆中心查看和编辑
-- 屏幕阅读：读取当前最前台应用窗口的文本内容。当用户想了解屏幕上的信息时，直接调用 read_screen 工具
-
-## 权限边界
-- L1：创建/修改日历日程（需用户逐一确认）—— 你已具备此权限
-- L2：打开 App、文件、URL（需授权后可用）
-- L3：屏幕阅读（读取前台窗口文本）、键盘输入、辅助功能树读取（需授权后可用）—— 你已具备屏幕阅读能力
-- L4：自主点击操作（远期规划）
-
-当用户提出超出当前权限的请求时，友好告知需要开启对应等级。
+6. 「创建」与「删除」的确认方式不同——这是你既有自主性、又有边界的体现：
+   - create_calendar_event 创建的是「待确认」草稿，由用户在卡片中裁决，因此**可直接调用、不必先口头询问**（即便人格偏谨慎也是如此，你的谨慎体现在措辞上，如说明「这是待确认草稿」）。
+   - delete_calendar_event 等会移除/覆盖数据的不可逆操作，**必须按规则 3 先确认再执行**，即便人格偏主动/高风险容忍也不能跳过确认。
 
 ## 对话风格指引
 - 用户说「帮我记一下」「记住」→ 确认已记录，不重复整段内容
@@ -531,6 +566,12 @@ fn build_system_prompt(
 - 你是一个 AI 助手，不是真正的意识体"#;
 
     let mut parts = vec![base.to_string()];
+
+    // Real capability + permission picture (grant-aware), right after the base
+    // identity so it anchors what the assistant can truthfully claim.
+    if !capabilities.is_empty() {
+        parts.push(capabilities.to_string());
+    }
 
     // Inject user's custom role-play prompt at the top (before personality)
     // so it takes precedence over the default identity.
@@ -1568,7 +1609,7 @@ fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
         ),
         ToolDefinition::new(
             "delete_calendar_event",
-            "删除指定的日历事件。当需要删除时：\n1. 首先调用 list_calendar_events 查看事件列表\n2. 从返回结果中找到目标事件的 [id]\n3. 用该 id 调用此工具\n注意：必须先用 list 获取 id，不要猜测 id。",
+            "删除指定的日历事件。删除不可逆，调用前必须满足：\n1. 先调用 list_calendar_events 查看事件列表，从返回结果中找到目标事件的 [id]（不要猜测 id）\n2. 向用户列出将要删除的事件并取得其明确确认\n3. 仅在用户确认后，用该 id 调用此工具\n用户尚未确认时，只列出事件并询问，不要调用本工具。",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -2274,7 +2315,7 @@ mod tests {
     #[test]
     fn build_system_prompt_includes_personality_snippet() {
         let snippet = "## 当前人格参数\n测试人格";
-        let prompt = build_system_prompt(snippet, "", "", "");
+        let prompt = build_system_prompt(snippet, "", "", "", "");
         assert!(
             prompt.contains("当前人格参数"),
             "System prompt should include personality snippet. Got:\n{prompt}"
@@ -2288,7 +2329,7 @@ mod tests {
     #[test]
     fn build_system_prompt_skips_memory_when_empty() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "", "", "");
+        let prompt = build_system_prompt(snippet, "", "", "", "");
         assert!(
             !prompt.contains("用户档案与记忆"),
             "System prompt should NOT include memory section when memory is empty"
@@ -2299,7 +2340,7 @@ mod tests {
     fn build_system_prompt_includes_memory_when_present() {
         let snippet = "## 当前人格参数\n- 直接度：中";
         let memories = "- [偏好] 喜欢安静的环境\n- [事实] 住在北京";
-        let prompt = build_system_prompt(snippet, memories, "", "");
+        let prompt = build_system_prompt(snippet, memories, "", "", "");
         assert!(
             prompt.contains("用户档案与记忆"),
             "System prompt should include memory section when memories exist"
@@ -2324,10 +2365,49 @@ mod tests {
     #[test]
     fn build_system_prompt_contains_base_identity() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "", "", "");
+        let caps = capability_section(&crate::routes::permissions::PermissionSettings::default());
+        let prompt = build_system_prompt(snippet, "", "", "", &caps);
         assert!(prompt.contains("灵枢"));
         assert!(prompt.contains("LingShu"));
         assert!(prompt.contains("权限边界"));
+    }
+
+    #[test]
+    fn capability_section_keeps_screen_recognition_as_l3_not_l4() {
+        let caps = capability_section(&crate::routes::permissions::PermissionSettings::default());
+        // 屏幕识别 must be presented as an available L3 capability, and the L4
+        // line must be the autonomous-click feature — never screen recognition.
+        assert!(caps.contains("屏幕识别"), "must mention 屏幕识别 explicitly");
+        assert!(caps.contains("read_screen"));
+        assert!(
+            caps.contains("L4 自主操作") && caps.contains("尚未开放"),
+            "L4 must be the unreleased autonomous-click feature"
+        );
+        assert!(
+            caps.contains("绝不要说它是 L4"),
+            "must explicitly forbid demoting 屏幕识别 to L4"
+        );
+    }
+
+    #[test]
+    fn capability_section_reflects_real_grant_state() {
+        use crate::routes::permissions::PermissionSettings;
+        let granted = PermissionSettings {
+            l1_calendar: true,
+            l3_accessibility: true,
+            ..Default::default()
+        };
+        let caps = capability_section(&granted);
+        assert!(caps.contains("L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前已开启"));
+        assert!(caps.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前已开启"));
+
+        // Default permissions have everything off — the section must say so
+        // rather than claiming the capability is available (the original bug).
+        let denied = capability_section(&PermissionSettings::default());
+        assert!(denied.contains("L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前未开启（需用户授权后可用）"));
+        assert!(denied.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前未开启（需用户授权后可用）"));
+        // …but "未开启" must never read as "功能不存在".
+        assert!(denied.contains("不等于功能不存在"));
     }
 
     #[test]
