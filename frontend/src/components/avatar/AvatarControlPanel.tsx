@@ -1,12 +1,6 @@
-export type AvatarMood = 'idle' | 'thinking' | 'speaking' | 'reminder';
-export type AvatarSize = 'small' | 'medium' | 'large';
+import type { AvatarControlSettings, AvatarMood, AvatarSize } from './avatarControls';
 
-export interface AvatarControlSettings {
-  visible: boolean;
-  mood: AvatarMood;
-  size: AvatarSize;
-  bubbleText: string;
-}
+export type { AvatarControlSettings, AvatarMood, AvatarSize } from './avatarControls';
 
 interface AvatarControlPanelProps {
   settings: AvatarControlSettings;

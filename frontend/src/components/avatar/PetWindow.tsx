@@ -3,6 +3,13 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Application, Graphics, Text, Container, BlurFilter } from 'pixi.js';
 import { isTauri, showMainWindow } from '../../lib/tauri';
 import { getMoodPresentation, getReplyDisplayTarget, lerpPresentation, traitsToModifiers, defaultModifiers, type Mood, type EyeShape, type MoodPresentation, type PersonalityTraits, type PersonalityModifiers } from './petPresentation';
+import {
+  avatarMoodToPetMood,
+  avatarSizeToScale,
+  loadAvatarControlSettings,
+  subscribeToAvatarControlSettings,
+  type AvatarControlSettings,
+} from './avatarControls';
 
 const DRAG_THRESHOLD_PX = 2;
 
@@ -289,6 +296,10 @@ class PetCharacter {
 // ── Component ──────────────────────────────────────────────────────
 
 export function PetWindow() {
+  const initialControlsRef = useRef<AvatarControlSettings | null>(null);
+  if (initialControlsRef.current === null) {
+    initialControlsRef.current = loadAvatarControlSettings();
+  }
   const canvasRef = useRef<HTMLDivElement>(null);
   const petRef = useRef<PetCharacter | null>(null);
   const appRef = useRef<Application | null>(null);
@@ -297,10 +308,36 @@ export function PetWindow() {
   const [draft, setDraft] = useState('');
   const [dialogReply, setDialogReply] = useState('点击灵枢后，我会在这里保留较长回复；短提示会从旁边气泡出现。');
   const [inTauri, setInTauri] = useState(false);
+  const [petVisible, setPetVisible] = useState(initialControlsRef.current.visible);
+  const [petScale, setPetScale] = useState(() => avatarSizeToScale(initialControlsRef.current!.size));
   const draggedRef = useRef(false);
   const dialogOpenRef = useRef(false);
+  const petVisibleRef = useRef(petVisible);
+  const petScaleRef = useRef(petScale);
 
   useEffect(() => { dialogOpenRef.current = dialogOpen; }, [dialogOpen]);
+  useEffect(() => { petVisibleRef.current = petVisible; }, [petVisible]);
+  useEffect(() => { petScaleRef.current = petScale; }, [petScale]);
+
+  const applyAvatarControls = useCallback((settings: AvatarControlSettings) => {
+    const scale = avatarSizeToScale(settings.size);
+    setPetVisible(settings.visible);
+    setPetScale(scale);
+    petRef.current?.container.scale.set(scale);
+    petRef.current?.setMood(avatarMoodToPetMood(settings.mood));
+
+    const text = settings.bubbleText.trim();
+    if (!text) return;
+    setDialogReply(text);
+    if (settings.mood === 'reminder' || getReplyDisplayTarget(text) === 'bubble') {
+      setDialogOpen(false);
+      setBubble(text);
+      setTimeout(() => setBubble(null), 4000);
+    } else {
+      setBubble(null);
+      setDialogOpen(true);
+    }
+  }, []);
 
   // Pre-load the Tauri window handle so startDragging() can be called
   // synchronously inside the mousemove handler — macOS requires the drag to be
@@ -352,6 +389,7 @@ export function PetWindow() {
       name.anchor.set(0.5, 0); name.position.set(BODY_CX, BODY_CY + 58);
       app.stage.addChild(name);
       app.ticker.add((t) => pet.update(t.deltaTime));
+      applyAvatarControls(initialControlsRef.current ?? loadAvatarControlSettings());
       const moods: Mood[] = ['idle', 'thinking', 'idle', 'speaking', 'idle', 'happy', 'sleepy'];
       let i = 0;
       if (!isTauri()) timer = setInterval(() => { i = (i + 1) % moods.length; pet.setMood(moods[i]); }, 5000);
@@ -362,14 +400,18 @@ export function PetWindow() {
       if (timer) clearInterval(timer);
       if (initialized) { app.destroy(true, { children: true }); appRef.current = null; petRef.current = null; }
     };
-  }, []);
+  }, [applyAvatarControls]);
+
+  useEffect(() => subscribeToAvatarControlSettings(applyAvatarControls), [applyAvatarControls]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!petVisibleRef.current) return;
     const r = canvasRef.current?.getBoundingClientRect();
     if (r) petRef.current?.lookAt((e.clientX - r.left) * (100 / r.width), (e.clientY - r.top) * (100 / r.height));
   }, []);
 
   const handleClick = useCallback(() => {
+    if (!petVisibleRef.current) return;
     if (draggedRef.current) { draggedRef.current = false; return; }
     petRef.current?.burst();
     petRef.current?.bounce();
@@ -378,6 +420,7 @@ export function PetWindow() {
   }, []);
 
   const handleDoubleClick = useCallback(async () => {
+    if (!petVisibleRef.current) return;
     if (!draggedRef.current) {
       petRef.current?.bounce();
       setDialogOpen(true);
@@ -405,10 +448,11 @@ export function PetWindow() {
   // dialog input is not hijacked. startDragging() is called synchronously via
   // the pre-loaded window handle.
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!petVisibleRef.current) return;
     if (e.button !== 0) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const inBody = Math.hypot(e.clientX - rect.left - BODY_CX, e.clientY - rect.top - BODY_CY) <= BODY_HIT_RADIUS;
+    const inBody = Math.hypot(e.clientX - rect.left - BODY_CX, e.clientY - rect.top - BODY_CY) <= BODY_HIT_RADIUS * petScaleRef.current;
     if (!inBody) return;
     petRef.current?.squish();
     if (!inTauri) return;
@@ -486,13 +530,13 @@ export function PetWindow() {
           const c = await cursorPosition();              // global physical px
           const rx = (c.x - originX) / scale;            // → window CSS px
           const ry = (c.y - originY) / scale;
-          const insideBody = Math.hypot(rx - BODY_CX, ry - BODY_CY) <= BODY_HIT_RADIUS;
+          const insideBody = Math.hypot(rx - BODY_CX, ry - BODY_CY) <= BODY_HIT_RADIUS * petScaleRef.current;
           const insideDialog = dialogOpenRef.current
             && rx >= DIALOG_HIT_RECT.x
             && rx <= DIALOG_HIT_RECT.x + DIALOG_HIT_RECT.width
             && ry >= DIALOG_HIT_RECT.y
             && ry <= DIALOG_HIT_RECT.y + DIALOG_HIT_RECT.height;
-          const inside = insideBody || insideDialog;
+          const inside = petVisibleRef.current && (insideBody || insideDialog);
           if (inside === ignoring) {                      // state needs to flip
             ignoring = !inside;
             await w.setIgnoreCursorEvents(ignoring);
@@ -511,7 +555,7 @@ export function PetWindow() {
 
   return (
     <div onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onClick={handleClick} onDoubleClick={handleDoubleClick}
-      style={{ width: '100vw', height: '100vh', position: 'relative', background: 'transparent', userSelect: 'none', WebkitUserSelect: 'none', cursor: 'grab', overflow: 'hidden' }}>
+      style={{ width: '100vw', height: '100vh', position: 'relative', background: 'transparent', userSelect: 'none', WebkitUserSelect: 'none', cursor: petVisible ? 'grab' : 'default', overflow: 'hidden', opacity: petVisible ? 1 : 0, transition: 'opacity 160ms ease' }}>
       <div ref={canvasRef} style={{ position: 'absolute', left: '50%', top: '50%', width: 200, height: 260, transform: 'translate(-50%, -50%)' }} />
       {bubble && <div style={{ position: 'absolute', left: '50%', top: dialogOpen ? 'calc(50% - 42px)' : 'calc(50% - 6px)', transform: 'translateX(-50%)', zIndex: 2, padding: '5px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.94)', color: '#24344f', fontSize: 12, lineHeight: 1.35, maxWidth: 180, textAlign: 'center', boxShadow: '0 8px 24px rgba(21,43,92,0.18)', border: '1px solid rgba(46,107,255,0.16)', animation: 'fadeIn 0.25s ease', pointerEvents: 'none' }}>{bubble}</div>}
       {dialogOpen && (

@@ -12,6 +12,10 @@ import {
   type AvatarControlSettings,
   AvatarControlPanel,
 } from './components/avatar/AvatarControlPanel';
+import {
+  loadAvatarControlSettings,
+  publishAvatarControlSettings,
+} from './components/avatar/avatarControls';
 import { ensureLocalSession, apiFetch } from './lib/api';
 import { useProjectStore } from './stores/projectStore';
 
@@ -55,12 +59,7 @@ export default function App() {
   const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<AppSectionKey>('home');
-  const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>({
-    visible: true,
-    mood: 'idle',
-    size: 'medium',
-    bubbleText: '我在这里，需要时叫我。',
-  });
+  const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>(() => loadAvatarControlSettings());
 
   // Dashboard state
   const [scheduleItems, setScheduleItems] = useState<{ id: string; time: string; title: string; state: string }[]>([]);
@@ -90,6 +89,13 @@ export default function App() {
   useEffect(() => {
     bootLocalSession();
   }, [bootLocalSession]);
+
+  const updateAvatarSettings = useCallback((settings: AvatarControlSettings) => {
+    setAvatarSettings(settings);
+    publishAvatarControlSettings(settings).catch((error) => {
+      console.error('[avatar] failed to publish control settings:', error);
+    });
+  }, []);
 
   // ── Fetch dashboard data ──────────────────────────────────────
 
@@ -424,7 +430,7 @@ export default function App() {
       case 'preferences':
         return (
           <section className="dashboard-card page-tool-card narrow-tool-card">
-            <AvatarControlPanel settings={avatarSettings} onChange={setAvatarSettings} />
+            <AvatarControlPanel settings={avatarSettings} onChange={updateAvatarSettings} />
           </section>
         );
       case 'privacy':
@@ -454,4 +460,3 @@ export default function App() {
     </AppLayout>
   );
 }
-
