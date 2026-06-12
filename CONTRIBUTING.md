@@ -29,8 +29,7 @@ Thanks for your interest in contributing! LingShu is a macOS desktop AI personal
 
 ## Pull Request Process
 
-- CI must pass the currently active gates: Rust format/clippy/test and frontend type-check/build
-- Frontend ESLint and strict OpenAPI contract validation are planned gates, but they are not active yet
+- CI must pass the currently active gates: Rust format/clippy/test, frontend lint/type-check/build, and OpenAPI contract validation
 - At least one approving review is required
 - Squash merge is preferred — keep commit history clean
 - Update documentation if your change affects public APIs or developer setup
@@ -53,11 +52,12 @@ Configuration: [`clippy.toml`](./clippy.toml) and [`rustfmt.toml`](./rustfmt.tom
 
 ```bash
 cd frontend
+npm run lint
 npm run type-check
 npm run build
 ```
 
-Frontend ESLint is planned, but the repository does not yet include the ESLint 9 flat config required by `npm run lint`.
+Frontend ESLint 9 flat config is included (`eslint.config.mjs`). Run `npm run lint` to check.
 
 ### Database Migrations
 
@@ -65,7 +65,7 @@ Frontend ESLint is planned, but the repository does not yet include the ESLint 9
 - Migrations must be forward-compatible (zero-downtime)
 - Once merged to `main`, do not modify existing migration files
 - Add columns with `DEFAULT` values; split renames into three steps
-- Current range: 001–0021 (21 migrations)
+- Current range: 001–0022 (22 migrations)
 
 ### Tauri (macOS Desktop)
 
@@ -93,18 +93,18 @@ Scope is optional but encouraged: `feat(chat): add streaming response`.
 ## Testing
 
 ```bash
-# Backend (223 passed / 0 failed / 15 ignored)
+# Backend (300+ test functions, 16 DB-gated ignored)
 cargo test --workspace
 
 # Frontend
-cd frontend && npm run type-check && npm run build
+cd frontend && npm run lint && npm run type-check && npm run build
 
 # Tauri desktop (macOS only)
 cd src-tauri && cargo build
 
 # OpenAPI contract
-# Phase 0 exposes Swagger/OpenAPI at runtime, but no strict committed-spec diff is implemented yet.
-# 34 routes currently registered in utoipa ApiDoc.
+# Committed openapi.json + openapi_spec_matches_committed_file test.
+# 65 routes currently registered in utoipa ApiDoc.
 ```
 
 When adding new API endpoints, register them with `utoipa` attributes in `crates/lingshu-server/src/routes/mod.rs`. Once the Phase 1 contract gate exists, include a test or generated-spec update that validates the OpenAPI schema.
