@@ -42,12 +42,24 @@ impl PetNotification {
 
     /// Send a bare mood change (no extra data).
     pub fn mood(m: &str) -> Self {
-        Self { kind: "mood".into(), title: m.into(), body: String::new(), action_url: None, data: None }
+        Self {
+            kind: "mood".into(),
+            title: m.into(),
+            body: String::new(),
+            action_url: None,
+            data: None,
+        }
     }
 
     /// Send a mood change with an attached JSON payload (e.g. personality traits).
     pub fn mood_with_data(m: &str, data: serde_json::Value) -> Self {
-        Self { kind: "mood".into(), title: m.into(), body: String::new(), action_url: None, data: Some(data) }
+        Self {
+            kind: "mood".into(),
+            title: m.into(),
+            body: String::new(),
+            action_url: None,
+            data: Some(data),
+        }
     }
 }
 

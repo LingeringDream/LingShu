@@ -216,12 +216,19 @@ pub async fn chat(
     //            window's text (authorized main-app process) and resends with
     //            `screen_context`, then the model answers using it.
     //   L3 off → return the one-click L3 grant button.
-    let screen_preflight: Option<(Option<String>, ToolEffects)> =
-        if screen_context.is_none() && preflight_screen_read_intent(&user_message) {
-            if perms.l3_accessibility {
-                Some((None, ToolEffects { screen_read_request: true, ..Default::default() }))
-            } else {
-                Some((
+    let screen_preflight: Option<(Option<String>, ToolEffects)> = if screen_context.is_none()
+        && preflight_screen_read_intent(&user_message)
+    {
+        if perms.l3_accessibility {
+            Some((
+                None,
+                ToolEffects {
+                    screen_read_request: true,
+                    ..Default::default()
+                },
+            ))
+        } else {
+            Some((
                     Some("要读取屏幕需要先开启「L3 屏幕识别」权限。点下方按钮一键开启（首次使用还需在系统弹窗中允许「辅助功能」）。".to_string()),
                     ToolEffects {
                         permission_requests: vec![PermissionRequest {
@@ -232,10 +239,10 @@ pub async fn chat(
                         ..Default::default()
                     },
                 ))
-            }
-        } else {
-            None
-        };
+        }
+    } else {
+        None
+    };
 
     // ── Tool calling loop (fallback for complex / chained ops) ─────
     let mut tools = chat_tools();
@@ -416,8 +423,11 @@ pub async fn chat(
                         // client immediately re-submits with screen_context,
                         // which restarts the mood cycle.
                         if chunk.screen_read_request != Some(true) {
-                            let done_mood =
-                                if humor_for_done > 0.6 { "happy" } else { "idle" };
+                            let done_mood = if humor_for_done > 0.6 {
+                                "happy"
+                            } else {
+                                "idle"
+                            };
                             pet_tx.send(PetNotification::mood(done_mood)).ok();
                         }
                         return Ok(Event::default().data(
@@ -493,7 +503,13 @@ pub async fn chat(
 ///   2. Claiming a permission is unavailable when the user has actually granted
 ///      it (the static text used to say "需授权" regardless of real state).
 fn capability_section(perms: &crate::routes::permissions::PermissionSettings) -> String {
-    let state = |on: bool| if on { "已开启" } else { "未开启（需用户授权后可用）" };
+    let state = |on: bool| {
+        if on {
+            "已开启"
+        } else {
+            "未开启（需用户授权后可用）"
+        }
+    };
     let l1 = state(perms.l1_calendar);
     let l2 = state(perms.l2_automation);
     let l3 = state(perms.l3_accessibility);
@@ -515,10 +531,7 @@ fn capability_section(perms: &crate::routes::permissions::PermissionSettings) ->
 
 重要：
 1.「屏幕识别 / 屏幕阅读」属于 **L3，已经实现**，绝不要说它是 L4 或「未来才有、尚未开放的功能」。唯一尚未开放的是 L4「自主点击操作」。
-2. 以上「当前未开启」只表示该等级权限尚未授权，**不等于功能不存在**。遇到这种请求时，照常尝试调用对应工具——若工具返回权限错误，如实转达并提示用户去开启对应等级即可，不要谎称已完成，也不要说该功能不存在。"#,
-        l1 = l1,
-        l2 = l2,
-        l3 = l3,
+2. 以上「当前未开启」只表示该等级权限尚未授权，**不等于功能不存在**。遇到这种请求时，照常尝试调用对应工具——若工具返回权限错误，如实转达并提示用户去开启对应等级即可，不要谎称已完成，也不要说该功能不存在。"#
     )
 }
 
@@ -1562,10 +1575,24 @@ async fn preflight_calendar_intent(
 fn preflight_screen_read_intent(msg: &str) -> bool {
     let lower = msg.to_lowercase();
     let triggers = [
-        "看屏幕", "读屏幕", "读一下屏幕", "看看屏幕上", "屏幕上是什么",
-        "屏幕上有", "读屏", "屏幕识别", "提取屏幕", "屏幕内容",
-        "read screen", "read my screen", "what's on screen", "what is on my screen",
-        "帮我看一下屏幕上", "帮我看看屏幕上", "看下屏幕上", "识别屏幕",
+        "看屏幕",
+        "读屏幕",
+        "读一下屏幕",
+        "看看屏幕上",
+        "屏幕上是什么",
+        "屏幕上有",
+        "读屏",
+        "屏幕识别",
+        "提取屏幕",
+        "屏幕内容",
+        "read screen",
+        "read my screen",
+        "what's on screen",
+        "what is on my screen",
+        "帮我看一下屏幕上",
+        "帮我看看屏幕上",
+        "看下屏幕上",
+        "识别屏幕",
     ];
     triggers.iter().any(|t| lower.contains(t))
 }
@@ -2377,7 +2404,10 @@ mod tests {
         let caps = capability_section(&crate::routes::permissions::PermissionSettings::default());
         // 屏幕识别 must be presented as an available L3 capability, and the L4
         // line must be the autonomous-click feature — never screen recognition.
-        assert!(caps.contains("屏幕识别"), "must mention 屏幕识别 explicitly");
+        assert!(
+            caps.contains("屏幕识别"),
+            "must mention 屏幕识别 explicitly"
+        );
         assert!(caps.contains("read_screen"));
         assert!(
             caps.contains("L4 自主操作") && caps.contains("尚未开放"),
@@ -2398,14 +2428,18 @@ mod tests {
             ..Default::default()
         };
         let caps = capability_section(&granted);
-        assert!(caps.contains("L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前已开启"));
+        assert!(caps.contains(
+            "L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前已开启"
+        ));
         assert!(caps.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前已开启"));
 
         // Default permissions have everything off — the section must say so
         // rather than claiming the capability is available (the original bug).
         let denied = capability_section(&PermissionSettings::default());
         assert!(denied.contains("L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前未开启（需用户授权后可用）"));
-        assert!(denied.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前未开启（需用户授权后可用）"));
+        assert!(denied.contains(
+            "L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前未开启（需用户授权后可用）"
+        ));
         // …but "未开启" must never read as "功能不存在".
         assert!(denied.contains("不等于功能不存在"));
     }

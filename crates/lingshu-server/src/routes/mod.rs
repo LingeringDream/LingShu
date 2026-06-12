@@ -24,7 +24,7 @@ use utoipa::OpenApi;
 #[openapi(
     info(
         title = "LingShu API",
-        version = "0.1.5",
+        version = "1.0.0",
         description = "灵枢 macOS 桌面 AI 个人助理 API"
     ),
     paths(
