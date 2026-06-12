@@ -9,7 +9,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::Mutex;
+use serde::{Deserialize, Serialize};
+use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
@@ -36,6 +37,13 @@ struct SidecarGuard(Mutex<Option<CommandChild>>);
 
 const TRAY_SHOW_MAIN_ID: &str = "show-main";
 const TRAY_QUIT_ID: &str = "quit";
+const PET_WINDOW_POSITION_FILE: &str = "pet-window-position.json";
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct PetWindowPosition {
+    x: i32,
+    y: i32,
+}
 
 impl Drop for SidecarGuard {
     fn drop(&mut self) {
@@ -105,6 +113,53 @@ fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+fn pet_window_position_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join(PET_WINDOW_POSITION_FILE))
+}
+
+fn load_pet_window_position(app: &tauri::AppHandle) -> Option<PetWindowPosition> {
+    let path = pet_window_position_path(app)?;
+    let data = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+fn save_pet_window_position(app: &tauri::AppHandle, position: PetWindowPosition) {
+    let Some(path) = pet_window_position_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(data) = serde_json::to_string(&position) {
+        let _ = fs::write(path, data);
+    }
+}
+
+fn default_pet_position(
+    monitor_width: u32,
+    monitor_height: u32,
+    monitor_scale_factor: f64,
+) -> PetWindowPosition {
+    PetWindowPosition {
+        x: (((monitor_width as f64) / monitor_scale_factor) - 220.0).round() as i32,
+        y: (((monitor_height as f64) / monitor_scale_factor) - 300.0).round() as i32,
+    }
+}
+
+fn pet_start_position(
+    saved: Option<PetWindowPosition>,
+    monitor_width: u32,
+    monitor_height: u32,
+    monitor_scale_factor: f64,
+) -> PetWindowPosition {
+    saved.unwrap_or_else(|| {
+        default_pet_position(monitor_width, monitor_height, monitor_scale_factor)
+    })
+}
+
 fn main() {
     tauri::Builder::default()
         .on_window_event(|window, event| {
@@ -112,6 +167,17 @@ fn main() {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
+                }
+            }
+            if window.label() == "pet" {
+                if let tauri::WindowEvent::Moved(position) = event {
+                    save_pet_window_position(
+                        window.app_handle(),
+                        PetWindowPosition {
+                            x: position.x,
+                            y: position.y,
+                        },
+                    );
                 }
             }
         })
@@ -212,9 +278,13 @@ fn main() {
                 if let Ok(Some(monitor)) = pet.primary_monitor() {
                     let size = monitor.size();
                     let scale = monitor.scale_factor();
-                    let x = ((size.width as f64) / scale) - 220.0;
-                    let y = ((size.height as f64) / scale) - 300.0;
-                    let _ = pet.set_position(tauri::PhysicalPosition::new(x, y));
+                    let position = pet_start_position(
+                        load_pet_window_position(app.handle()),
+                        size.width,
+                        size.height,
+                        scale,
+                    );
+                    let _ = pet.set_position(tauri::PhysicalPosition::new(position.x, position.y));
                 }
             }
 
@@ -227,4 +297,27 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running LingShu desktop app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pet_start_position_prefers_saved_position() {
+        let saved = PetWindowPosition { x: 320, y: 240 };
+
+        assert_eq!(
+            pet_start_position(Some(saved), 1920, 1080, 2.0),
+            PetWindowPosition { x: 320, y: 240 }
+        );
+    }
+
+    #[test]
+    fn pet_start_position_defaults_to_bottom_right_without_saved_position() {
+        assert_eq!(
+            pet_start_position(None, 1920, 1080, 2.0),
+            PetWindowPosition { x: 740, y: 240 }
+        );
+    }
 }

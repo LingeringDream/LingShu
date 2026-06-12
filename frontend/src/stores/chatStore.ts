@@ -1,10 +1,24 @@
-/* global CustomEvent */
+/* global CustomEvent, StorageEvent */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Message } from '../components/chat/MessageBubble';
 import { apiFetch } from '../lib/api';
 import { deleteAppleCalendarEvent } from '../lib/eventkit';
 import { runAutomationAction, readScreen } from '../lib/automation';
+import { isTauri } from '../lib/tauri';
+
+export const CHAT_SESSION_STORAGE_KEY = 'lingshu-chat-session';
+export const CHAT_SESSION_SYNC_EVENT = 'lingshu:chat-session-sync';
+
+const CHAT_SYNC_SOURCE_ID = Math.random().toString(36).slice(2);
+
+interface ChatSessionSnapshot {
+  sourceId?: string;
+  messages: Message[];
+  isLoading?: boolean;
+  streamingId?: string | null;
+  sessionId: string | null;
+}
 
 interface ChatState {
   messages: Message[];
@@ -15,6 +29,70 @@ interface ChatState {
   sessionId: string | null;
   sendMessage: (content: string) => Promise<void>;
   clearMessages: () => void;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function normalizeTimestamp(value: unknown): Date {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date();
+}
+
+function normalizePermissionRequests(value: unknown): Message['permissionRequests'] {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .filter(isRecord)
+    .map((request) => ({
+      kind: typeof request.kind === 'string' ? request.kind : '',
+      target: typeof request.target === 'string' ? request.target : '',
+      reason: typeof request.reason === 'string' ? request.reason : '',
+    }))
+    .filter((request) => request.kind && request.target && request.reason);
+}
+
+function normalizeMessage(value: unknown): Message | null {
+  if (!isRecord(value)) return null;
+  if (value.role !== 'user' && value.role !== 'assistant') return null;
+  if (typeof value.id !== 'string' || typeof value.content !== 'string') return null;
+
+  const message: Message = {
+    id: value.id,
+    role: value.role,
+    content: value.content,
+    timestamp: normalizeTimestamp(value.timestamp),
+  };
+  if (typeof value.dbId === 'string') message.dbId = value.dbId;
+  const permissionRequests = normalizePermissionRequests(value.permissionRequests);
+  if (permissionRequests && permissionRequests.length > 0) {
+    message.permissionRequests = permissionRequests;
+  }
+  return message;
+}
+
+function normalizeChatSessionSnapshot(value: unknown): ChatSessionSnapshot | null {
+  if (!isRecord(value)) return null;
+  const state = isRecord(value.state) ? value.state : value;
+  const messages = Array.isArray(state.messages)
+    ? state.messages.map(normalizeMessage).filter((message): message is Message => message !== null)
+    : [];
+
+  return {
+    sourceId: typeof state.sourceId === 'string'
+      ? state.sourceId
+      : typeof value.sourceId === 'string'
+        ? value.sourceId
+        : undefined,
+    messages,
+    isLoading: typeof state.isLoading === 'boolean' ? state.isLoading : undefined,
+    streamingId: typeof state.streamingId === 'string' ? state.streamingId : null,
+    sessionId: typeof state.sessionId === 'string' ? state.sessionId : null,
+  };
 }
 
 /** Ensure a conversation exists, creating one on first use. Returns the
@@ -311,7 +389,7 @@ export const useChatStore = create<ChatState>()(
       clearMessages: () => set({ messages: [], sessionId: null }),
     }),
     {
-      name: 'lingshu-chat-session',
+      name: CHAT_SESSION_STORAGE_KEY,
       partialize: (state) => ({
         messages: state.messages,
         sessionId: state.sessionId,
@@ -319,3 +397,98 @@ export const useChatStore = create<ChatState>()(
     },
   ),
 );
+
+let applyingRemoteSnapshot = false;
+
+function createChatSessionSnapshot(state = useChatStore.getState()): ChatSessionSnapshot {
+  return {
+    sourceId: CHAT_SYNC_SOURCE_ID,
+    messages: state.messages,
+    isLoading: state.isLoading,
+    streamingId: state.streamingId,
+    sessionId: state.sessionId,
+  };
+}
+
+function applyChatSessionSnapshot(value: unknown) {
+  const snapshot = normalizeChatSessionSnapshot(value);
+  if (!snapshot || snapshot.sourceId === CHAT_SYNC_SOURCE_ID) return;
+
+  const current = useChatStore.getState();
+  applyingRemoteSnapshot = true;
+  try {
+    useChatStore.setState({
+      messages: snapshot.messages,
+      isLoading: snapshot.isLoading ?? current.isLoading,
+      streamingId: snapshot.streamingId ?? null,
+      sessionId: snapshot.sessionId,
+    });
+  } finally {
+    applyingRemoteSnapshot = false;
+  }
+}
+
+function publishChatSessionSnapshot(state = useChatStore.getState()) {
+  const snapshot = createChatSessionSnapshot(state);
+  window.dispatchEvent(new CustomEvent(CHAT_SESSION_SYNC_EVENT, { detail: snapshot }));
+
+  if (!isTauri()) return;
+  import('@tauri-apps/api/event')
+    .then(({ emitTo }) => Promise.all([
+      emitTo('main', CHAT_SESSION_SYNC_EVENT, snapshot),
+      emitTo('pet', CHAT_SESSION_SYNC_EVENT, snapshot),
+    ]))
+    .catch((error) => {
+      console.error('[chat] failed to emit chat session snapshot:', error);
+    });
+}
+
+export function installChatSessionSync(): () => void {
+  let disposed = false;
+  let unlistenTauri: (() => void) | null = null;
+
+  const handleCustomEvent = (event: Event) => {
+    applyChatSessionSnapshot((event as CustomEvent).detail);
+  };
+
+  const handleStorageEvent = (event: StorageEvent) => {
+    if (event.key !== CHAT_SESSION_STORAGE_KEY || !event.newValue) return;
+    try {
+      applyChatSessionSnapshot(JSON.parse(event.newValue));
+    } catch {
+      // Ignore malformed persisted data; the local store remains authoritative.
+    }
+  };
+
+  window.addEventListener(CHAT_SESSION_SYNC_EVENT, handleCustomEvent);
+  window.addEventListener('storage', handleStorageEvent);
+
+  const unsubscribeStore = useChatStore.subscribe((state) => {
+    if (!applyingRemoteSnapshot) publishChatSessionSnapshot(state);
+  });
+
+  if (isTauri()) {
+    import('@tauri-apps/api/event')
+      .then(({ listen }) => listen<ChatSessionSnapshot>(CHAT_SESSION_SYNC_EVENT, (event) => {
+        applyChatSessionSnapshot(event.payload);
+      }))
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenTauri = unlisten;
+        }
+      })
+      .catch((error) => {
+        console.error('[chat] failed to listen for chat session snapshots:', error);
+      });
+  }
+
+  return () => {
+    disposed = true;
+    window.removeEventListener(CHAT_SESSION_SYNC_EVENT, handleCustomEvent);
+    window.removeEventListener('storage', handleStorageEvent);
+    unsubscribeStore();
+    if (unlistenTauri) unlistenTauri();
+  };
+}

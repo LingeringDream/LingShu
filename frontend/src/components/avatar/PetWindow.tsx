@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Application, Graphics, Text, Container, BlurFilter } from 'pixi.js';
 import { isTauri, showMainWindow } from '../../lib/tauri';
-import { useChatStore } from '../../stores/chatStore';
+import { installChatSessionSync, useChatStore } from '../../stores/chatStore';
+import { MarkdownContent } from '../chat/MarkdownContent';
 import { getMoodPresentation, getReplyDisplayTarget, lerpPresentation, traitsToModifiers, defaultModifiers, type Mood, type EyeShape, type MoodPresentation, type PersonalityTraits, type PersonalityModifiers } from './petPresentation';
 import {
   avatarMoodToPetMood,
@@ -10,6 +11,7 @@ import {
   subscribeToAvatarControlSettings,
   type AvatarControlSettings,
 } from './avatarControls';
+import { combinePetRenderScale } from './petScale';
 
 const DRAG_THRESHOLD_PX = 2;
 
@@ -47,6 +49,7 @@ class PetCharacter {
   private mood: Mood = 'idle';
   private sc = 1;
   private tsc = 1;
+  private userScale = 1;
 
   // Live (eased) presentation + integrated orbit angle. Mood switches glide
   // toward the new preset instead of jumping; the orbit angle is integrated
@@ -90,6 +93,10 @@ class PetCharacter {
     if (m !== this.mood) this.scanPhase = 0;
     this.mood = m;
     this.tsc = 1;
+  }
+
+  setUserScale(scale: number) {
+    this.userScale = scale;
   }
 
   lookAt(x: number, y: number) {
@@ -228,7 +235,7 @@ class PetCharacter {
       this.particleLayer.fill({ color: visual.glowColor, alpha: a });
     }
 
-    this.container.scale.set(this.sc);
+    this.container.scale.set(combinePetRenderScale(this.userScale, this.sc));
     this.container.pivot.set(50, 50);
     this.container.position.set(BODY_CX, BODY_CY);
   }
@@ -324,6 +331,7 @@ export function PetWindow() {
   const petAssistantIdRef = useRef<string | null>(null);
 
   useEffect(() => { dialogOpenRef.current = dialogOpen; }, [dialogOpen]);
+  useEffect(() => installChatSessionSync(), []);
   useEffect(() => { petVisibleRef.current = petVisible; }, [petVisible]);
   useEffect(() => { petScaleRef.current = petScale; }, [petScale]);
   useEffect(() => {
@@ -355,7 +363,7 @@ export function PetWindow() {
     const scale = settings.sizeScale;
     setPetVisible(settings.visible);
     setPetScale(scale);
-    petRef.current?.container.scale.set(scale);
+    petRef.current?.setUserScale(scale);
     petRef.current?.setMood(avatarMoodToPetMood(settings.mood));
 
     const text = settings.bubbleText.trim();
@@ -627,7 +635,9 @@ export function PetWindow() {
             <strong style={{ fontSize: 12, fontWeight: 700 }}>灵枢</strong>
             <button type="button" aria-label="关闭对话框" onClick={() => setDialogOpen(false)} style={{ width: 18, height: 18, border: 0, borderRadius: 9, background: 'rgba(46,107,255,0.1)', color: '#2e6bff', fontSize: 12, lineHeight: '18px', padding: 0, cursor: 'pointer' }}>×</button>
           </div>
-          <div style={{ minHeight: 30, maxHeight: 44, overflow: 'hidden', fontSize: 11, lineHeight: 1.35, color: '#40516f', marginBottom: 7 }}>{dialogReply}</div>
+          <div style={{ minHeight: 30, maxHeight: 44, overflow: 'hidden', color: '#40516f', marginBottom: 7 }}>
+            <MarkdownContent content={dialogReply} compact />
+          </div>
           <div style={{ display: 'flex', gap: 5 }}>
             <input value={draft} onChange={(e) => setDraft(e.target.value)} disabled={chatLoading} placeholder="和灵枢说一句..." style={{ flex: 1, minWidth: 0, height: 24, borderRadius: 8, border: '1px solid rgba(46,107,255,0.2)', padding: '0 7px', fontSize: 11, outline: 'none', color: '#1f2a44', opacity: chatLoading ? 0.65 : 1 }} />
             <button type="submit" aria-label="发送" disabled={chatLoading || !draft.trim()} style={{ width: 32, height: 24, border: 0, borderRadius: 8, background: '#2e6bff', color: '#fff', fontSize: 11, fontWeight: 700, cursor: chatLoading ? 'not-allowed' : 'pointer', opacity: chatLoading || !draft.trim() ? 0.55 : 1 }}>发</button>

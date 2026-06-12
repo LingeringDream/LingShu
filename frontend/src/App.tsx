@@ -17,6 +17,7 @@ import {
   publishAvatarControlSettings,
 } from './components/avatar/avatarControls';
 import { ensureLocalSession, apiFetch } from './lib/api';
+import { installChatSessionSync } from './stores/chatStore';
 import { useProjectStore } from './stores/projectStore';
 
 // ── Dashboard data types ────────────────────────────────────────
@@ -89,6 +90,8 @@ export default function App() {
   useEffect(() => {
     bootLocalSession();
   }, [bootLocalSession]);
+
+  useEffect(() => installChatSessionSync(), []);
 
   const updateAvatarSettings = useCallback((settings: AvatarControlSettings) => {
     setAvatarSettings(settings);
