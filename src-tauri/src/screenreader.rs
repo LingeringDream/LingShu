@@ -426,9 +426,16 @@ unsafe fn collect_text(el: *mut CFRef, depth: usize, st: &mut WalkState) {
         }
     }
 
-    // Text payload: prefer the element's value (static text, fields), fall
-    // back to its title (buttons, tabs, labels).
-    let text = ax_string(el, "AXValue").or_else(|| ax_string(el, "AXTitle"));
+    // Text payload: try multiple attributes that different frameworks use.
+    // AXValue covers text fields, sliders, static text.
+    // AXTitle covers buttons, tabs, labels.
+    // AXDescription covers images, web elements, and Electron app content.
+    // AXRoleDescription provides human-readable role info for some elements.
+    // AXSelectedText is handled separately in read_app_text for the focused element.
+    let text = ax_string(el, "AXValue")
+        .or_else(|| ax_string(el, "AXTitle"))
+        .or_else(|| ax_string(el, "AXDescription"))
+        .or_else(|| ax_string(el, "AXRoleDescription"));
     if let Some(t) = text {
         let t = t.trim();
         let t: String = if t.chars().count() > MAX_ELEMENT_CHARS {
