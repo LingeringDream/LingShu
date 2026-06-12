@@ -30,7 +30,7 @@ pub fn read_file(path: String) -> Result<String, String> {
 
     match ext.as_str() {
         "txt" | "md" | "json" | "csv" | "log" | "yaml" | "yml" | "toml" | "rs"
-        | "ts" | "tsx" | "js" | "jsx" | "html" | "css" | "py" | "sh" | "toml" => {
+        | "ts" | "tsx" | "js" | "jsx" | "html" | "css" | "py" | "sh" => {
             std::fs::read_to_string(&canonical)
                 .map_err(|e| format!("读取失败: {e}"))
         }

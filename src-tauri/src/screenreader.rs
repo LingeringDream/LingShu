@@ -470,63 +470,73 @@ unsafe fn collect_text(el: *mut CFRef, depth: usize, st: &mut WalkState) {
     }
 }
 
-/// Depth-limited BFS to find the first AXWebArea (or AXScrollArea wrapping one)
-/// inside an AXWindow. Returns it so we can start text collection from the
-/// actual page content instead of walking through the entire browser chrome.
+/// Depth-limited BFS to find the shallowest AXWebArea inside an AXWindow, so we
+/// can start text collection from the actual page content instead of walking
+/// through the entire browser chrome. Returns an **owned (+1)** reference the
+/// caller must `CFRelease`, or `None`.
+///
+/// Ownership invariant (each owned ref is released exactly once):
+///   - `window` is borrowed — the caller owns it; this fn never releases it.
+///   - children popped from AX arrays are retained on push and released once,
+///     either after we finish expanding them or, on early return, by the final
+///     drain of whatever is still queued.
+///   - the returned web area is owned: a retained child handed off as-is, or a
+///     freshly retained `window` when the window itself is the web area.
+///
+/// The previous version released over-deep elements in the loop *and* again in
+/// the final drain (they were never removed from the queue) — a double free
+/// that crashed `CFRelease` with a pointer-authentication trap on deep, non-web
+/// UI trees. Popping each element off the queue before handling it makes a
+/// second release impossible.
 #[cfg(target_os = "macos")]
 unsafe fn find_first_webarea(window: *mut CFRef) -> Option<*mut CFRef> {
-    // BFS queue — we want the shallowest web area.
-    // Elements from CFArrayGetValueAtIndex are borrowed (Get rule) and must
-    // be retained to survive AX run-loop pumping that can free the source
-    // array.  The initial `window` pointer is NOT retained here — the caller
-    // owns it.  Children pushed to the queue are retained on push and
-    // released when dequeued.
-    let mut queue: Vec<(*mut CFRef, usize)> = vec![(window, 0)];
-    let mut idx = 0;
-    while idx < queue.len() {
-        let (el, depth) = queue[idx];
-        idx += 1;
+    // (element, depth, owned). `owned` distinguishes the borrowed initial
+    // window from retained children so we release each exactly once.
+    let mut queue: std::collections::VecDeque<(*mut CFRef, usize, bool)> =
+        std::collections::VecDeque::new();
+    queue.push_back((window, 0, false));
+
+    let mut result = None;
+    while let Some((el, depth, owned)) = queue.pop_front() {
         if el.is_null() {
             continue;
         }
-        if depth > 8 {
-            // Release retained children (depth > 0 means from CFArray).
-            if depth > 0 {
-                ffi::CFRelease(el);
-            }
-            continue;
+        if ax_string(el, "AXRole").as_deref() == Some("AXWebArea") {
+            // Hand off ownership: retain the borrowed window if it is itself
+            // the web area; an owned child is returned as-is. Remaining queued
+            // children are released by the drain below.
+            result = Some(if owned { el } else { ffi::CFRetain(el) });
+            break;
         }
-        if let Some(role) = ax_string(el, "AXRole") {
-            if role == "AXWebArea" {
-                // Release remaining queued children (retained when pushed from
-                // CFArrayGetValueAtIndex).
-                for remaining in queue.drain(idx..) {
-                    ffi::CFRelease(remaining.0);
-                }
-                return Some(el);
-            }
-        }
-        if let Some(children) = ax_copy(el, "AXChildren") {
-            if ffi::CFGetTypeID(children) == ffi::CFArrayGetTypeID() {
-                let n = ffi::CFArrayGetCount(children);
-                for i in 0..n {
-                    let child = ffi::CFArrayGetValueAtIndex(children, i);
-                    if !child.is_null() {
-                        ffi::CFRetain(child);
-                        queue.push((child, depth + 1));
+        if depth <= 8 {
+            if let Some(children) = ax_copy(el, "AXChildren") {
+                if ffi::CFGetTypeID(children) == ffi::CFArrayGetTypeID() {
+                    let n = ffi::CFArrayGetCount(children);
+                    for i in 0..n {
+                        let child = ffi::CFArrayGetValueAtIndex(children, i);
+                        if !child.is_null() {
+                            ffi::CFRetain(child);
+                            queue.push_back((child, depth + 1, true));
+                        }
                     }
                 }
+                ffi::CFRelease(children);
             }
-            ffi::CFRelease(children);
         }
-    }
-    // Release any remaining retained children in the queue.
-    for (el, depth) in queue.drain(..) {
-        if !el.is_null() && depth > 0 {
+        // Done with this element — release it iff we own it (never the
+        // borrowed window, never the returned web area which broke above).
+        if owned {
             ffi::CFRelease(el);
         }
     }
-    None
+
+    // Release any still-owned elements left unprocessed by an early break.
+    for (el, _depth, owned) in queue.drain(..) {
+        if owned && !el.is_null() {
+            ffi::CFRelease(el);
+        }
+    }
+    result
 }
 
 #[cfg(target_os = "macos")]
@@ -574,12 +584,11 @@ unsafe fn read_app_text(pid: i32, app_name: &str) -> Result<String, String> {
 
     // Walk the focused window. For browsers and other complex apps, prefer
     // starting from the AXWebArea (the actual page content) rather than the
-    // window root, which is full of toolbar/tab chrome noise.
-    let start = if let Some(win) = window {
-        find_first_webarea(win).unwrap_or(win)
-    } else {
-        ax_app
-    };
+    // window root, which is full of toolbar/tab chrome noise. The web area, if
+    // found, is an owned (+1) reference distinct from the window — released
+    // below alongside the window and app element (each exactly once).
+    let webarea = window.and_then(|win| find_first_webarea(win));
+    let start = webarea.or(window).unwrap_or(ax_app);
 
     let mut st = WalkState {
         visited: 0,
@@ -593,6 +602,9 @@ unsafe fn read_app_text(pid: i32, app_name: &str) -> Result<String, String> {
         lines.extend(st.out);
     }
 
+    if let Some(wa) = webarea {
+        ffi::CFRelease(wa);
+    }
     if let Some(win) = window {
         ffi::CFRelease(win);
     }
