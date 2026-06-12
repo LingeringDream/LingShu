@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-12
+
+### Version 1.0.0
+
+- `chore`: bump all version numbers to 1.0.0 (Cargo.toml, package.json, tauri.conf.json, openapi.json).
+- Updated README.md and README.en.md with version badge and v1.0.0 status.
+
 ## 2026-06-10
 
 ### Permissions Persistence
