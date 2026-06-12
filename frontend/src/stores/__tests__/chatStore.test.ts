@@ -1,6 +1,7 @@
 /* global CustomEvent */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  CHAT_SESSION_SYNC_DEBOUNCE_MS,
   CHAT_SESSION_SYNC_EVENT,
   installChatSessionSync,
   useChatStore,
@@ -15,6 +16,10 @@ describe('chatStore', () => {
       streamingId: null,
       sessionId: null,
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('starts with empty messages', () => {
@@ -62,6 +67,39 @@ describe('chatStore', () => {
     expect(state.messages).toHaveLength(2);
     expect(state.messages[1].content).toBe('**hi**');
 
+    unsubscribe();
+  });
+
+  it('coalesces rapid local updates into one chat session sync event', () => {
+    vi.useFakeTimers();
+    const received: Event[] = [];
+    const unsubscribe = installChatSessionSync();
+    const handleSync = (event: Event) => received.push(event);
+    window.addEventListener(CHAT_SESSION_SYNC_EVENT, handleSync);
+
+    useChatStore.setState({
+      messages: [{ id: 'u1', role: 'user', content: 'hello', timestamp: new Date() }],
+      isLoading: true,
+      streamingId: 'a1',
+    });
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'hello', timestamp: new Date() },
+        { id: 'a1', role: 'assistant', content: 'one', timestamp: new Date() },
+      ],
+    });
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: 'hello', timestamp: new Date() },
+        { id: 'a1', role: 'assistant', content: 'one two', timestamp: new Date() },
+      ],
+    });
+
+    expect(received).toHaveLength(0);
+    vi.advanceTimersByTime(CHAT_SESSION_SYNC_DEBOUNCE_MS);
+    expect(received).toHaveLength(1);
+
+    window.removeEventListener(CHAT_SESSION_SYNC_EVENT, handleSync);
     unsubscribe();
   });
 });

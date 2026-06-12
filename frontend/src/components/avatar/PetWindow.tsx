@@ -3,7 +3,6 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Application, Graphics, Text, Container, BlurFilter } from 'pixi.js';
 import { isTauri, showMainWindow } from '../../lib/tauri';
 import { installChatSessionSync, useChatStore } from '../../stores/chatStore';
-import { MarkdownContent } from '../chat/MarkdownContent';
 import { getMoodPresentation, getReplyDisplayTarget, lerpPresentation, traitsToModifiers, defaultModifiers, type Mood, type EyeShape, type MoodPresentation, type PersonalityTraits, type PersonalityModifiers } from './petPresentation';
 import {
   avatarMoodToPetMood,
@@ -11,6 +10,7 @@ import {
   subscribeToAvatarControlSettings,
   type AvatarControlSettings,
 } from './avatarControls';
+import { PetDialogReply } from './PetDialogReply';
 import { combinePetRenderScale } from './petScale';
 
 const DRAG_THRESHOLD_PX = 2;
@@ -22,7 +22,7 @@ const DRAG_THRESHOLD_PX = 2;
 const BODY_CX = 100;
 const BODY_CY = 110;
 const BODY_HIT_RADIUS = 64;
-const DIALOG_HIT_RECT = { x: 6, y: 134, width: 188, height: 108 };
+const DIALOG_HIT_RECT = { x: 6, y: 72, width: 188, height: 176 };
 const CONTEXT_MENU_SIZE = { width: 132, height: 44 };
 
 // ── Pet Character ──────────────────────────────────────────────────
@@ -630,14 +630,12 @@ export function PetWindow() {
       <div ref={canvasRef} style={{ position: 'absolute', left: '50%', top: '50%', width: 200, height: 260, transform: 'translate(-50%, -50%)' }} />
       {bubble && <div style={{ position: 'absolute', left: '50%', top: dialogOpen ? 'calc(50% - 42px)' : 'calc(50% - 6px)', transform: 'translateX(-50%)', zIndex: 2, padding: '5px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.94)', color: '#24344f', fontSize: 12, lineHeight: 1.35, maxWidth: 180, textAlign: 'center', boxShadow: '0 8px 24px rgba(21,43,92,0.18)', border: '1px solid rgba(46,107,255,0.16)', animation: 'fadeIn 0.25s ease', pointerEvents: 'none' }}>{bubble}</div>}
       {dialogOpen && (
-        <form onSubmit={submitMiniPrompt} style={{ position: 'absolute', left: '50%', top: 'calc(50% + 4px)', transform: 'translateX(-50%)', zIndex: 1, width: 172, padding: 8, borderRadius: 12, background: 'rgba(255,255,255,0.95)', color: '#1f2a44', boxShadow: '0 12px 36px rgba(21,43,92,0.22)', border: '1px solid rgba(46,107,255,0.18)', backdropFilter: 'blur(12px)', animation: 'fadeIn 0.2s ease', cursor: 'default' }} onClick={(e) => e.stopPropagation()}>
+        <form onSubmit={submitMiniPrompt} style={{ position: 'absolute', left: DIALOG_HIT_RECT.x, top: DIALOG_HIT_RECT.y, zIndex: 1, width: 172, padding: 8, borderRadius: 12, background: 'rgba(255,255,255,0.95)', color: '#1f2a44', boxShadow: '0 12px 36px rgba(21,43,92,0.22)', border: '1px solid rgba(46,107,255,0.18)', backdropFilter: 'blur(12px)', animation: 'fadeIn 0.2s ease', cursor: 'default' }} onClick={(e) => e.stopPropagation()}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
             <strong style={{ fontSize: 12, fontWeight: 700 }}>灵枢</strong>
             <button type="button" aria-label="关闭对话框" onClick={() => setDialogOpen(false)} style={{ width: 18, height: 18, border: 0, borderRadius: 9, background: 'rgba(46,107,255,0.1)', color: '#2e6bff', fontSize: 12, lineHeight: '18px', padding: 0, cursor: 'pointer' }}>×</button>
           </div>
-          <div style={{ minHeight: 30, maxHeight: 44, overflow: 'hidden', color: '#40516f', marginBottom: 7 }}>
-            <MarkdownContent content={dialogReply} compact />
-          </div>
+          <PetDialogReply content={dialogReply} />
           <div style={{ display: 'flex', gap: 5 }}>
             <input value={draft} onChange={(e) => setDraft(e.target.value)} disabled={chatLoading} placeholder="和灵枢说一句..." style={{ flex: 1, minWidth: 0, height: 24, borderRadius: 8, border: '1px solid rgba(46,107,255,0.2)', padding: '0 7px', fontSize: 11, outline: 'none', color: '#1f2a44', opacity: chatLoading ? 0.65 : 1 }} />
             <button type="submit" aria-label="发送" disabled={chatLoading || !draft.trim()} style={{ width: 32, height: 24, border: 0, borderRadius: 8, background: '#2e6bff', color: '#fff', fontSize: 11, fontWeight: 700, cursor: chatLoading ? 'not-allowed' : 'pointer', opacity: chatLoading || !draft.trim() ? 0.55 : 1 }}>发</button>

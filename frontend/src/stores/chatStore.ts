@@ -9,6 +9,7 @@ import { isTauri } from '../lib/tauri';
 
 export const CHAT_SESSION_STORAGE_KEY = 'lingshu-chat-session';
 export const CHAT_SESSION_SYNC_EVENT = 'lingshu:chat-session-sync';
+export const CHAT_SESSION_SYNC_DEBOUNCE_MS = 80;
 
 const CHAT_SYNC_SOURCE_ID = Math.random().toString(36).slice(2);
 
@@ -399,6 +400,8 @@ export const useChatStore = create<ChatState>()(
 );
 
 let applyingRemoteSnapshot = false;
+let pendingSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingSyncSnapshot: ChatSessionSnapshot | null = null;
 
 function createChatSessionSnapshot(state = useChatStore.getState()): ChatSessionSnapshot {
   return {
@@ -428,8 +431,7 @@ function applyChatSessionSnapshot(value: unknown) {
   }
 }
 
-function publishChatSessionSnapshot(state = useChatStore.getState()) {
-  const snapshot = createChatSessionSnapshot(state);
+function publishChatSessionSnapshot(snapshot: ChatSessionSnapshot) {
   window.dispatchEvent(new CustomEvent(CHAT_SESSION_SYNC_EVENT, { detail: snapshot }));
 
   if (!isTauri()) return;
@@ -441,6 +443,22 @@ function publishChatSessionSnapshot(state = useChatStore.getState()) {
     .catch((error) => {
       console.error('[chat] failed to emit chat session snapshot:', error);
     });
+}
+
+function flushChatSessionSnapshot() {
+  if (pendingSyncTimer) {
+    clearTimeout(pendingSyncTimer);
+    pendingSyncTimer = null;
+  }
+  const snapshot = pendingSyncSnapshot;
+  pendingSyncSnapshot = null;
+  if (snapshot) publishChatSessionSnapshot(snapshot);
+}
+
+function scheduleChatSessionSnapshot(state = useChatStore.getState()) {
+  pendingSyncSnapshot = createChatSessionSnapshot(state);
+  if (pendingSyncTimer) return;
+  pendingSyncTimer = setTimeout(flushChatSessionSnapshot, CHAT_SESSION_SYNC_DEBOUNCE_MS);
 }
 
 export function installChatSessionSync(): () => void {
@@ -464,7 +482,7 @@ export function installChatSessionSync(): () => void {
   window.addEventListener('storage', handleStorageEvent);
 
   const unsubscribeStore = useChatStore.subscribe((state) => {
-    if (!applyingRemoteSnapshot) publishChatSessionSnapshot(state);
+    if (!applyingRemoteSnapshot) scheduleChatSessionSnapshot(state);
   });
 
   if (isTauri()) {
@@ -489,6 +507,10 @@ export function installChatSessionSync(): () => void {
     window.removeEventListener(CHAT_SESSION_SYNC_EVENT, handleCustomEvent);
     window.removeEventListener('storage', handleStorageEvent);
     unsubscribeStore();
+    if (pendingSyncTimer) {
+      clearTimeout(pendingSyncTimer);
+      pendingSyncTimer = null;
+    }
     if (unlistenTauri) unlistenTauri();
   };
 }
