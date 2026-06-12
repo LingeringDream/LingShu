@@ -16,8 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.88"
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
@@ -48,7 +49,9 @@ jobs:
           - 6379:6379
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
       - name: Install sqlx-cli
         # Pin to the 0.8.x line: it matches the `sqlx = "0.8"` dependency and stays
@@ -89,7 +92,9 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
       - name: Generate OpenAPI spec
         run: cargo test generate_openapi -- --ignored 2>/dev/null || echo "OpenAPI generation test not yet implemented"
