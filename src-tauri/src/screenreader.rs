@@ -172,8 +172,29 @@ fn should_skip_bundle(bundle: Option<&str>) -> bool {
 #[cfg(target_os = "macos")]
 type CFRef = std::ffi::c_void;
 
+/// Best-effort crash-localization log. Appends one flushed line to
+/// `~/Library/Logs/lingshu-screenread.log` so that, after a hard C-level crash
+/// (which `catch_unwind` cannot intercept), the LAST line identifies the stage
+/// that was executing. Cheap and failure-silent; remove once the AX crash is
+/// resolved.
+#[cfg(target_os = "macos")]
+fn slog(stage: &str) {
+    use std::io::Write;
+    let Ok(home) = std::env::var("HOME") else { return };
+    let path = format!("{home}/Library/Logs/lingshu-screenread.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(f, "{ts} {stage}");
+        let _ = f.flush();
+    }
+}
+
 #[cfg(target_os = "macos")]
 unsafe fn read_frontmost() -> Result<String, String> {
+    slog("read_frontmost: enter");
     if !ax_trusted_with_prompt() {
         open_accessibility_settings_once();
         let exe = std::env::current_exe()
@@ -181,8 +202,10 @@ unsafe fn read_frontmost() -> Result<String, String> {
             .unwrap_or_else(|_| "<unknown>".into());
         return Err(permission_error_for(&exe));
     }
+    slog("read_frontmost: trusted, picking app");
     let (pid, app_name) =
         pick_target_app().ok_or_else(|| "无法确定要读取的前台应用".to_string())?;
+    slog(&format!("read_frontmost: picked pid={pid} name={app_name}"));
     read_app_text(pid, &app_name)
 }
 
@@ -229,7 +252,11 @@ fn open_accessibility_settings_once() {
 /// Create a CFString from a Rust string. Caller must CFRelease.
 #[cfg(target_os = "macos")]
 unsafe fn cfstr(s: &str) -> *mut CFRef {
-    let c = std::ffi::CString::new(s).expect("no NUL in attribute names");
+    // Attribute/key names are static and NUL-free, so this never actually
+    // fails. But under `panic = "abort"` any panic on the screen-read thread
+    // is fatal, so degrade to an empty string instead of `expect`-ing.
+    let c = std::ffi::CString::new(s)
+        .unwrap_or_else(|_| std::ffi::CString::from_vec_unchecked(Vec::new()));
     ffi::CFStringCreateWithCString(std::ptr::null(), c.as_ptr(), ffi::UTF8)
 }
 
@@ -514,7 +541,11 @@ unsafe fn find_first_webarea(window: *mut CFRef) -> Option<*mut CFRef> {
                     let n = ffi::CFArrayGetCount(children);
                     for i in 0..n {
                         let child = ffi::CFArrayGetValueAtIndex(children, i);
-                        if !child.is_null() {
+                        // Only retain/keep genuine AXUIElements — retaining and
+                        // later releasing a non-CF pointer would PAC-trap.
+                        if !child.is_null()
+                            && ffi::CFGetTypeID(child) == ffi::AXUIElementGetTypeID()
+                        {
                             ffi::CFRetain(child);
                             queue.push_back((child, depth + 1, true));
                         }
@@ -587,7 +618,9 @@ unsafe fn read_app_text(pid: i32, app_name: &str) -> Result<String, String> {
     // window root, which is full of toolbar/tab chrome noise. The web area, if
     // found, is an owned (+1) reference distinct from the window — released
     // below alongside the window and app element (each exactly once).
+    slog(&format!("read_app_text: window={} ; searching webarea", window.is_some()));
     let webarea = window.and_then(|win| find_first_webarea(win));
+    slog(&format!("read_app_text: webarea={} ; starting collect_text", webarea.is_some()));
     let start = webarea.or(window).unwrap_or(ax_app);
 
     let mut st = WalkState {
@@ -597,18 +630,23 @@ unsafe fn read_app_text(pid: i32, app_name: &str) -> Result<String, String> {
         out: Vec::new(),
     };
     collect_text(start, 0, &mut st);
+    slog(&format!("read_app_text: collect_text done visited={} ; releasing", st.visited));
     if !st.out.is_empty() {
         lines.push("[内容]".into());
         lines.extend(st.out);
     }
 
     if let Some(wa) = webarea {
+        slog("read_app_text: release webarea");
         ffi::CFRelease(wa);
     }
     if let Some(win) = window {
+        slog("read_app_text: release window");
         ffi::CFRelease(win);
     }
+    slog("read_app_text: release ax_app");
     ffi::CFRelease(ax_app);
+    slog("read_app_text: done");
 
     if lines.len() <= 1 {
         lines.push(
