@@ -70,6 +70,51 @@ describe('chatStore', () => {
     unsubscribe();
   });
 
+  it('does not let a stale shorter snapshot truncate a completed assistant reply', () => {
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: '识别屏幕', timestamp: new Date() },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: '看到你屏幕上的内容了。你一直在 **Codex** 中调试灵枢的聊天同步问题。',
+          timestamp: new Date(),
+          dbId: 'assistant-db-id',
+        },
+      ],
+      isLoading: false,
+      streamingId: null,
+      sessionId: 'session-123',
+    });
+    const unsubscribe = installChatSessionSync();
+
+    window.dispatchEvent(new CustomEvent(CHAT_SESSION_SYNC_EVENT, {
+      detail: {
+        sourceId: 'pet-window',
+        messages: [
+          { id: 'u1', role: 'user', content: '识别屏幕', timestamp: new Date().toISOString() },
+          {
+            id: 'a1',
+            role: 'assistant',
+            content: '看到你屏幕上的内容了。你一直在 **C',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+        isLoading: true,
+        streamingId: 'a1',
+        sessionId: 'session-123',
+      },
+    }));
+
+    const state = useChatStore.getState();
+    expect(state.messages[1].content).toBe('看到你屏幕上的内容了。你一直在 **Codex** 中调试灵枢的聊天同步问题。');
+    expect(state.messages[1].dbId).toBe('assistant-db-id');
+    expect(state.isLoading).toBe(false);
+    expect(state.streamingId).toBeNull();
+
+    unsubscribe();
+  });
+
   it('coalesces rapid local updates into one chat session sync event', () => {
     vi.useFakeTimers();
     const received: Event[] = [];

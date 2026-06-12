@@ -96,6 +96,56 @@ function normalizeChatSessionSnapshot(value: unknown): ChatSessionSnapshot | nul
   };
 }
 
+function canMergeChatSessionSnapshot(currentSessionId: string | null, nextSessionId: string | null): boolean {
+  return currentSessionId === nextSessionId || currentSessionId === null || nextSessionId === null;
+}
+
+function chooseMessageWithMostContent(current: Message | undefined, incoming: Message): Message {
+  if (!current || current.role !== incoming.role) return incoming;
+
+  const primary = current.content.length > incoming.content.length ? current : incoming;
+  const fallback = primary === current ? incoming : current;
+  const merged: Message = {
+    ...primary,
+    dbId: primary.dbId ?? fallback.dbId,
+  };
+
+  if (primary.permissionRequests && primary.permissionRequests.length > 0) {
+    merged.permissionRequests = primary.permissionRequests;
+  } else if (fallback.permissionRequests && fallback.permissionRequests.length > 0) {
+    merged.permissionRequests = fallback.permissionRequests;
+  }
+
+  return merged;
+}
+
+function mergeChatSessionMessages(currentMessages: Message[], incomingMessages: Message[]): Message[] {
+  if (incomingMessages.length === 0) return [];
+
+  const currentById = new Map(currentMessages.map((message) => [message.id, message]));
+  const incomingIds = new Set(incomingMessages.map((message) => message.id));
+  const merged = incomingMessages.map((message) =>
+    chooseMessageWithMostContent(currentById.get(message.id), message),
+  );
+
+  for (const message of currentMessages) {
+    if (!incomingIds.has(message.id)) merged.push(message);
+  }
+
+  return merged;
+}
+
+function snapshotWouldRegressCompletedStream(current: ChatState, snapshot: ChatSessionSnapshot): boolean {
+  if (current.isLoading || snapshot.isLoading !== true || !snapshot.streamingId) return false;
+
+  const currentMessage = current.messages.find((message) => message.id === snapshot.streamingId);
+  if (!currentMessage || currentMessage.role !== 'assistant') return false;
+  if (currentMessage.dbId) return true;
+
+  const incomingMessage = snapshot.messages.find((message) => message.id === snapshot.streamingId);
+  return Boolean(incomingMessage && currentMessage.content.length > incomingMessage.content.length);
+}
+
 /** Ensure a conversation exists, creating one on first use. Returns the
  *  conversation id, or `null` if creation failed (chat still proceeds as an
  *  ephemeral, non-persisted exchange in that case). */
@@ -418,13 +468,23 @@ function applyChatSessionSnapshot(value: unknown) {
   if (!snapshot || snapshot.sourceId === CHAT_SYNC_SOURCE_ID) return;
 
   const current = useChatStore.getState();
+  const shouldMerge = snapshot.messages.length > 0
+    && current.messages.length > 0
+    && canMergeChatSessionSnapshot(current.sessionId, snapshot.sessionId);
+  const wouldRegressCompletedStream = shouldMerge && snapshotWouldRegressCompletedStream(current, snapshot);
   applyingRemoteSnapshot = true;
   try {
     useChatStore.setState({
-      messages: snapshot.messages,
-      isLoading: snapshot.isLoading ?? current.isLoading,
-      streamingId: snapshot.streamingId ?? null,
-      sessionId: snapshot.sessionId,
+      messages: shouldMerge
+        ? mergeChatSessionMessages(current.messages, snapshot.messages)
+        : snapshot.messages,
+      isLoading: wouldRegressCompletedStream
+        ? current.isLoading
+        : snapshot.isLoading ?? current.isLoading,
+      streamingId: wouldRegressCompletedStream
+        ? current.streamingId
+        : snapshot.streamingId ?? null,
+      sessionId: snapshot.sessionId ?? (snapshot.messages.length > 0 ? current.sessionId : null),
     });
   } finally {
     applyingRemoteSnapshot = false;

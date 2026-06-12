@@ -435,6 +435,11 @@ struct WalkState {
     out: Vec<String>,
 }
 
+#[cfg(target_os = "macos")]
+fn should_retry_window_after_webarea(visited: usize, chars: usize, output_count: usize) -> bool {
+    visited <= 3 && (chars < 40 || output_count <= 2)
+}
+
 /// Depth-first walk over the AX tree collecting visible text (roughly in
 /// reading order). Dedupes repeated strings and stops at the budgets above.
 #[cfg(target_os = "macos")]
@@ -630,7 +635,35 @@ unsafe fn read_app_text(pid: i32, app_name: &str) -> Result<String, String> {
         out: Vec::new(),
     };
     collect_text(start, 0, &mut st);
-    slog(&format!("read_app_text: collect_text done visited={} ; releasing", st.visited));
+    slog(&format!(
+        "read_app_text: collect_text done visited={} chars={} out={} ; source=initial",
+        st.visited,
+        st.chars,
+        st.out.len()
+    ));
+    if webarea.is_some()
+        && should_retry_window_after_webarea(st.visited, st.chars, st.out.len())
+    {
+        if let Some(win) = window {
+            slog("read_app_text: sparse webarea capture; retrying from window root");
+            let mut fallback = WalkState {
+                visited: 0,
+                chars: 0,
+                seen: std::collections::HashSet::new(),
+                out: Vec::new(),
+            };
+            collect_text(win, 0, &mut fallback);
+            slog(&format!(
+                "read_app_text: fallback collect_text done visited={} chars={} out={}",
+                fallback.visited,
+                fallback.chars,
+                fallback.out.len()
+            ));
+            if fallback.chars > st.chars || fallback.out.len() > st.out.len() {
+                st = fallback;
+            }
+        }
+    }
     if !st.out.is_empty() {
         lines.push("[内容]".into());
         lines.extend(st.out);
@@ -710,6 +743,13 @@ mod tests {
         let msg = permission_error_for("/Users/me/projects/PA/src-tauri/target/debug/lingshu-tauri");
         assert!(msg.contains("终端"));
         assert!(msg.contains("target/debug/lingshu-tauri"));
+    }
+
+    #[test]
+    fn sparse_webarea_capture_should_retry_from_window_root() {
+        assert!(should_retry_window_after_webarea(2, 1, 1));
+        assert!(should_retry_window_after_webarea(3, 12, 2));
+        assert!(!should_retry_window_after_webarea(20, 400, 12));
     }
 
     /// Exercises the CFString FFI both ways — signature mistakes here crash at

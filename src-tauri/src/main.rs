@@ -17,6 +17,9 @@ use tauri::Manager;
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+const BACKEND_PORT: u16 = 8080;
+const SIDECAR_BINARY_NAME: &str = "lingshu-server";
+
 #[path = "eventkit.rs"]
 mod eventkit;
 
@@ -70,6 +73,129 @@ async fn wait_for_backend(port: u16, timeout: std::time::Duration) -> bool {
     }
     false
 }
+
+fn parse_lsof_pids(output: &str) -> Vec<u32> {
+    output
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect()
+}
+
+fn command_looks_like_lingshu_sidecar(command: &str) -> bool {
+    let command = command.trim();
+    if command.is_empty() {
+        return false;
+    }
+
+    command.split('/').any(|segment| {
+        segment == SIDECAR_BINARY_NAME || segment.starts_with(&format!("{SIDECAR_BINARY_NAME} "))
+    })
+}
+
+fn command_looks_like_bundled_lingshu_sidecar(command: &str) -> bool {
+    command.contains(".app/Contents/MacOS/") && command_looks_like_lingshu_sidecar(command)
+}
+
+#[cfg(target_os = "macos")]
+fn listening_pids_on_port(port: u16) -> Vec<u32> {
+    let port_arg = format!("-iTCP:{port}");
+    let output = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-t", port_arg.as_str(), "-sTCP:LISTEN"])
+        .output()
+        .or_else(|_| {
+            std::process::Command::new("lsof")
+                .args(["-nP", "-t", port_arg.as_str(), "-sTCP:LISTEN"])
+                .output()
+        });
+
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    parse_lsof_pids(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(target_os = "macos")]
+fn command_for_pid(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!command.is_empty()).then_some(command)
+}
+
+#[cfg(target_os = "macos")]
+fn bundled_lingshu_sidecar_pids_on_port(port: u16) -> Vec<u32> {
+    let current_pid = std::process::id();
+    listening_pids_on_port(port)
+        .into_iter()
+        .filter(|pid| *pid != current_pid)
+        .filter(|pid| {
+            command_for_pid(*pid)
+                .as_deref()
+                .is_some_and(command_looks_like_bundled_lingshu_sidecar)
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn signal_pid(pid: u32, signal: &str) {
+    let _ = std::process::Command::new("/bin/kill")
+        .args([signal, &pid.to_string()])
+        .status();
+}
+
+#[cfg(target_os = "macos")]
+fn wait_until_port_released_from_pids(
+    port: u16,
+    pids: &[u32],
+    timeout: std::time::Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        let listening = listening_pids_on_port(port);
+        if !pids.iter().any(|pid| listening.contains(pid)) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn terminate_stale_bundled_sidecars(port: u16) {
+    let stale_pids = bundled_lingshu_sidecar_pids_on_port(port);
+    if stale_pids.is_empty() {
+        return;
+    }
+
+    eprintln!(
+        "[lingshu-tauri] terminating stale bundled sidecar(s) on port {port}: {stale_pids:?}"
+    );
+    for pid in &stale_pids {
+        signal_pid(*pid, "-TERM");
+    }
+
+    if wait_until_port_released_from_pids(port, &stale_pids, std::time::Duration::from_secs(2)) {
+        return;
+    }
+
+    eprintln!("[lingshu-tauri] stale bundled sidecar(s) did not exit after TERM; sending KILL");
+    for pid in stale_pids {
+        signal_pid(pid, "-KILL");
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn terminate_stale_bundled_sidecars(_port: u16) {}
 
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
@@ -202,8 +328,10 @@ fn main() {
             // ── Launch the backend sidecar (bundled .app) ──────────
             // In dev mode the sidecar binary may not exist — that's fine,
             // just run `cargo run -p lingshu-server` in another terminal.
-            match app.shell().sidecar("lingshu-server") {
-                Ok(sidecar) => match sidecar.spawn() {
+            match app.shell().sidecar(SIDECAR_BINARY_NAME) {
+                Ok(sidecar) => {
+                    terminate_stale_bundled_sidecars(BACKEND_PORT);
+                    match sidecar.spawn() {
                     Ok((mut rx, child)) => {
                         app.manage(SidecarGuard(Mutex::new(Some(child))));
                         tauri::async_runtime::spawn(async move {
@@ -230,7 +358,8 @@ fn main() {
                     Err(e) => {
                         eprintln!("[lingshu-tauri] failed to spawn sidecar: {e}");
                     }
-                },
+                    }
+                }
                 Err(e) => {
                     eprintln!("[lingshu-tauri] sidecar not found (dev mode?): {e}");
                 }
@@ -240,7 +369,7 @@ fn main() {
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let ready =
-                    wait_for_backend(8080, std::time::Duration::from_secs(15)).await;
+                    wait_for_backend(BACKEND_PORT, std::time::Duration::from_secs(15)).await;
                 if ready {
                     println!("[lingshu-tauri] backend ready, showing windows");
                 } else {
@@ -319,5 +448,36 @@ mod tests {
             pet_start_position(None, 1920, 1080, 2.0),
             PetWindowPosition { x: 740, y: 240 }
         );
+    }
+
+    #[test]
+    fn parse_lsof_pids_ignores_invalid_lines() {
+        assert_eq!(parse_lsof_pids("62622\nnot-a-pid\n42\n"), vec![62622, 42]);
+    }
+
+    #[test]
+    fn command_looks_like_lingshu_sidecar_matches_only_sidecar_binary() {
+        assert!(command_looks_like_lingshu_sidecar(
+            "/Applications/灵枢 LingShu.app/Contents/MacOS/lingshu-server"
+        ));
+        assert!(command_looks_like_lingshu_sidecar(
+            "/Users/ymqz/projects/PA/target/debug/lingshu-server --port 8080"
+        ));
+        assert!(!command_looks_like_lingshu_sidecar(
+            "/opt/homebrew/bin/postgres -D /tmp/db"
+        ));
+        assert!(!command_looks_like_lingshu_sidecar(
+            "/Applications/灵枢 LingShu.app/Contents/MacOS/lingshu-tauri"
+        ));
+    }
+
+    #[test]
+    fn bundled_sidecar_match_is_limited_to_app_bundle_binary() {
+        assert!(command_looks_like_bundled_lingshu_sidecar(
+            "/Applications/灵枢 LingShu.app/Contents/MacOS/lingshu-server"
+        ));
+        assert!(!command_looks_like_bundled_lingshu_sidecar(
+            "/Users/ymqz/projects/PA/target/debug/lingshu-server --port 8080"
+        ));
     }
 }

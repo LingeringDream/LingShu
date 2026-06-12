@@ -97,11 +97,22 @@ impl AppState {
             .await?;
 
         // Shared HTTP client — used by both LlmClient and QdrantClient.
-        // 120 s timeout accounts for LLM model loading latency (9.6 GB models
-        // can take 30+ s of cold-load time on first request).
+        //
+        // NOTE: deliberately NOT using `.timeout()`. reqwest's total timeout
+        // caps the WHOLE request including the streaming response body, so a
+        // long LLM reply — a cloud model with a high `max_tokens` can stream for
+        // several minutes — gets killed mid-sentence at the cap (the "回复到一半
+        // 就断了" bug). Instead we bound:
+        //   - connect_timeout: time to establish the TCP/TLS connection.
+        //   - read_timeout: idle gap between received bytes; it RESETS on every
+        //     chunk, so an actively-streaming reply is never cut, while a truly
+        //     stalled connection still aborts. 180 s also comfortably covers
+        //     local model cold-load latency before the first token (9.6 GB
+        //     models can take 30+ s on first request).
         let http = reqwest::Client::builder()
             .pool_max_idle_per_host(20)
-            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .read_timeout(std::time::Duration::from_secs(180))
             .build()?;
 
         // Redis (optional — skip if URL is empty or connection fails)
