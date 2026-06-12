@@ -1,7 +1,7 @@
 # LingShu MVP 完成度对照 · MVP Status vs PRD
 
 > 对照 `CLAUDE.md` 的 MVP 范围与 `AI-PersonalAssistant-PRD.md`，记录截至当前的实现状态、
-> 已知局限与剩余可选项。日期：2026-06-10。
+> 已知局限与剩余可选项。版本：v1.0.0，日期：2026-06-12。
 > 图例：✅ 已实现并测试 · ◐ 已实现但有验证缺口/局限 · ⏳ 未做（可选/非 MVP）
 
 ## 一、MVP 四大件（CLAUDE.md 范围）
@@ -44,7 +44,7 @@
 | 集成令牌加密 | ✅ | AES-256-GCM 静态加密（`TokenCipher` 启动派生一次缓存），响应不回传任何 token |
 | SQL 注入 | ✅ | 全部参数化、按 `user_id` 作用域 |
 | 路由参数 | ✅ | 已修 axum 0.7 `:param` 语法（此前 `{id}` 致 by-id 路由全 404）+ router 级回归测试 |
-| 测试 | ✅ | 后端 **289** 测试函数（单元 + DB 集成 + 路由回归，15 项 ignored）+ 前端 Vitest 套件（stores / lib / 组件，**18** 项）；clippy `--all-targets --all-features -D warnings` 零警告 |
+| 测试 | ✅ | 后端 **300+** 测试函数（单元 + DB 集成 + 路由回归，16 项 ignored）+ 前端 Vitest 套件（stores / lib / 组件，**18** 项）；clippy `--all-targets --all-features -D warnings` 零警告 |
 | CI | ✅ | Rust lint/test、前端 type-check/build、Docker（GHCR 小写）、sqlx-cli 锁 0.8.x、actions v5 |
 
 ## 五、待办 / 验证缺口 / 可选增强
@@ -61,8 +61,10 @@
 ## 六、结论
 
 CLAUDE.md 定义的 MVP 范围（桌面壳 + Apple Calendar + SoulLedger + 权限分级）在代码层面**已全部落地**，
-全部可选增强项也已完工。后端含 **289** 单元/集成/回归测试函数，前端 18 项 Vitest 套件。
+全部可选增强项也已完工。后端含 **300+** 单元/集成/回归测试函数，前端 18 项 Vitest 套件。
 Apple Calendar EventKit 写入/删除 + external_event_id 回写已完整实现。
 Chat 侧工具调用、WebSocket 实时推送、角色提示词、Markdown 渲染、
 LLM 设置与权限分级的 PostgreSQL 持久化，以及 OpenAPI 契约门禁均已完工。
 CI 全绿：test + fmt + clippy + type-check + lint + build。
+
+**v1.0.0 发布于 2026-06-12。**
