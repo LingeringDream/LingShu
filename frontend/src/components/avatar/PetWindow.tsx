@@ -2,10 +2,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Application, Graphics, Text, Container, BlurFilter } from 'pixi.js';
 import { isTauri, showMainWindow } from '../../lib/tauri';
+import { useChatStore } from '../../stores/chatStore';
 import { getMoodPresentation, getReplyDisplayTarget, lerpPresentation, traitsToModifiers, defaultModifiers, type Mood, type EyeShape, type MoodPresentation, type PersonalityTraits, type PersonalityModifiers } from './petPresentation';
 import {
   avatarMoodToPetMood,
-  avatarSizeToScale,
   loadAvatarControlSettings,
   subscribeToAvatarControlSettings,
   type AvatarControlSettings,
@@ -21,6 +21,7 @@ const BODY_CX = 100;
 const BODY_CY = 110;
 const BODY_HIT_RADIUS = 64;
 const DIALOG_HIT_RECT = { x: 6, y: 134, width: 188, height: 108 };
+const CONTEXT_MENU_SIZE = { width: 132, height: 44 };
 
 // ── Pet Character ──────────────────────────────────────────────────
 
@@ -309,18 +310,49 @@ export function PetWindow() {
   const [dialogReply, setDialogReply] = useState('点击灵枢后，我会在这里保留较长回复；短提示会从旁边气泡出现。');
   const [inTauri, setInTauri] = useState(false);
   const [petVisible, setPetVisible] = useState(initialControlsRef.current.visible);
-  const [petScale, setPetScale] = useState(() => avatarSizeToScale(initialControlsRef.current!.size));
+  const [petScale, setPetScale] = useState(initialControlsRef.current.sizeScale);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const sendChatMessage = useChatStore((state) => state.sendMessage);
+  const chatMessages = useChatStore((state) => state.messages);
+  const chatLoading = useChatStore((state) => state.isLoading);
   const draggedRef = useRef(false);
   const dialogOpenRef = useRef(false);
   const petVisibleRef = useRef(petVisible);
   const petScaleRef = useRef(petScale);
+  const contextMenuRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const chatMessagesRef = useRef(chatMessages);
+  const petAssistantIdRef = useRef<string | null>(null);
 
   useEffect(() => { dialogOpenRef.current = dialogOpen; }, [dialogOpen]);
   useEffect(() => { petVisibleRef.current = petVisible; }, [petVisible]);
   useEffect(() => { petScaleRef.current = petScale; }, [petScale]);
+  useEffect(() => {
+    contextMenuRectRef.current = contextMenu
+      ? { ...contextMenu, ...CONTEXT_MENU_SIZE }
+      : null;
+  }, [contextMenu]);
+  useEffect(() => { chatMessagesRef.current = chatMessages; }, [chatMessages]);
+
+  useEffect(() => {
+    const targetId = petAssistantIdRef.current;
+    if (!targetId) return;
+    const assistant = chatMessages.find((message) => message.id === targetId);
+    if (!assistant) return;
+
+    const content = assistant.content.trim();
+    if (content) {
+      setDialogReply(content);
+      setDialogOpen(true);
+      petRef.current?.setMood(chatLoading ? 'speaking' : 'idle');
+    } else if (chatLoading) {
+      setDialogReply('思考中...');
+      setDialogOpen(true);
+      petRef.current?.setMood('thinking');
+    }
+  }, [chatMessages, chatLoading]);
 
   const applyAvatarControls = useCallback((settings: AvatarControlSettings) => {
-    const scale = avatarSizeToScale(settings.size);
+    const scale = settings.sizeScale;
     setPetVisible(settings.visible);
     setPetScale(scale);
     petRef.current?.container.scale.set(scale);
@@ -411,12 +443,29 @@ export function PetWindow() {
   }, []);
 
   const handleClick = useCallback(() => {
+    if (contextMenu) { setContextMenu(null); return; }
     if (!petVisibleRef.current) return;
     if (draggedRef.current) { draggedRef.current = false; return; }
     petRef.current?.burst();
     petRef.current?.bounce();
     setDialogOpen((open) => !open);
     if (!dialogOpenRef.current) setBubble(null);
+  }, [contextMenu]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!petVisibleRef.current) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = Math.min(200 - CONTEXT_MENU_SIZE.width - 8, Math.max(8, e.clientX - rect.left));
+    const y = Math.min(260 - CONTEXT_MENU_SIZE.height - 8, Math.max(8, e.clientY - rect.top));
+    setContextMenu({ x, y });
+  }, []);
+
+  const openMainFromContextMenu = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setContextMenu(null);
+    await showMainWindow();
   }, []);
 
   const handleDoubleClick = useCallback(async () => {
@@ -431,17 +480,25 @@ export function PetWindow() {
   const submitMiniPrompt = useCallback((e: React.FormEvent) => {
     e.preventDefault();
     const text = draft.trim();
-    if (!text) return;
-    const reply = `收到：${text}`;
+    if (!text || chatLoading) return;
     setDraft('');
-    setDialogReply(reply);
-    petRef.current?.setMood('speaking');
-    if (getReplyDisplayTarget(reply) === 'bubble') {
-      setBubble(reply);
-      setTimeout(() => setBubble(null), 3500);
-    }
-    setTimeout(() => petRef.current?.setMood('idle'), 1800);
-  }, [draft]);
+    setBubble(null);
+    setDialogOpen(true);
+    setDialogReply('思考中...');
+    petRef.current?.setMood('thinking');
+
+    const previousIds = new Set(chatMessagesRef.current.map((message) => message.id));
+    const pending = sendChatMessage(text);
+    const assistant = useChatStore
+      .getState()
+      .messages
+      .find((message) => message.role === 'assistant' && !previousIds.has(message.id));
+    petAssistantIdRef.current = assistant?.id ?? null;
+    pending.catch((error) => {
+      setDialogReply(`错误: ${error instanceof Error ? error.message : '未知错误'}`);
+      petRef.current?.setMood('idle');
+    });
+  }, [chatLoading, draft, sendChatMessage]);
 
   // Press feedback + drag — squish() fires on body mousedown (design doc §6),
   // and only body presses arm the window drag, so text selection inside the
@@ -536,7 +593,13 @@ export function PetWindow() {
             && rx <= DIALOG_HIT_RECT.x + DIALOG_HIT_RECT.width
             && ry >= DIALOG_HIT_RECT.y
             && ry <= DIALOG_HIT_RECT.y + DIALOG_HIT_RECT.height;
-          const inside = petVisibleRef.current && (insideBody || insideDialog);
+          const menuRect = contextMenuRectRef.current;
+          const insideContextMenu = menuRect !== null
+            && rx >= menuRect.x
+            && rx <= menuRect.x + menuRect.width
+            && ry >= menuRect.y
+            && ry <= menuRect.y + menuRect.height;
+          const inside = petVisibleRef.current && (insideBody || insideDialog || insideContextMenu);
           if (inside === ignoring) {                      // state needs to flip
             ignoring = !inside;
             await w.setIgnoreCursorEvents(ignoring);
@@ -554,7 +617,7 @@ export function PetWindow() {
   }, []);
 
   return (
-    <div onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onClick={handleClick} onDoubleClick={handleDoubleClick}
+    <div onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onClick={handleClick} onContextMenu={handleContextMenu} onDoubleClick={handleDoubleClick}
       style={{ width: '100vw', height: '100vh', position: 'relative', background: 'transparent', userSelect: 'none', WebkitUserSelect: 'none', cursor: petVisible ? 'grab' : 'default', overflow: 'hidden', opacity: petVisible ? 1 : 0, transition: 'opacity 160ms ease' }}>
       <div ref={canvasRef} style={{ position: 'absolute', left: '50%', top: '50%', width: 200, height: 260, transform: 'translate(-50%, -50%)' }} />
       {bubble && <div style={{ position: 'absolute', left: '50%', top: dialogOpen ? 'calc(50% - 42px)' : 'calc(50% - 6px)', transform: 'translateX(-50%)', zIndex: 2, padding: '5px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.94)', color: '#24344f', fontSize: 12, lineHeight: 1.35, maxWidth: 180, textAlign: 'center', boxShadow: '0 8px 24px rgba(21,43,92,0.18)', border: '1px solid rgba(46,107,255,0.16)', animation: 'fadeIn 0.25s ease', pointerEvents: 'none' }}>{bubble}</div>}
@@ -566,10 +629,20 @@ export function PetWindow() {
           </div>
           <div style={{ minHeight: 30, maxHeight: 44, overflow: 'hidden', fontSize: 11, lineHeight: 1.35, color: '#40516f', marginBottom: 7 }}>{dialogReply}</div>
           <div style={{ display: 'flex', gap: 5 }}>
-            <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="和灵枢说一句..." style={{ flex: 1, minWidth: 0, height: 24, borderRadius: 8, border: '1px solid rgba(46,107,255,0.2)', padding: '0 7px', fontSize: 11, outline: 'none', color: '#1f2a44' }} />
-            <button type="submit" aria-label="发送" style={{ width: 32, height: 24, border: 0, borderRadius: 8, background: '#2e6bff', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>发</button>
+            <input value={draft} onChange={(e) => setDraft(e.target.value)} disabled={chatLoading} placeholder="和灵枢说一句..." style={{ flex: 1, minWidth: 0, height: 24, borderRadius: 8, border: '1px solid rgba(46,107,255,0.2)', padding: '0 7px', fontSize: 11, outline: 'none', color: '#1f2a44', opacity: chatLoading ? 0.65 : 1 }} />
+            <button type="submit" aria-label="发送" disabled={chatLoading || !draft.trim()} style={{ width: 32, height: 24, border: 0, borderRadius: 8, background: '#2e6bff', color: '#fff', fontSize: 11, fontWeight: 700, cursor: chatLoading ? 'not-allowed' : 'pointer', opacity: chatLoading || !draft.trim() ? 0.55 : 1 }}>发</button>
           </div>
         </form>
+      )}
+      {contextMenu && (
+        <div
+          style={{ position: 'absolute', left: contextMenu.x, top: contextMenu.y, width: CONTEXT_MENU_SIZE.width, minHeight: CONTEXT_MENU_SIZE.height, zIndex: 3, padding: 5, borderRadius: 10, background: 'rgba(255,255,255,0.96)', boxShadow: '0 14px 32px rgba(21,43,92,0.22)', border: '1px solid rgba(46,107,255,0.18)', backdropFilter: 'blur(12px)', cursor: 'default' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button type="button" onClick={openMainFromContextMenu} style={{ width: '100%', height: 32, border: 0, borderRadius: 7, background: 'rgba(46,107,255,0.1)', color: '#2e6bff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            打开控制台
+          </button>
+        </div>
       )}
       {!inTauri && !dialogOpen && <div style={{ position: 'absolute', left: '50%', top: 'calc(50% + 112px)', transform: 'translateX(-50%)', padding: '2px 8px', borderRadius: 8, background: 'rgba(0,0,0,0.5)', color: '#fffa', fontSize: 10 }}>Tauri 未连接</div>}
       <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(4px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }`}</style>

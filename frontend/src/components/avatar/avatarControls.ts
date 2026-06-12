@@ -2,13 +2,12 @@
 import { isTauri } from '../../lib/tauri';
 
 export type AvatarMood = 'idle' | 'thinking' | 'speaking' | 'reminder';
-export type AvatarSize = 'small' | 'medium' | 'large';
 export type PetRuntimeMood = 'idle' | 'thinking' | 'speaking' | 'happy' | 'sleepy';
 
 export interface AvatarControlSettings {
   visible: boolean;
   mood: AvatarMood;
-  size: AvatarSize;
+  sizeScale: number;
   bubbleText: string;
 }
 
@@ -18,26 +17,44 @@ export const AVATAR_CONTROL_STORAGE_KEY = 'lingshu_avatar_controls';
 export const DEFAULT_AVATAR_CONTROL_SETTINGS: AvatarControlSettings = {
   visible: true,
   mood: 'idle',
-  size: 'medium',
+  sizeScale: 1,
   bubbleText: '我在这里，需要时叫我。',
 };
 
 const AVATAR_MOODS: AvatarMood[] = ['idle', 'thinking', 'speaking', 'reminder'];
-const AVATAR_SIZES: AvatarSize[] = ['small', 'medium', 'large'];
+const MIN_SIZE_SCALE = 0.75;
+const MAX_SIZE_SCALE = 1.25;
+const LEGACY_SIZE_SCALE: Record<string, number> = {
+  small: 0.86,
+  medium: 1,
+  large: 1.12,
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function normalizeAvatarControlSettings(value: unknown): AvatarControlSettings {
+function clampSizeScale(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_AVATAR_CONTROL_SETTINGS.sizeScale;
+  return Math.min(MAX_SIZE_SCALE, Math.max(MIN_SIZE_SCALE, value));
+}
+
+function readSizeScale(value: Record<string, unknown>): number {
+  if (typeof value.sizeScale === 'number') {
+    return clampSizeScale(value.sizeScale);
+  }
+  if (typeof value.size === 'string' && value.size in LEGACY_SIZE_SCALE) {
+    return LEGACY_SIZE_SCALE[value.size];
+  }
+  return DEFAULT_AVATAR_CONTROL_SETTINGS.sizeScale;
+}
+
+export function normalizeAvatarControlSettings(value: unknown): AvatarControlSettings {
   if (!isRecord(value)) return DEFAULT_AVATAR_CONTROL_SETTINGS;
 
   const mood = typeof value.mood === 'string' && AVATAR_MOODS.includes(value.mood as AvatarMood)
     ? value.mood as AvatarMood
     : DEFAULT_AVATAR_CONTROL_SETTINGS.mood;
-  const size = typeof value.size === 'string' && AVATAR_SIZES.includes(value.size as AvatarSize)
-    ? value.size as AvatarSize
-    : DEFAULT_AVATAR_CONTROL_SETTINGS.size;
   const bubbleText = typeof value.bubbleText === 'string'
     ? value.bubbleText.slice(0, 80)
     : DEFAULT_AVATAR_CONTROL_SETTINGS.bubbleText;
@@ -47,7 +64,7 @@ function normalizeAvatarControlSettings(value: unknown): AvatarControlSettings {
       ? value.visible
       : DEFAULT_AVATAR_CONTROL_SETTINGS.visible,
     mood,
-    size,
+    sizeScale: readSizeScale(value),
     bubbleText,
   };
 }
@@ -131,16 +148,4 @@ export function subscribeToAvatarControlSettings(
 
 export function avatarMoodToPetMood(mood: AvatarMood): PetRuntimeMood {
   return mood === 'reminder' ? 'happy' : mood;
-}
-
-export function avatarSizeToScale(size: AvatarSize): number {
-  switch (size) {
-    case 'small':
-      return 0.86;
-    case 'large':
-      return 1.12;
-    case 'medium':
-    default:
-      return 1;
-  }
 }

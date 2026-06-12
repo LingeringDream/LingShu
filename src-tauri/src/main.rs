@@ -10,6 +10,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Mutex;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
@@ -31,6 +33,9 @@ mod screenreader;
 /// ever contended at program exit (single `Drop` call), so `lock()` never
 /// blocks in practice.
 struct SidecarGuard(Mutex<Option<CommandChild>>);
+
+const TRAY_SHOW_MAIN_ID: &str = "show-main";
+const TRAY_QUIT_ID: &str = "quit";
 
 impl Drop for SidecarGuard {
     fn drop(&mut self) {
@@ -58,8 +63,58 @@ async fn wait_for_backend(port: u16, timeout: std::time::Duration) -> bool {
     false
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+    }
+}
+
+fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let show_main = MenuItem::with_id(app, TRAY_SHOW_MAIN_ID, "打开控制台", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "退出灵枢", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show_main, &quit])?;
+
+    let mut tray = TrayIconBuilder::with_id("lingshu-status")
+        .menu(&menu)
+        .tooltip("灵枢 LingShu")
+        .title("灵枢")
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TRAY_SHOW_MAIN_ID => show_main_window(app),
+            TRAY_QUIT_ID => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+
+    tray.build(app)?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
@@ -76,6 +131,8 @@ fn main() {
             fileio::list_directory,
         ])
         .setup(|app| {
+            install_tray(app)?;
+
             // ── Launch the backend sidecar (bundled .app) ──────────
             // In dev mode the sidecar binary may not exist — that's fine,
             // just run `cargo run -p lingshu-server` in another terminal.
