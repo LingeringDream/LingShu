@@ -2,7 +2,7 @@
 
 ## Project
 
-macOS desktop pet AI assistant. MVP: floating desktop avatar, Apple Calendar scheduling (EventKit write-back), tiered permissions, SoulLedger memory with forgetting and personality evolution, editable Memory & Personality Center, tool-calling chat, role prompts, Markdown rendering, and persistent LLM settings. See [README.md](./README.md) for full overview and [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) for detailed spec.
+macOS desktop pet AI assistant. v1.0.0: floating desktop avatar, Apple Calendar scheduling (EventKit write-back), tiered permissions, SoulLedger memory with forgetting and personality evolution, editable Memory & Personality Center, tool-calling chat, role prompts, Markdown rendering, and persistent LLM settings. See [README.md](./README.md) for full overview and [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) for detailed spec.
 
 ## Key Paths
 
