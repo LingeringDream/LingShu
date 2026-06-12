@@ -11,6 +11,33 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/api/v1/audit-log", get(list_entries))
 }
 
+/// Write an immutable audit-trail entry. Best-effort: a DB failure is logged
+/// but never propagated, so auditing can't break the action it records.
+/// `action`/`resource_type` are capped at 50 chars by the schema.
+pub async fn record(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    action: &str,
+    resource_type: &str,
+    resource_id: Option<Uuid>,
+    details: serde_json::Value,
+) {
+    if let Err(e) = sqlx::query(
+        "INSERT INTO audit_log (user_id, action, resource_type, resource_id, details) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(user_id)
+    .bind(action)
+    .bind(resource_type)
+    .bind(resource_id)
+    .bind(details)
+    .execute(db)
+    .await
+    {
+        tracing::warn!(%user_id, action, resource_type, %e, "failed to write audit_log entry");
+    }
+}
+
 // ── Types ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

@@ -1,6 +1,6 @@
 [package]
 name = "lingshu-tauri"
-version = "0.1.0"
+version = "1.0.0"
 description = "灵枢 (LingShu) — macOS Desktop AI Assistant"
 edition = "2021"
 license = "MIT"
@@ -13,7 +13,7 @@ license = "MIT"
 [workspace]
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }

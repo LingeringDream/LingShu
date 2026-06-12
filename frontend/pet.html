@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>灵枢 — 桌面宠物</title>
+
+
     <style>
       /* Pet window: frameless, transparent background handled by Tauri */
       * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -14,20 +16,18 @@
         overflow: hidden;
         user-select: none;
         -webkit-user-select: none;
-        -webkit-app-region: drag;
       }
-      /* The React root and its children default to no-drag */
+      /* Dragging is handled programmatically via
+         getCurrentWindow().startDragging() in PetWindow.tsx. We deliberately do
+         NOT use -webkit-app-region here: an app-region drag layer swallows the
+         click / double-click the pet relies on, and on macOS it conflicts with
+         the JS-driven window drag. */
       #root {
         width: 100%;
         height: 100%;
         display: flex;
         align-items: center;
         justify-content: center;
-        -webkit-app-region: no-drag;
-      }
-      /* Allow drag on a dedicated drag handle */
-      [data-tauri-drag-region] {
-        -webkit-app-region: drag;
       }
     </style>
   </head>

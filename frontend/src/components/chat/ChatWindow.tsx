@@ -3,6 +3,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
 import { apiFetch } from '../../lib/api';
+import { getChatScrollBehavior } from './chatScroll';
 
 export function ChatWindow() {
   const { messages, isLoading, sendMessage, sessionId, clearMessages } = useChatStore();
@@ -20,8 +21,11 @@ export function ChatWindow() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const frame = window.requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: getChatScrollBehavior(isLoading) });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, isLoading]);
 
   return (
     <div style={{

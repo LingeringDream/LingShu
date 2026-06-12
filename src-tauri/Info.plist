@@ -8,5 +8,7 @@
 	<string>灵枢 needs full calendar access to create and manage events you've confirmed in Apple Calendar. Without this, confirmed events stay in the app only.</string>
 	<key>NSRemindersUsageDescription</key>
 	<string>灵枢 needs reminders access to create reminder items for your tasks.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>灵枢 needs accessibility access to read text from your screen and help with what you're viewing.</string>
 </dict>
 </plist>

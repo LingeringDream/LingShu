@@ -3,7 +3,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::{
@@ -16,12 +16,14 @@ use uuid::Uuid;
 
 use crate::auth;
 use crate::error::AppError;
-use crate::llm::client::{ChatChunk, ChatMessage, ChatOptions};
+use crate::llm::client::{
+    AutomationAction, ChatChunk, ChatMessage, ChatOptions, PermissionRequest,
+};
 use crate::llm::forgetting::{self, ForgettingPolicy};
 use crate::llm::prompts::{personality_prompt, PersonalityValues};
 use crate::models::personality::PersonalityTraits;
 use crate::routes::settings::llm_settings_for_user;
-use crate::state::AppState;
+use crate::state::{AppState, PetNotification};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/api/v1/chat", post(chat))
@@ -31,6 +33,11 @@ pub fn router() -> Router<AppState> {
 pub struct ChatRequest {
     pub message: String,
     pub session_id: Option<Uuid>,
+    /// Screen text captured client-side (main app process) and fed back so the
+    /// model can answer using it. Set only on the auto-continuation turn after
+    /// a `read_screen` tool call; see the screen-read flow in this module.
+    #[serde(default)]
+    pub screen_context: Option<String>,
 }
 
 // ── Handler ───────────────────────────────────────────────────────
@@ -93,11 +100,18 @@ pub async fn chat(
     let personality_values = load_active_personality(&state.db, user_id).await;
     let personality_snippet = personality_prompt(&personality_values);
     let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
+
+    // Load the real permission grants once so the system prompt reflects what
+    // the assistant can actually do (reused by the screen-read preflight below).
+    let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
+    let capabilities = capability_section(&perms);
+
     let system_prompt = build_system_prompt(
         &personality_snippet,
         &memory_context,
         &style_exemplar_snippet,
         &role_prompt,
+        &capabilities,
     );
     let mut messages = vec![ChatMessage::system(system_prompt)];
 
@@ -157,30 +171,119 @@ pub async fn chat(
         num_predict: Some(settings.max_tokens),
     };
 
+    // Tell the pet window to enter the thinking state, carrying the current
+    // personality traits so it can adjust animation speed / blink / bounce.
+    // Sent after the fallible setup above: every remaining exit goes through
+    // the stream (which restores idle/happy on done and on error), so the pet
+    // can no longer be stranded in `thinking` by an early `?` return.
+    {
+        let mut payload = serde_json::to_value(&personality_values).unwrap_or_default();
+        if let serde_json::Value::Object(ref mut m) = payload {
+            m.insert(
+                "has_role_prompt".into(),
+                serde_json::Value::Bool(!role_prompt.is_empty()),
+            );
+        }
+        state
+            .pet_notifications
+            .send(PetNotification::mood_with_data("thinking", payload))
+            .ok();
+    }
+
     // ── Calendar intent routing ────────────────────────────────────
-    // Gemma 8B is inconsistent with tool calling — it sometimes ignores
-    // tools and fabricates responses. To be reliable, we detect calendar
-    // intents with keyword matching, execute the tool ourselves, and let
-    // the LLM only generate the natural-language response around the result.
     let calendar_hint =
         preflight_calendar_intent(&state, user_id, &user_message, &settings.model).await;
     if let Some(ref hint_msg) = calendar_hint {
         messages.push(ChatMessage::user(hint_msg.clone()));
     }
 
+    // ── Screen-read preflight ──────────────────────────────────────
+    // Some models ignore the read_screen tool. When the intent is clear,
+    // inject an explicit instruction that the model MUST call the tool.
+    // Screen text captured client-side on the previous turn (read_screen flow):
+    // inject it as context so the model can answer, and drop the read_screen
+    // tool so it doesn't re-trigger the capture handshake on this turn.
+    let screen_context = req.screen_context.clone().filter(|s| !s.trim().is_empty());
+    if let Some(ref sc) = screen_context {
+        messages.push(ChatMessage::user(format!("[屏幕内容]\n{sc}")));
+    }
+
+    // Keyword preflight for screen reading — model-agnostic. When the user
+    // clearly wants the screen read (and this isn't already the capture
+    // continuation turn), trigger the client-capture handoff DIRECTLY rather
+    // than hoping the model emits a read_screen tool call:
+    //   L3 on  → emit screen_read_request; the frontend captures the frontmost
+    //            window's text (authorized main-app process) and resends with
+    //            `screen_context`, then the model answers using it.
+    //   L3 off → return the one-click L3 grant button.
+    let screen_preflight: Option<(Option<String>, ToolEffects)> = if screen_context.is_none()
+        && preflight_screen_read_intent(&user_message)
+    {
+        if perms.l3_accessibility {
+            Some((
+                None,
+                ToolEffects {
+                    screen_read_request: true,
+                    ..Default::default()
+                },
+            ))
+        } else {
+            Some((
+                    Some("要读取屏幕需要先开启「L3 屏幕识别」权限。点下方按钮一键开启（首次使用还需在系统弹窗中允许「辅助功能」）。".to_string()),
+                    ToolEffects {
+                        permission_requests: vec![PermissionRequest {
+                            kind: "accessibility".to_string(),
+                            target: "屏幕识别".to_string(),
+                            reason: "L3 屏幕识别权限未开启".to_string(),
+                        }],
+                        ..Default::default()
+                    },
+                ))
+        }
+    } else {
+        None
+    };
+
     // ── Tool calling loop (fallback for complex / chained ops) ─────
-    let tools = calendar_tools();
+    let mut tools = chat_tools();
+    if screen_context.is_some() {
+        tools.retain(|t| t.function.name != "read_screen");
+    }
     let model = settings.model.clone();
-    tracing::debug!(%user_id, tool_count = tools.len(), "Entering tool loop");
-    let (updated_messages, final_text, apple_calendar_deletes) =
-        run_tool_loop(&state, &llm, user_id, &model, messages, &options, &tools).await;
+    let (updated_messages, final_text, tool_effects) = match screen_preflight {
+        Some((ft, eff)) => {
+            tracing::debug!(%user_id, "Screen-intent preflight short-circuit (bypassing tool loop)");
+            (messages, ft, eff)
+        }
+        None => {
+            tracing::debug!(%user_id, tool_count = tools.len(), "Entering tool loop");
+            run_tool_loop(&state, &llm, user_id, &model, messages, &options, &tools).await
+        }
+    };
     messages = updated_messages;
-    tracing::debug!(%user_id, msg_count = messages.len(), has_final = final_text.is_some(), apple_deletes = apple_calendar_deletes.len(), "Tool loop done");
+    tracing::debug!(%user_id, msg_count = messages.len(), has_final = final_text.is_some(), apple_deletes = tool_effects.apple_calendar_deletes.len(), automation = tool_effects.automation_actions.len(), perm_req = tool_effects.permission_requests.len(), "Tool loop done");
 
     // When the tool loop produced a final text response, stream it directly
     // instead of making another LLM call. Otherwise, stream as normal.
     let chunk_stream: futures::stream::BoxStream<'static, Result<ChatChunk, anyhow::Error>> =
-        if let Some(text) = final_text {
+        if tool_effects.screen_read_request {
+            // read_screen handoff: emit a single terminal chunk telling the
+            // desktop client to capture screen text (in the authorized main-app
+            // process) and resend with `screen_context`. No LLM call, and the
+            // empty content means nothing is persisted (see finalize()).
+            futures::stream::once(async {
+                Ok(ChatChunk {
+                    content: String::new(),
+                    done: true,
+                    assistant_message_id: None,
+                    apple_calendar_deletes: None,
+                    automation_actions: None,
+                    permission_requests: None,
+                    screen_read_request: Some(true),
+                })
+            })
+            .boxed()
+        } else if let Some(text) = final_text {
             // Stream the pre-generated text character-by-character for visual effect
             let chars: Vec<char> = text.chars().collect();
             let total = chars.len();
@@ -190,12 +293,25 @@ pub async fn chat(
                     done: i + 1 >= total,
                     assistant_message_id: None,
                     apple_calendar_deletes: None,
+                    automation_actions: None,
+                    permission_requests: None,
+                    screen_read_request: None,
                 })
             }))
             .boxed()
         } else {
             llm.chat_stream(&model, messages, Some(options))
         };
+
+    // Notify the pet window to enter speaking state — skip for screen-read
+    // handoffs which produce no content (the pet stays in thinking until
+    // the frontend re-submits with screen_context).
+    if !tool_effects.screen_read_request {
+        state
+            .pet_notifications
+            .send(PetNotification::mood("speaking"))
+            .ok();
+    }
 
     // ── Build the SSE stream with optional assistant collection ──────
     let assistant_accumulator: Arc<Mutex<AssistantStreamAccumulator>> =
@@ -204,12 +320,30 @@ pub async fn chat(
 
     // Apple Calendar event IDs that the frontend needs to delete from EventKit.
     // Wrapped in Option so .take() can move them into the final SSE chunk exactly once.
-    let apple_deletes: Option<Vec<String>> = if apple_calendar_deletes.is_empty() {
+    let apple_deletes: Option<Vec<String>> = if tool_effects.apple_calendar_deletes.is_empty() {
         None
     } else {
-        Some(apple_calendar_deletes)
+        Some(tool_effects.apple_calendar_deletes)
     };
     let apple_deletes_ref = Arc::new(Mutex::new(apple_deletes));
+
+    // L2 automation actions for the frontend to execute via Tauri — same
+    // take()-once-on-final-chunk pattern as the calendar deletes above.
+    let automation_opt: Option<Vec<AutomationAction>> =
+        if tool_effects.automation_actions.is_empty() {
+            None
+        } else {
+            Some(tool_effects.automation_actions)
+        };
+    let automation_ref = Arc::new(Mutex::new(automation_opt));
+
+    let perm_req_opt: Option<Vec<PermissionRequest>> =
+        if tool_effects.permission_requests.is_empty() {
+            None
+        } else {
+            Some(tool_effects.permission_requests)
+        };
+    let perm_req_ref = Arc::new(Mutex::new(perm_req_opt));
 
     let sid_for_stream = session_id;
     let db_clone = state.db.clone();
@@ -219,6 +353,8 @@ pub async fn chat(
     let model_name = settings.model.clone();
     let embed_model_name = state.config.llm.embed_model.clone();
     let um_clone = user_message.clone();
+    let pet_tx = state.pet_notifications.clone();
+    let humor_for_done = personality_values.humor;
 
     let sse_stream = chunk_stream.then(move |result| {
         let assistant_accumulator = Arc::clone(&assistant_accumulator);
@@ -231,6 +367,9 @@ pub async fn chat(
         let embed_model = embed_model_name.clone();
         let user_message = um_clone.clone();
         let apple_deletes_ref = Arc::clone(&apple_deletes_ref);
+        let automation_ref = Arc::clone(&automation_ref);
+        let perm_req_ref = Arc::clone(&perm_req_ref);
+        let pet_tx = pet_tx.clone();
 
         async move {
             match result {
@@ -277,12 +416,31 @@ pub async fn chat(
                         // frontend can sync them via EventKit.
                         let apple_deletes_final =
                             apple_deletes_ref.lock().ok().and_then(|mut g| g.take());
+                        let automation_final =
+                            automation_ref.lock().ok().and_then(|mut g| g.take());
+                        let perm_req_final = perm_req_ref.lock().ok().and_then(|mut g| g.take());
+                        // Screen-read handoff keeps the pet in `thinking`: the
+                        // client immediately re-submits with screen_context,
+                        // which restarts the mood cycle.
+                        if chunk.screen_read_request != Some(true) {
+                            let done_mood = if humor_for_done > 0.6 {
+                                "happy"
+                            } else {
+                                "idle"
+                            };
+                            pet_tx.send(PetNotification::mood(done_mood)).ok();
+                        }
                         return Ok(Event::default().data(
                             serde_json::to_string(&ChatChunk {
                                 content: chunk.content,
                                 done: true,
                                 assistant_message_id,
                                 apple_calendar_deletes: apple_deletes_final,
+                                automation_actions: automation_final,
+                                permission_requests: perm_req_final,
+                                // Propagate the screen-read handoff signal from
+                                // the (single) tool-loop chunk to the client.
+                                screen_read_request: chunk.screen_read_request,
                             })
                             .unwrap_or_default(),
                         ));
@@ -294,6 +452,7 @@ pub async fn chat(
                     if let Ok(mut acc) = assistant_accumulator.lock() {
                         acc.mark_error();
                     }
+                    pet_tx.send(PetNotification::mood("idle")).ok();
                     if mark_stream_finalized(&stream_finalized) {
                         spawn_post_stream_tasks(
                             db,
@@ -313,6 +472,9 @@ pub async fn chat(
                             done: true,
                             assistant_message_id: None,
                             apple_calendar_deletes: None,
+                            automation_actions: None,
+                            permission_requests: None,
+                            screen_read_request: None,
                         })
                         .unwrap_or_default(),
                     ))
@@ -331,11 +493,54 @@ pub async fn chat(
 /// Personality snippet is always included (default values when no active
 /// snapshot exists); memory context and style exemplars are only appended
 /// when non-empty.
+/// Render the capability + permission picture from the user's *actual* granted
+/// permissions, so the model describes itself accurately instead of guessing.
+///
+/// Two things this prevents, both reported by real users:
+///   1. Demoting the already-shipped **屏幕识别 (L3)** to a "future L4" feature.
+///      The UI and tools call it 「屏幕识别」; the model must treat that term as
+///      the L3 read_screen capability — only 自主点击 (L4) is unreleased.
+///   2. Claiming a permission is unavailable when the user has actually granted
+///      it (the static text used to say "需授权" regardless of real state).
+fn capability_section(perms: &crate::routes::permissions::PermissionSettings) -> String {
+    let state = |on: bool| {
+        if on {
+            "已开启"
+        } else {
+            "未开启（需用户授权后可用）"
+        }
+    };
+    let l1 = state(perms.l1_calendar);
+    let l2 = state(perms.l2_automation);
+    let l3 = state(perms.l3_accessibility);
+    format!(
+        r#"## 能力范围（你现在就能做的事，通过调用工具实现）
+- 对话交流：回答提问、讨论想法、给出建议
+- 文件阅读：读取用户主目录下的文本文件（.md .txt .pdf .json .csv 等）、列出目录 —— read_file / list_directory
+- 日历管理：创建、查询、删除日程（事件默认「待确认」）—— create_calendar_event / list_calendar_events / delete_calendar_event
+- 屏幕识别：读取当前最前台窗口的屏幕文字（「屏幕识别」与「屏幕阅读」同义）—— read_screen
+- 打开应用 / 网址 / 文件 —— open_app / open_url / open_file
+- 记忆管理：从对话中自动提取重要信息，用户可在记忆中心查看和编辑
+- 时间查询 —— get_current_time
+
+## 权限边界（按等级，附当前真实状态）
+- L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前{l1}
+- L2 本机操作：打开 App、网址、文件 —— 当前{l2}
+- L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前{l3}
+- L4 自主操作：自主连续点击/代替用户操作界面 —— 远期规划，尚未开放
+
+重要：
+1.「屏幕识别 / 屏幕阅读」属于 **L3，已经实现**，绝不要说它是 L4 或「未来才有、尚未开放的功能」。唯一尚未开放的是 L4「自主点击操作」。
+2. 以上「当前未开启」只表示该等级权限尚未授权，**不等于功能不存在**。遇到这种请求时，照常尝试调用对应工具——若工具返回权限错误，如实转达并提示用户去开启对应等级即可，不要谎称已完成，也不要说该功能不存在。"#
+    )
+}
+
 fn build_system_prompt(
     personality_snippet: &str,
     memory_context: &str,
     style_exemplar_snippet: &str,
     role_prompt: &str,
+    capabilities: &str,
 ) -> String {
     let base = r#"你是灵枢（LingShu），一个运行在 macOS 桌面上的 AI 个人助理。
 
@@ -344,9 +549,10 @@ fn build_system_prompt(
 
 ## 核心人格
 - 亲切但不肉麻：称呼用户为「你」，不要用「主人」之类的称呼。对话自然流畅，像一位相处多年的得力搭档。
-- 适度简洁：默认 2-4 句回复。只有用户要求详细解释时才展开。
+- 简洁优先：回复长度以下方人格参数的「详略度」为准（未注入人格参数时默认 2-4 句）；无论长短都不啰嗦。
 - 中文优先：使用简体中文交流。如果用户用英文提问，用英文回复。
 - 诚实有边界：**绝对禁止编造或假装执行操作**。如果你没有调用工具，就不能说「已创建」「已安排」「已添加」。不知道就说不知道。
+- 有自主性、破坏性操作先确认：你可以主动给建议、主动为日程创建「待确认」草稿（草稿本身就是交给用户裁决的，不必先口头询问）；但**删除、覆盖等不可逆操作，必须先说明清楚并取得用户明确确认后再执行**。
 
 ## 工具使用 — 极其重要，必须遵守
 你有可以调用的工具（tools/function calling）。工具的使用对你的用户完全透明——调用工具后系统会返回真实的执行结果。
@@ -354,22 +560,12 @@ fn build_system_prompt(
 **强制规则：**
 1. 当用户请求创建/安排/添加日程时，你**必须调用 create_calendar_event 工具**。不要先问「需要我帮你创建吗？」——直接调用。
 2. 当用户请求查看/列出日程时，你**必须调用 list_calendar_events 工具**。
-3. 当用户请求删除/取消日程时，你**必须先调用 list_calendar_events 获取事件 ID，然后调用 delete_calendar_event 删除**。不要只说「好的已删除」——必须实际调用工具。
+3. 当用户请求删除/取消日程时：先调用 list_calendar_events 找到目标事件并向用户列出，**明确征求确认（例如「确认删除『X』吗？」）；只有在用户确认后，才调用 delete_calendar_event 执行删除**。在用户确认前不要调用删除工具；用户确认后必须真正调用工具，不要假装删除。
 4. **禁止在没有调用工具的情况下说「已为你创建」「已安排」「已删除」等话**——这是欺骗用户。如果你不确定工具是否调用成功，如实说明。
 5. 工具执行后，根据系统返回的真实结果（而非你的猜测）来回复用户。
-
-## 能力范围
-- 对话交流：回答提问、讨论想法、提供建议
-- 日历管理：通过工具创建、查询、删除日程。事件默认为「待确认」状态
-- 记忆管理：从对话中自动提取重要信息，用户可在记忆中心查看和编辑
-
-## 权限边界
-- L1：创建/修改日历日程（需用户逐一确认）—— 你已具备此权限
-- L2：打开 App、文件、URL（需授权后可用）
-- L3：键盘输入、辅助功能树读取（需授权后可用）
-- L4：屏幕识别 + 自主点击（远期规划）
-
-当用户提出超出当前权限的请求时，友好告知需要开启对应等级。
+6. 「创建」与「删除」的确认方式不同——这是你既有自主性、又有边界的体现：
+   - create_calendar_event 创建的是「待确认」草稿，由用户在卡片中裁决，因此**可直接调用、不必先口头询问**（即便人格偏谨慎也是如此，你的谨慎体现在措辞上，如说明「这是待确认草稿」）。
+   - delete_calendar_event 等会移除/覆盖数据的不可逆操作，**必须按规则 3 先确认再执行**，即便人格偏主动/高风险容忍也不能跳过确认。
 
 ## 对话风格指引
 - 用户说「帮我记一下」「记住」→ 确认已记录，不重复整段内容
@@ -383,6 +579,12 @@ fn build_system_prompt(
 - 你是一个 AI 助手，不是真正的意识体"#;
 
     let mut parts = vec![base.to_string()];
+
+    // Real capability + permission picture (grant-aware), right after the base
+    // identity so it anchors what the assistant can truthfully claim.
+    if !capabilities.is_empty() {
+        parts.push(capabilities.to_string());
+    }
 
     // Inject user's custom role-play prompt at the top (before personality)
     // so it takes precedence over the default identity.
@@ -1367,6 +1569,34 @@ async fn preflight_calendar_intent(
     None
 }
 
+/// Detect explicit screen-read intent from the user's message so we can
+/// trigger the `screen_read_request` handoff even when the model ignores
+/// the `read_screen` tool.
+fn preflight_screen_read_intent(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    let triggers = [
+        "看屏幕",
+        "读屏幕",
+        "读一下屏幕",
+        "看看屏幕上",
+        "屏幕上是什么",
+        "屏幕上有",
+        "读屏",
+        "屏幕识别",
+        "提取屏幕",
+        "屏幕内容",
+        "read screen",
+        "read my screen",
+        "what's on screen",
+        "what is on my screen",
+        "帮我看一下屏幕上",
+        "帮我看看屏幕上",
+        "看下屏幕上",
+        "识别屏幕",
+    ];
+    triggers.iter().any(|t| lower.contains(t))
+}
+
 fn contains_any(text: &str, keywords: &[&str]) -> bool {
     keywords.iter().any(|k| text.contains(k))
 }
@@ -1378,7 +1608,7 @@ fn contains_any(text: &str, keywords: &[&str]) -> bool {
 const MAX_TOOL_LOOPS: usize = 5;
 
 /// Build the tool definitions that are available to the LLM during chat.
-fn calendar_tools() -> Vec<crate::llm::client::ToolDefinition> {
+fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
     use crate::llm::client::ToolDefinition;
     vec![
         ToolDefinition::new(
@@ -1406,7 +1636,7 @@ fn calendar_tools() -> Vec<crate::llm::client::ToolDefinition> {
         ),
         ToolDefinition::new(
             "delete_calendar_event",
-            "删除指定的日历事件。当需要删除时：\n1. 首先调用 list_calendar_events 查看事件列表\n2. 从返回结果中找到目标事件的 [id]\n3. 用该 id 调用此工具\n注意：必须先用 list 获取 id，不要猜测 id。",
+            "删除指定的日历事件。删除不可逆，调用前必须满足：\n1. 先调用 list_calendar_events 查看事件列表，从返回结果中找到目标事件的 [id]（不要猜测 id）\n2. 向用户列出将要删除的事件并取得其明确确认\n3. 仅在用户确认后，用该 id 调用此工具\n用户尚未确认时，只列出事件并询问，不要调用本工具。",
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1418,18 +1648,196 @@ fn calendar_tools() -> Vec<crate::llm::client::ToolDefinition> {
                 "required": ["event_id"]
             }),
         ),
+        ToolDefinition::new(
+            "read_screen",
+            "读取当前前台窗口（自动跳过灵枢自己的窗口）的屏幕文字，通过 macOS 辅助功能 API。当用户说「帮我看看屏幕上是什么」「读一下这个页面」「看屏幕内容」「提取屏幕上的文字」时调用。是否执行由 L3 屏幕识别权限和 macOS 系统授权共同决定；若返回权限错误，如实转达其中的修复步骤即可，不要编造内容。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        ),
+        ToolDefinition::new(
+            "read_file",
+            "读取用户电脑上的文本文件（支持 .md .txt .pdf .json .csv 等）。当用户说「帮我看一下...文件」「读一下...文件」「这个文档里写了什么」时调用。只能读取用户主目录下的文件。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "文件的绝对路径，例如 /Users/xxx/Documents/notes.md"
+                    }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDefinition::new(
+            "list_directory",
+            "列出目录中的文件列表。当用户说「我...目录里有什么」「列一下...文件夹」时调用。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "目录的绝对路径，例如 /Users/xxx/Documents"
+                    }
+                },
+                "required": ["path"]
+            }),
+        ),
+        ToolDefinition::new(
+            "get_current_time",
+            "获取当前日期和时间（含时区）。当用户问「现在几点」「今天几号」「今天星期几」「当前时间」等时间相关问题，或需要根据当前时间来推算日程时调用。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        ),
+        ToolDefinition::new(
+            "open_app",
+            "打开 macOS 上的一个应用程序。当用户说「打开/启动/帮我开...（某 App）」时调用。是否真正执行由系统的 L2 白名单决定：不在白名单内会被安全拒绝，你只需如实转达结果。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "应用程序名称，例如「计算器」「Safari」「Calculator」。"
+                    }
+                },
+                "required": ["name"]
+            }),
+        ),
+        ToolDefinition::new(
+            "open_url",
+            "在默认浏览器中打开一个网址（仅限 http/https）。当用户说「打开...网站/链接」时调用。是否执行由 L2 白名单决定。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "完整 URL，必须以 http:// 或 https:// 开头。"
+                    }
+                },
+                "required": ["url"]
+            }),
+        ),
+        ToolDefinition::new(
+            "open_file",
+            "用系统默认程序打开一个本地文件或文件夹。当用户明确要求打开某个文件/目录时调用。是否执行由 L2 白名单决定。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "本地文件或文件夹的绝对路径。"
+                    }
+                },
+                "required": ["path"]
+            }),
+        ),
     ]
 }
 
+/// Side effects a chat tool wants the desktop frontend to perform. Accumulated
+/// across the tool loop and emitted once on the final SSE chunk.
+#[derive(Debug, Default)]
+struct ToolEffects {
+    /// EventKit `eventIdentifier`s to delete from the system calendar.
+    apple_calendar_deletes: Vec<String>,
+    /// L2 automation actions (open app/url/file) for the frontend to run.
+    automation_actions: Vec<AutomationAction>,
+    /// Permission requests: when automation is denied, ask the user to grant.
+    permission_requests: Vec<PermissionRequest>,
+    /// `read_screen` handoff: the model wants the screen read and L3 is granted,
+    /// so the desktop client must capture the frontmost window's text in the
+    /// authorized main-app process and resend the turn with `screen_context`.
+    screen_read_request: bool,
+}
+
+/// Extract a string argument from a tool call, trimmed; "" if missing.
+fn tool_arg(tool_call: &crate::llm::client::ToolCall, key: &str) -> String {
+    tool_call
+        .function
+        .arguments
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// Enforce L2 permission + whitelist for an automation target, write an audit
+/// entry (allowed/denied), and return the (LLM-facing message, effects).
+/// Authoritative server-side gate — the frontend only executes what this emits.
+async fn enforce_automation(
+    state: &AppState,
+    user_id: Uuid,
+    kind: &str,
+    target: &str,
+    success_msg: String,
+) -> (String, ToolEffects) {
+    let perms = crate::routes::permissions::permissions_for_user(state, user_id).await;
+    // Resolve alias → canonical name (e.g. "Chrome" → "Google Chrome") so
+    // the Tauri side passes the correct name to `open -a`.
+    if let Some(canonical) = perms.resolve_canonical_target(kind, target) {
+        crate::routes::audit::record(
+            &state.db,
+            user_id,
+            kind,
+            "automation",
+            None,
+            serde_json::json!({ "target": &canonical, "original": target, "result": "allowed" }),
+        )
+        .await;
+        let effects = ToolEffects {
+            automation_actions: vec![AutomationAction {
+                kind: kind.to_string(),
+                target: canonical,
+            }],
+            ..Default::default()
+        };
+        (success_msg, effects)
+    } else {
+        // action column is VARCHAR(50); "open_file_denied" (16) fits.
+        crate::routes::audit::record(
+            &state.db,
+            user_id,
+            &format!("{kind}_denied"),
+            "automation",
+            None,
+            serde_json::json!({ "target": target, "result": "denied" }),
+        )
+        .await;
+        let reason = if !perms.l2_automation {
+            "L2 自动化权限未开启"
+        } else {
+            "目标不在白名单内"
+        };
+        // Include a permission request so the frontend can show a one-click grant dialog
+        let pr = PermissionRequest {
+            kind: kind.to_string(),
+            target: target.to_string(),
+            reason: reason.to_string(),
+        };
+        (
+            format!("无法执行（{reason}）：{target}。点击下方按钮即可一键授权。"),
+            ToolEffects {
+                permission_requests: vec![pr],
+                ..Default::default()
+            },
+        )
+    }
+}
+
 /// Execute a single tool call and return a human-readable result string
-/// for injection into the LLM conversation.
+/// (for injection into the LLM conversation) plus any `ToolEffects` the
+/// frontend should carry out.
 async fn execute_tool_call(
     state: &AppState,
     user_id: Uuid,
     tool_call: &crate::llm::client::ToolCall,
-) -> Result<(String, Vec<String>), AppError> {
-    // Apple Calendar event IDs that the frontend should delete via EventKit.
-    // Only populated by `delete_calendar_event`. Other tools return `Vec::new()`.
+) -> Result<(String, ToolEffects), AppError> {
     match tool_call.function.name.as_str() {
         "create_calendar_event" => {
             let text = tool_call
@@ -1439,7 +1847,10 @@ async fn execute_tool_call(
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
             if text.is_empty() {
-                return Ok(("错误：未提供创建日历事件所需的文本。".into(), Vec::new()));
+                return Ok((
+                    "错误：未提供创建日历事件所需的文本。".into(),
+                    ToolEffects::default(),
+                ));
             }
             match crate::routes::calendar::parse_and_create_event(state, user_id, text).await {
                 Ok(event) => Ok((
@@ -1451,12 +1862,12 @@ async fn execute_tool_call(
                         event.status,
                         event.calendar_name
                     ),
-                    Vec::new(),
+                    ToolEffects::default(),
                 )),
                 Err(e) => {
                     let msg = e.to_string();
                     tracing::warn!(%user_id, %text, %msg, "Calendar parse failed via chat tool");
-                    Ok((format!("创建日历事件失败：{msg}"), Vec::new()))
+                    Ok((format!("创建日历事件失败：{msg}"), ToolEffects::default()))
                 }
             }
         }
@@ -1464,7 +1875,10 @@ async fn execute_tool_call(
             match crate::routes::calendar::list_user_events(state, user_id, Some(20)).await {
                 Ok(events) => {
                     if events.is_empty() {
-                        Ok(("当前没有即将到来的日历事件。".into(), Vec::new()))
+                        Ok((
+                            "当前没有即将到来的日历事件。".into(),
+                            ToolEffects::default(),
+                        ))
                     } else {
                         let lines: Vec<String> = events
                             .iter()
@@ -1481,15 +1895,204 @@ async fn execute_tool_call(
                                 events.len(),
                                 lines.join("\n")
                             ),
-                            Vec::new(),
+                            ToolEffects::default(),
                         ))
                     }
                 }
                 Err(e) => {
                     tracing::warn!(%user_id, %e, "Calendar list failed via chat tool");
-                    Ok((format!("查询日历事件失败：{e}"), Vec::new()))
+                    Ok((format!("查询日历事件失败：{e}"), ToolEffects::default()))
                 }
             }
+        }
+        "read_screen" => {
+            // L3 gate (in-app permission tier) — separate from the macOS
+            // system-level Accessibility grant checked inside the reader.
+            let perms = crate::routes::permissions::permissions_for_user(state, user_id).await;
+            if !perms.l3_accessibility {
+                crate::routes::audit::record(
+                    &state.db,
+                    user_id,
+                    "read_screen_denied",
+                    "screen",
+                    None,
+                    serde_json::json!({ "result": "denied", "reason": "l3_accessibility off" }),
+                )
+                .await;
+                let pr = PermissionRequest {
+                    kind: "accessibility".to_string(),
+                    target: "屏幕识别".to_string(),
+                    reason: "L3 屏幕识别权限未开启".to_string(),
+                };
+                return Ok((
+                    "无法读取屏幕：L3 屏幕识别权限未开启。点击下方按钮一键开启（首次使用还需在系统弹窗中允许「辅助功能」）。"
+                        .into(),
+                    ToolEffects {
+                        permission_requests: vec![pr],
+                        ..Default::default()
+                    },
+                ));
+            }
+            // L3 is on. The macOS Accessibility grant is attributed to the main
+            // app process (com.lingshu.desktop), NOT this sidecar — so the read
+            // must happen client-side. Hand off: the handler emits a
+            // `screen_read_request` signal, the desktop captures the frontmost
+            // window's text and resends the turn with `screen_context`.
+            crate::routes::audit::record(
+                &state.db,
+                user_id,
+                "read_screen",
+                "screen",
+                None,
+                serde_json::json!({ "result": "handoff", "mode": "client_capture" }),
+            )
+            .await;
+            Ok((
+                "已请求客户端读取屏幕内容（将在主程序进程中捕获）。".into(),
+                ToolEffects {
+                    screen_read_request: true,
+                    ..Default::default()
+                },
+            ))
+        }
+        "read_file" => {
+            let path = tool_arg(tool_call, "path");
+            if path.is_empty() {
+                return Ok(("错误：未提供文件路径。".into(), ToolEffects::default()));
+            }
+            // Security: only allow files under user's home
+            let home = std::env::var("HOME").unwrap_or_default();
+            let canonical = match std::fs::canonicalize(&path) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Ok((format!("文件不存在或无法访问: {e}"), ToolEffects::default()))
+                }
+            };
+            if !canonical.starts_with(&home) {
+                return Ok((
+                    "安全限制：只能读取用户主目录下的文件。".into(),
+                    ToolEffects::default(),
+                ));
+            }
+            let ext = canonical
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            match ext.as_str() {
+                "txt" | "md" | "json" | "csv" | "log" | "yaml" | "yml" | "toml" | "rs" | "ts"
+                | "tsx" | "js" | "jsx" | "html" | "css" | "py" | "sh" => {
+                    match std::fs::read_to_string(&canonical) {
+                        Ok(content) => {
+                            let truncated = if content.len() > 8000 {
+                                format!(
+                                    "{}...\n\n(内容已截断，共 {} 字符)",
+                                    &content[..8000],
+                                    content.len()
+                                )
+                            } else {
+                                content
+                            };
+                            Ok((
+                                format!("[文件] {}\n---\n{truncated}", canonical.display()),
+                                ToolEffects::default(),
+                            ))
+                        }
+                        Err(e) => Ok((format!("读取失败: {e}"), ToolEffects::default())),
+                    }
+                }
+                "pdf" => {
+                    // Try pdftotext, then textutil
+                    let path_str = path.clone();
+                    for (cmd, args) in [
+                        ("pdftotext", vec!["-layout", path_str.as_str(), "-"]),
+                        (
+                            "textutil",
+                            vec!["-convert", "txt", "-stdout", path_str.as_str()],
+                        ),
+                    ] {
+                        if let Ok(output) = std::process::Command::new(cmd).args(&args).output() {
+                            if output.status.success() {
+                                let text = String::from_utf8_lossy(&output.stdout).into_owned();
+                                if !text.trim().is_empty() {
+                                    return Ok((text, ToolEffects::default()));
+                                }
+                            }
+                        }
+                    }
+                    Ok((
+                        "无法提取 PDF 文本。请安装 pdftotext: brew install poppler".into(),
+                        ToolEffects::default(),
+                    ))
+                }
+                _ => Ok((
+                    format!("不支持的文件类型: .{ext}（支持 .md .txt .pdf .json .csv 等）"),
+                    ToolEffects::default(),
+                )),
+            }
+        }
+        "list_directory" => {
+            let path = tool_arg(tool_call, "path");
+            if path.is_empty() {
+                return Ok(("错误：未提供目录路径。".into(), ToolEffects::default()));
+            }
+            let home = std::env::var("HOME").unwrap_or_default();
+            let p = std::path::Path::new(&path);
+            let canonical = match p.canonicalize() {
+                Ok(c) => c,
+                Err(e) => return Ok((format!("目录不存在: {e}"), ToolEffects::default())),
+            };
+            if !canonical.starts_with(&home) {
+                return Ok((
+                    "安全限制：只能浏览用户主目录下的文件。".into(),
+                    ToolEffects::default(),
+                ));
+            }
+            match std::fs::read_dir(&canonical) {
+                Ok(rd) => {
+                    let mut entries: Vec<String> = Vec::new();
+                    for entry in rd.flatten() {
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        if !name.starts_with('.') {
+                            let prefix = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                "📁"
+                            } else {
+                                "📄"
+                            };
+                            entries.push(format!("{prefix} {name}"));
+                        }
+                    }
+                    entries.sort();
+                    Ok((
+                        format!("{}\n---\n{}", canonical.display(), entries.join("\n")),
+                        ToolEffects::default(),
+                    ))
+                }
+                Err(e) => Ok((format!("读取目录失败: {e}"), ToolEffects::default())),
+            }
+        }
+        "get_current_time" => {
+            let now = Local::now();
+            Ok((
+                format!(
+                    "当前时间：{}\n日期：{}\n星期：{}\n时区：{} (UTC{:+})",
+                    now.format("%Y-%m-%d %H:%M:%S"),
+                    now.format("%Y 年 %m 月 %d 日"),
+                    match now.format("%u").to_string().as_str() {
+                        "1" => "星期一",
+                        "2" => "星期二",
+                        "3" => "星期三",
+                        "4" => "星期四",
+                        "5" => "星期五",
+                        "6" => "星期六",
+                        "7" => "星期日",
+                        _ => "",
+                    },
+                    now.format("%Z"),
+                    now.offset().local_minus_utc() / 3600,
+                ),
+                ToolEffects::default(),
+            ))
         }
         "delete_calendar_event" => {
             let event_id_str = tool_call
@@ -1500,18 +2103,84 @@ async fn execute_tool_call(
                 .unwrap_or_default();
             let event_id = match Uuid::parse_str(event_id_str) {
                 Ok(id) => id,
-                Err(_) => return Ok((format!("无效的事件 ID：{event_id_str}"), Vec::new())),
+                Err(_) => {
+                    return Ok((
+                        format!("无效的事件 ID：{event_id_str}"),
+                        ToolEffects::default(),
+                    ))
+                }
             };
             match crate::routes::calendar::delete_user_event(state, user_id, event_id).await {
-                Ok(apple_ids) => Ok((format!("已删除日历事件 {event_id}"), apple_ids)),
+                Ok(apple_ids) => Ok((
+                    format!("已删除日历事件 {event_id}"),
+                    ToolEffects {
+                        apple_calendar_deletes: apple_ids,
+                        ..Default::default()
+                    },
+                )),
                 Err(e) => {
                     let msg = e.to_string();
                     tracing::warn!(%user_id, %event_id, %msg, "Calendar delete failed via chat tool");
-                    Ok((format!("删除日历事件失败：{msg}"), Vec::new()))
+                    Ok((format!("删除日历事件失败：{msg}"), ToolEffects::default()))
                 }
             }
         }
-        other => Ok((format!("未知工具：{other}"), Vec::new())),
+        "open_app" => {
+            let name = tool_arg(tool_call, "name");
+            if name.is_empty() {
+                return Ok((
+                    "错误：未提供要打开的 App 名称。".into(),
+                    ToolEffects::default(),
+                ));
+            }
+            Ok(enforce_automation(
+                state,
+                user_id,
+                "open_app",
+                &name,
+                format!("已为你打开 App：{name}"),
+            )
+            .await)
+        }
+        "open_url" => {
+            let url = tool_arg(tool_call, "url");
+            if url.is_empty() {
+                return Ok(("错误：未提供要打开的 URL。".into(), ToolEffects::default()));
+            }
+            let lower = url.to_lowercase();
+            if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+                return Ok((
+                    format!("出于安全，仅允许打开 http/https 链接：{url}"),
+                    ToolEffects::default(),
+                ));
+            }
+            Ok(enforce_automation(
+                state,
+                user_id,
+                "open_url",
+                &url,
+                format!("已为你打开链接：{url}"),
+            )
+            .await)
+        }
+        "open_file" => {
+            let path = tool_arg(tool_call, "path");
+            if path.is_empty() {
+                return Ok((
+                    "错误：未提供要打开的文件路径。".into(),
+                    ToolEffects::default(),
+                ));
+            }
+            Ok(enforce_automation(
+                state,
+                user_id,
+                "open_file",
+                &path,
+                format!("已为你打开文件：{path}"),
+            )
+            .await)
+        }
+        other => Ok((format!("未知工具：{other}"), ToolEffects::default())),
     }
 }
 
@@ -1519,10 +2188,9 @@ async fn execute_tool_call(
 /// tool calls, append results to the conversation, and repeat until the model
 /// produces a text-only response (or we hit the max iteration limit).
 ///
-/// Returns `(messages, final_text, apple_calendar_deletes)` where
-/// `final_text` is the model's last non-tool text response, if any, and
-/// `apple_calendar_deletes` contains EventKit `eventIdentifier`s that the
-/// frontend should delete from the system calendar.
+/// Returns `(messages, final_text, effects)` where `final_text` is the model's
+/// last non-tool text response (if any) and `effects` carries the frontend-side
+/// side effects: EventKit calendar deletes and L2 automation actions.
 async fn run_tool_loop(
     state: &AppState,
     llm: &crate::llm::client::LlmClient,
@@ -1531,13 +2199,13 @@ async fn run_tool_loop(
     messages: Vec<ChatMessage>,
     options: &ChatOptions,
     tools: &[crate::llm::client::ToolDefinition],
-) -> (Vec<ChatMessage>, Option<String>, Vec<String>) {
+) -> (Vec<ChatMessage>, Option<String>, ToolEffects) {
     if tools.is_empty() {
-        return (messages, None, Vec::new());
+        return (messages, None, ToolEffects::default());
     }
 
     let mut messages = messages;
-    let mut apple_calendar_deletes: Vec<String> = Vec::new();
+    let mut effects = ToolEffects::default();
     let mut iterations = 0;
 
     tracing::debug!(%user_id, tool_count = tools.len(), "Tool loop starting");
@@ -1565,7 +2233,7 @@ async fn run_tool_loop(
             }
             Err(e) => {
                 tracing::warn!(%user_id, %e, "chat_with_tools failed, falling through to plain chat");
-                return (messages, None, apple_calendar_deletes);
+                return (messages, None, effects);
             }
         };
 
@@ -1574,7 +2242,7 @@ async fn run_tool_loop(
             // Return it so the caller can stream it directly without
             // making a redundant LLM call.
             if !response.content.is_empty() {
-                return (messages, Some(response.content), apple_calendar_deletes);
+                return (messages, Some(response.content), effects);
             }
             // Empty content with no tool calls — fall through to streaming.
             break;
@@ -1593,17 +2261,27 @@ async fn run_tool_loop(
         // Execute each tool, pairing the result with its call id.
         let mut tool_results: Vec<(String, String)> = Vec::new();
         for tc in &tool_calls {
-            let (result, apple_ids) = match execute_tool_call(state, user_id, tc).await {
-                Ok((text, ids)) => (text, ids),
+            let (result, eff) = match execute_tool_call(state, user_id, tc).await {
+                Ok((text, eff)) => (text, eff),
                 Err(e) => {
                     tracing::warn!(%user_id, tool = %tc.function.name, %e, "Tool execution failed");
-                    (format!("工具执行失败：{e}"), Vec::new())
+                    (format!("工具执行失败：{e}"), ToolEffects::default())
                 }
             };
-            if !apple_ids.is_empty() {
-                apple_calendar_deletes.extend(apple_ids);
-            }
+            effects
+                .apple_calendar_deletes
+                .extend(eff.apple_calendar_deletes);
+            effects.automation_actions.extend(eff.automation_actions);
+            effects.permission_requests.extend(eff.permission_requests);
+            effects.screen_read_request |= eff.screen_read_request;
             tool_results.push((tc.id.clone(), result));
+        }
+
+        // A read_screen call hands off to the desktop client to capture screen
+        // text in the authorized main-app process. Stop here so the handler can
+        // emit the signal; the client will resend with `screen_context`.
+        if effects.screen_read_request {
+            return (messages, None, effects);
         }
 
         // Echo the assistant message (tool calls now carry id + type), then the
@@ -1617,7 +2295,7 @@ async fn run_tool_loop(
         }
     }
 
-    (messages, None, apple_calendar_deletes)
+    (messages, None, effects)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────
@@ -1627,9 +2305,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chat_tools_includes_calendar_and_automation_tools() {
+        let names: Vec<String> = chat_tools()
+            .iter()
+            .map(|t| t.function.name.clone())
+            .collect();
+        for expected in [
+            "create_calendar_event",
+            "list_calendar_events",
+            "delete_calendar_event",
+            "open_app",
+            "open_url",
+            "open_file",
+        ] {
+            assert!(
+                names.contains(&expected.to_string()),
+                "missing tool {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_arg_extracts_and_trims() {
+        let tc = crate::llm::client::ToolCall {
+            id: "call_1".into(),
+            tool_type: "function".into(),
+            function: crate::llm::client::ToolCallFunction {
+                name: "open_app".into(),
+                arguments: serde_json::json!({ "name": "  Calculator  " }),
+            },
+        };
+        assert_eq!(tool_arg(&tc, "name"), "Calculator");
+        assert_eq!(tool_arg(&tc, "missing"), "");
+    }
+
+    #[test]
     fn build_system_prompt_includes_personality_snippet() {
         let snippet = "## 当前人格参数\n测试人格";
-        let prompt = build_system_prompt(snippet, "", "", "");
+        let prompt = build_system_prompt(snippet, "", "", "", "");
         assert!(
             prompt.contains("当前人格参数"),
             "System prompt should include personality snippet. Got:\n{prompt}"
@@ -1643,7 +2356,7 @@ mod tests {
     #[test]
     fn build_system_prompt_skips_memory_when_empty() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "", "", "");
+        let prompt = build_system_prompt(snippet, "", "", "", "");
         assert!(
             !prompt.contains("用户档案与记忆"),
             "System prompt should NOT include memory section when memory is empty"
@@ -1654,7 +2367,7 @@ mod tests {
     fn build_system_prompt_includes_memory_when_present() {
         let snippet = "## 当前人格参数\n- 直接度：中";
         let memories = "- [偏好] 喜欢安静的环境\n- [事实] 住在北京";
-        let prompt = build_system_prompt(snippet, memories, "", "");
+        let prompt = build_system_prompt(snippet, memories, "", "", "");
         assert!(
             prompt.contains("用户档案与记忆"),
             "System prompt should include memory section when memories exist"
@@ -1679,10 +2392,56 @@ mod tests {
     #[test]
     fn build_system_prompt_contains_base_identity() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "", "", "");
+        let caps = capability_section(&crate::routes::permissions::PermissionSettings::default());
+        let prompt = build_system_prompt(snippet, "", "", "", &caps);
         assert!(prompt.contains("灵枢"));
         assert!(prompt.contains("LingShu"));
         assert!(prompt.contains("权限边界"));
+    }
+
+    #[test]
+    fn capability_section_keeps_screen_recognition_as_l3_not_l4() {
+        let caps = capability_section(&crate::routes::permissions::PermissionSettings::default());
+        // 屏幕识别 must be presented as an available L3 capability, and the L4
+        // line must be the autonomous-click feature — never screen recognition.
+        assert!(
+            caps.contains("屏幕识别"),
+            "must mention 屏幕识别 explicitly"
+        );
+        assert!(caps.contains("read_screen"));
+        assert!(
+            caps.contains("L4 自主操作") && caps.contains("尚未开放"),
+            "L4 must be the unreleased autonomous-click feature"
+        );
+        assert!(
+            caps.contains("绝不要说它是 L4"),
+            "must explicitly forbid demoting 屏幕识别 to L4"
+        );
+    }
+
+    #[test]
+    fn capability_section_reflects_real_grant_state() {
+        use crate::routes::permissions::PermissionSettings;
+        let granted = PermissionSettings {
+            l1_calendar: true,
+            l3_accessibility: true,
+            ..Default::default()
+        };
+        let caps = capability_section(&granted);
+        assert!(caps.contains(
+            "L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前已开启"
+        ));
+        assert!(caps.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前已开启"));
+
+        // Default permissions have everything off — the section must say so
+        // rather than claiming the capability is available (the original bug).
+        let denied = capability_section(&PermissionSettings::default());
+        assert!(denied.contains("L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前未开启（需用户授权后可用）"));
+        assert!(denied.contains(
+            "L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前未开启（需用户授权后可用）"
+        ));
+        // …but "未开启" must never read as "功能不存在".
+        assert!(denied.contains("不等于功能不存在"));
     }
 
     #[test]

@@ -1,11 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-config-schema/schema.json",
   "productName": "灵枢 LingShu",
-  "version": "0.1.5",
+  "version": "1.0.0",
   "identifier": "com.lingshu.desktop",
   "build": {
-    "beforeDevCommand": "npm run --prefix ../frontend dev",
-    "beforeBuildCommand": "npm run --prefix ../frontend build",
+    "beforeDevCommand": "cd frontend && npm run dev",
+    "beforeBuildCommand": "cd frontend && npm run build",
     "frontendDist": "../frontend/dist",
     "devUrl": "http://127.0.0.1:5173"
   },
@@ -56,7 +56,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "LingShu Dev"
+    }
   },
   "plugins": {
     "shell": {

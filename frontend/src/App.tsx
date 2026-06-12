@@ -12,7 +12,13 @@ import {
   type AvatarControlSettings,
   AvatarControlPanel,
 } from './components/avatar/AvatarControlPanel';
+import {
+  loadAvatarControlSettings,
+  publishAvatarControlSettings,
+} from './components/avatar/avatarControls';
 import { ensureLocalSession, apiFetch } from './lib/api';
+import { isTauri, MAIN_NAVIGATE_EVENT } from './lib/tauri';
+import { installChatSessionSync } from './stores/chatStore';
 import { useProjectStore } from './stores/projectStore';
 
 // ── Dashboard data types ────────────────────────────────────────
@@ -55,12 +61,7 @@ export default function App() {
   const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<AppSectionKey>('home');
-  const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>({
-    visible: true,
-    mood: 'idle',
-    size: 'medium',
-    bubbleText: '我在这里，需要时叫我。',
-  });
+  const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>(() => loadAvatarControlSettings());
 
   // Dashboard state
   const [scheduleItems, setScheduleItems] = useState<{ id: string; time: string; title: string; state: string }[]>([]);
@@ -90,6 +91,15 @@ export default function App() {
   useEffect(() => {
     bootLocalSession();
   }, [bootLocalSession]);
+
+  useEffect(() => installChatSessionSync(), []);
+
+  const updateAvatarSettings = useCallback((settings: AvatarControlSettings) => {
+    setAvatarSettings(settings);
+    publishAvatarControlSettings(settings).catch((error) => {
+      console.error('[avatar] failed to publish control settings:', error);
+    });
+  }, []);
 
   // ── Fetch dashboard data ──────────────────────────────────────
 
@@ -185,6 +195,27 @@ export default function App() {
       loadDashboard();
     }
   }, [sessionState, activeSection, loadDashboard]);
+
+  // Deep-link from the pet window: when the user expands a reply (or opens the
+  // console), jump straight to the requested section (e.g. 'chat') instead of
+  // landing on whatever tab the main window last showed.
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | null = null;
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<string>(MAIN_NAVIGATE_EVENT, (event) => {
+          setActiveSection(event.payload as AppSectionKey);
+        }),
+      )
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   // ── Local session gate ────────────────────────────────────────
 
@@ -424,7 +455,7 @@ export default function App() {
       case 'preferences':
         return (
           <section className="dashboard-card page-tool-card narrow-tool-card">
-            <AvatarControlPanel settings={avatarSettings} onChange={setAvatarSettings} />
+            <AvatarControlPanel settings={avatarSettings} onChange={updateAvatarSettings} />
           </section>
         );
       case 'privacy':
@@ -454,4 +485,3 @@ export default function App() {
     </AppLayout>
   );
 }
-

@@ -1,12 +1,6 @@
-export type AvatarMood = 'idle' | 'thinking' | 'speaking' | 'reminder';
-export type AvatarSize = 'small' | 'medium' | 'large';
+import type { AvatarControlSettings, AvatarMood } from './avatarControls';
 
-export interface AvatarControlSettings {
-  visible: boolean;
-  mood: AvatarMood;
-  size: AvatarSize;
-  bubbleText: string;
-}
+export type { AvatarControlSettings, AvatarMood } from './avatarControls';
 
 interface AvatarControlPanelProps {
   settings: AvatarControlSettings;
@@ -18,12 +12,6 @@ const MOOD_OPTIONS: { value: AvatarMood; label: string }[] = [
   { value: 'thinking', label: '思考' },
   { value: 'speaking', label: '说话' },
   { value: 'reminder', label: '提醒' },
-];
-
-const SIZE_OPTIONS: { value: AvatarSize; label: string }[] = [
-  { value: 'small', label: '小' },
-  { value: 'medium', label: '中' },
-  { value: 'large', label: '大' },
 ];
 
 export function AvatarControlPanel({ settings, onChange }: AvatarControlPanelProps) {
@@ -59,17 +47,18 @@ export function AvatarControlPanel({ settings, onChange }: AvatarControlPanelPro
           ))}
         </div>
 
-        <div className="segmented-control">
-          {SIZE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              className={settings.size === option.value ? 'segment-active' : ''}
-              onClick={() => patch({ size: option.value })}
-            >
-              {option.label}
-            </button>
-          ))}
+        <div className="slider-control">
+          <label htmlFor="avatar-size">宠物大小</label>
+          <input
+            id="avatar-size"
+            type="range"
+            min={0.75}
+            max={1.25}
+            step={0.01}
+            value={settings.sizeScale}
+            onChange={(event) => patch({ sizeScale: Number(event.target.value) })}
+          />
+          <span>{Math.round(settings.sizeScale * 100)}%</span>
         </div>
 
         <textarea

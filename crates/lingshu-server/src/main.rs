@@ -33,6 +33,14 @@ async fn main() -> anyhow::Result<()> {
     // Load .env file (silently skip if missing)
     let _ = dotenvy::dotenv();
 
+    // Dev tool: dump the OpenAPI spec to stdout and exit (no DB needed).
+    // Regenerate the committed contract file with:
+    //   cargo run -p lingshu-server -- --dump-openapi > openapi.json
+    if std::env::args().any(|a| a == "--dump-openapi") {
+        println!("{}", serde_json::to_string(&routes::openapi_spec())?);
+        return Ok(());
+    }
+
     // Initialize tracing
     tracing_subscriber::registry()
         .with(

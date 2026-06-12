@@ -72,3 +72,6 @@ src-tauri/binaries/lingshu-server-*
 # Misc
 *.tmp
 *.bak
+
+# Live2D model files (large, licensed separately)
+frontend/public/live2d/*
