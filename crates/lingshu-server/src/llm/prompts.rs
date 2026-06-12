@@ -188,7 +188,7 @@ fn trait_line(name: &str, value: f32, guides: &[&str; 3]) -> String {
 ///
 /// Used by [`personality_prompt`] to translate numeric trait scores into
 /// human-readable behavioral instructions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersonalityValues {
     pub directness: f32,
     pub warmth: f32,

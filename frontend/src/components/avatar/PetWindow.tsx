@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Application, Graphics, Text, Container, BlurFilter } from 'pixi.js';
 import { isTauri, showMainWindow } from '../../lib/tauri';
-import { getMoodPresentation, getReplyDisplayTarget, type Mood } from './petPresentation';
+import { getMoodPresentation, getReplyDisplayTarget, lerpPresentation, traitsToModifiers, defaultModifiers, type Mood, type EyeShape, type MoodPresentation, type PersonalityTraits, type PersonalityModifiers } from './petPresentation';
 
 const DRAG_THRESHOLD_PX = 2;
 
@@ -17,112 +17,250 @@ const DIALOG_HIT_RECT = { x: 6, y: 134, width: 188, height: 108 };
 
 // ── Pet Character ──────────────────────────────────────────────────
 
+interface Particle { x: number; y: number; vx: number; vy: number; life: number; maxLife: number }
+
 class PetCharacter {
   container = new Container();
-  private face = new Graphics();
+  private shell = new Graphics();
+  private ring = new Graphics();
   private core = new Graphics();
   private star = new Graphics();
   private orbitBack = new Graphics();
   private orbitFront = new Graphics();
-  private leftEye = new Graphics();
-  private rightEye = new Graphics();
-  private mouth = new Graphics();
-  private blushL = new Graphics();
-  private blushR = new Graphics();
+  private innerOrbitLayer = new Graphics();
+  private sensor = new Graphics();
+  private wake = new Graphics();
   private glow = new Graphics();
+  private particleLayer = new Graphics();
+
   private animTime = 0;
-  private tx = 0; private ty = 0; // eye target
-  private ex = 0; private ey = 0; // eye current
+  private tx = 0; private ty = 0;
+  private ex = 0; private ey = 0;
   private mood: Mood = 'idle';
   private sc = 1;
   private tsc = 1;
+
+  // Live (eased) presentation + integrated orbit angle. Mood switches glide
+  // toward the new preset instead of jumping; the orbit angle is integrated
+  // incrementally because `animTime * speed` would re-scale the accumulated
+  // angle whenever the eased speed changes, spinning the ring wildly.
+  private visual: MoodPresentation = { ...getMoodPresentation('idle') };
+  private orbitAngle = 0;
+
+  // Blink
+  private blinkCooldown = 180 + Math.random() * 200;
+  private blinkPhase = 0;
+  private blinking = false;
+
+  // Idle look-around (triggers when mouse has been still)
+  private noMouseFrames = 0;
+  private idleLookCooldown = 0;
+
+  // thinking scan
+  private scanPhase = 0;
+
+  private particles: Particle[] = [];
+  private mods: PersonalityModifiers = defaultModifiers();
 
   constructor() {
     this.container.addChild(
       this.glow,
       this.orbitBack,
-      this.face,
+      this.innerOrbitLayer,
+      this.shell,
+      this.ring,
       this.core,
       this.star,
-      this.blushL,
-      this.blushR,
-      this.leftEye,
-      this.rightEye,
-      this.mouth,
+      this.sensor,
+      this.wake,
       this.orbitFront,
+      this.particleLayer,
     );
   }
 
-  setMood(m: Mood) { this.mood = m; this.tsc = 1; }
-  lookAt(x: number, y: number) { this.tx = ((x - 50) / 50) * 4; this.ty = ((y - 50) / 50) * 2; }
-  bounce() { this.tsc = 1.2; }
+  setMood(m: Mood) {
+    if (m !== this.mood) this.scanPhase = 0;
+    this.mood = m;
+    this.tsc = 1;
+  }
+
+  lookAt(x: number, y: number) {
+    this.tx = ((x - 50) / 50) * 4;
+    this.ty = ((y - 50) / 50) * 2;
+    this.noMouseFrames = 0;
+  }
+
+  bounce() { this.tsc = 1 + this.mods.bounceMagnitude * 0.2; }
+  applyPersonality(traits: PersonalityTraits) { this.mods = traitsToModifiers(traits); }
   squish() { this.tsc = 0.85; }
   relax() { this.tsc = 1.15; }
 
+  burst() {
+    for (let i = 0; i < 10; i++) {
+      const angle = (i / 10) * Math.PI * 2 + Math.random() * 0.62;
+      const speed = 1.5 + Math.random() * 2;
+      this.particles.push({
+        x: 50, y: 50,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 1,
+        life: 30 + Math.random() * 15,
+        maxLife: 45,
+      });
+    }
+  }
+
   update(dt: number) {
     this.animTime += dt * 0.05;
+
+    // Idle look-around
+    this.noMouseFrames += dt;
+    if (this.noMouseFrames > 90 && this.idleLookCooldown <= 0 && this.mood !== 'thinking') {
+      this.tx = (Math.random() - 0.5) * 6;
+      this.ty = (Math.random() - 0.5) * 3;
+      this.idleLookCooldown = this.mods.idleLookFreq + Math.random() * 100;
+    }
+    if (this.idleLookCooldown > 0) this.idleLookCooldown -= dt;
+
     this.ex += (this.tx - this.ex) * 0.08;
     this.ey += (this.ty - this.ey) * 0.08;
     this.sc += (this.tsc - this.sc) * 0.12;
     if (Math.abs(this.tsc - this.sc) < 0.002) this.tsc = 1;
 
-    const visual = getMoodPresentation(this.mood);
+    // Blink
+    if (this.blinking) {
+      this.blinkPhase = Math.min(this.blinkPhase + dt * 0.12, 1);
+      if (this.blinkPhase >= 1) {
+        this.blinking = false;
+        this.blinkPhase = 0;
+        this.blinkCooldown = this.mods.blinkInterval + Math.random() * (this.mods.blinkInterval * 0.8);
+      }
+    } else {
+      this.blinkCooldown -= dt;
+      if (this.blinkCooldown <= 0) { this.blinking = true; this.blinkPhase = 0; }
+    }
+    const blinkScale = this.blinking ? Math.abs(Math.cos(this.blinkPhase * Math.PI)) : 1;
+
+    // thinking: eye scans left-right
+    if (this.mood === 'thinking') {
+      this.scanPhase += dt * 0.04;
+      this.tx = Math.sin(this.scanPhase) * 3.5;
+      this.ty = Math.sin(this.scanPhase * 0.7) * 1.5;
+    }
+
+    this.visual = lerpPresentation(this.visual, getMoodPresentation(this.mood), Math.min(0.08 * dt, 1));
+    const visual = this.visual;
     const c = visual.color;
     const b = Math.sin(this.animTime) * 3;
-    const pulse = 1 + Math.sin(this.animTime * 1.4) * 0.025 * visual.pulse;
-    const orbitRotation = this.animTime * visual.orbitSpeed;
+    const pulse = 1 + Math.sin(this.animTime * 1.4) * 0.025 * visual.pulse * this.mods.pulseMult;
+    this.orbitAngle += dt * 0.05 * visual.orbitSpeed * this.mods.orbitSpeedMult;
 
     this.glow.clear();
     this.glow.circle(50, 50 + b, 54 * pulse);
-    this.glow.fill({ color: visual.glowColor, alpha: 0.18 });
+    this.glow.fill({ color: visual.glowColor, alpha: 0.24 });
     this.glow.filters = [new BlurFilter({ strength: 18 })];
 
     this.orbitBack.clear();
-    this.drawOrbit(this.orbitBack, 50, 50 + b, 52, 16, orbitRotation, c, 0.28, true);
+    this.drawOrbit(this.orbitBack, 50, 50 + b, 56, 15, this.orbitAngle, c, 0.22, 1.5);
 
-    this.face.clear();
-    this.face.circle(50, 50 + b, 41 * pulse);
-    this.face.fill({ color: c, alpha: 0.84 });
+    // Inner orbiting dots (depth cue via alpha)
+    this.innerOrbitLayer.clear();
+    for (let d = 0; d < 2; d++) {
+      const phase = this.orbitAngle * 1.8 + d * Math.PI;
+      const dotX = 50 + Math.cos(phase) * 20;
+      const dotY = 50 + b + Math.sin(phase) * 6;
+      const dotAlpha = (Math.sin(phase) * 0.5 + 0.5) * 0.18 + 0.1;
+      this.innerOrbitLayer.circle(dotX, dotY, 2);
+      this.innerOrbitLayer.fill({ color: 0xffffff, alpha: dotAlpha });
+    }
+
+    this.shell.clear();
+    this.shell.circle(50, 50 + b, 38 * pulse);
+    this.shell.fill({ color: c, alpha: 0.3 });
+    this.shell.circle(50, 50 + b, 34 * pulse);
+    this.shell.stroke({ color: 0xffffff, alpha: 0.38, width: 1.5 });
+
+    this.ring.clear();
+    this.ring.circle(50, 50 + b, 29 + Math.sin(this.animTime * 1.1) * 1.5);
+    this.ring.stroke({ color: c, alpha: 0.42, width: 2 });
 
     this.core.clear();
-    this.core.circle(50, 50 + b, 24 + Math.sin(this.animTime * 1.8) * 1.2);
-    this.core.fill({ color: 0xffffff, alpha: 0.14 });
+    this.core.circle(50, 50 + b, 21 + Math.sin(this.animTime * 1.8) * 1.1);
+    this.core.fill({ color: 0xffffff, alpha: 0.28 });
+    this.core.circle(50, 50 + b, 13 + Math.sin(this.animTime * 2.2) * 0.8);
+    this.core.fill({ color: visual.glowColor, alpha: 0.34 });
 
     this.star.clear();
-    this.drawStar(this.star, 50, 50 + b, this.mood === 'thinking' ? 16 : 13, 6, 0xffffff, 0.68);
+    this.drawStar(this.star, 50, 50 + b, this.mood === 'thinking' ? 17 : 14, 5, 0xffffff, 0.8);
 
-    this.blushL.clear(); this.blushL.ellipse(32, 58 + b, 8, 4); this.blushL.fill({ color: 0xff8899, alpha: 0.25 });
-    this.blushR.clear(); this.blushR.ellipse(68, 58 + b, 8, 4); this.blushR.fill({ color: 0xff8899, alpha: 0.25 });
+    this.sensor.clear();
+    const sensorX = 50 + this.ex * 1.6;
+    const sensorY = 50 + b + this.ey * 1.4;
+    this.drawEye(sensorX, sensorY, visual.eyeShape, blinkScale);
 
-    const es = visual.eyeShape === 'sleepy' ? 0.28 : visual.eyeShape === 'focused' ? 0.58 : visual.eyeShape === 'smiling' ? 0.72 : 1;
-    const lx = 36 + this.ex, ly = 44 + b + this.ey, rx = 64 + this.ex, ry = 44 + b + this.ey;
-
-    this.leftEye.clear(); this.drawEye(this.leftEye, lx, ly, es);
-    this.rightEye.clear(); this.drawEye(this.rightEye, rx, ry, es);
-
-    this.mouth.clear();
-    if (this.mood === 'thinking') { this.mouth.ellipse(50, 64 + b, 4, 3); this.mouth.fill({ color: 0x334466, alpha: 0.6 }); }
-    else if (this.mood === 'speaking') { this.mouth.ellipse(50, 62 + b, 7, 5 + Math.sin(this.animTime * 7) * 1.8); this.mouth.fill({ color: 0xff6688, alpha: 0.7 }); this.mouth.ellipse(50, 65 + b, 5, 3); this.mouth.fill({ color: 0x442233, alpha: 0.35 }); }
-    else if (this.mood === 'happy') { this.mouth.arc(50, 59 + b, 9, 0.05, Math.PI - 0.05); this.mouth.stroke({ color: 0x445566, alpha: 0.55, width: 2 }); }
-    else if (this.mood === 'sleepy') { this.mouth.ellipse(50, 66 + b, 4, 2); this.mouth.fill({ color: 0x445566, alpha: 0.4 }); }
-    else { this.mouth.arc(50, 60 + b, 5, 0.1, Math.PI - 0.1); this.mouth.stroke({ color: 0x445566, alpha: 0.5, width: 1.5 }); }
+    this.wake.clear();
+    if (this.mood === 'speaking' || this.mood === 'happy') {
+      this.wake.arc(50, 50 + b, 44, -0.45, 0.45);
+      this.wake.stroke({ color: 0xffffff, alpha: 0.28, width: 2 });
+      this.wake.arc(50, 50 + b, 47, Math.PI - 0.35, Math.PI + 0.35);
+      this.wake.stroke({ color: 0xffffff, alpha: 0.18, width: 2 });
+    }
 
     this.orbitFront.clear();
-    this.drawOrbit(this.orbitFront, 50, 50 + b, 52, 16, orbitRotation + Math.PI, c, 0.55, false);
+    this.drawOrbit(this.orbitFront, 50, 50 + b, 56, 15, this.orbitAngle + Math.PI, c, 0.52, 2.2);
+
+    // Particles
+    this.particleLayer.clear();
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 0.05 * dt; p.life -= dt;
+      if (p.life <= 0) { this.particles.splice(i, 1); continue; }
+      const a = (p.life / p.maxLife) * 0.8;
+      const s = (p.life / p.maxLife) * 3.5 + 0.5;
+      this.particleLayer.circle(p.x, p.y, s);
+      this.particleLayer.fill({ color: visual.glowColor, alpha: a });
+    }
 
     this.container.scale.set(this.sc);
     this.container.pivot.set(50, 50);
     this.container.position.set(BODY_CX, BODY_CY);
   }
 
-  private drawEye(target: Graphics, x: number, y: number, scaleY: number) {
-    target.ellipse(x, y, 7.5, 9.5 * scaleY);
-    target.fill(0xffffff);
-    if (scaleY > 0.35) {
-      target.circle(x + this.ex * 1.3, y + this.ey * 1.2, 3.7);
-      target.fill(0x24344f);
-      target.circle(x + 1.5 + this.ex * 1.1, y - 2 + this.ey, 1.2);
-      target.fill({ color: 0xffffff, alpha: 0.7 });
+  private drawEye(x: number, y: number, shape: EyeShape, blinkScale: number) {
+    switch (shape) {
+      case 'open': {
+        const r = 4.5 * blinkScale;
+        if (r > 0.2) { this.sensor.circle(x, y, r); this.sensor.fill({ color: 0xffffff, alpha: 0.9 }); }
+        this.sensor.circle(x, y, 8 + Math.sin(this.animTime * 2.8) * 1.5);
+        this.sensor.stroke({ color: 0xffffff, alpha: 0.24, width: 1 });
+        break;
+      }
+      case 'focused': {
+        // smaller bright dot + crosshair
+        const r = 3.5 * blinkScale;
+        if (r > 0.2) { this.sensor.circle(x, y, r); this.sensor.fill({ color: 0xffffff, alpha: 0.95 }); }
+        this.sensor.moveTo(x - 7, y); this.sensor.lineTo(x + 7, y);
+        this.sensor.stroke({ color: 0xffffff, alpha: 0.22, width: 0.8 });
+        this.sensor.moveTo(x, y - 6); this.sensor.lineTo(x, y + 6);
+        this.sensor.stroke({ color: 0xffffff, alpha: 0.22, width: 0.8 });
+        break;
+      }
+      case 'smiling': {
+        // arc squint (happy)
+        const hw = 6 * blinkScale;
+        if (hw > 0.5) {
+          this.sensor.arc(x, y + 1, hw, Math.PI, 0, false);
+          this.sensor.stroke({ color: 0xffffff, alpha: 0.9, width: 2.5 });
+        }
+        break;
+      }
+      case 'sleepy': {
+        // small dim dot + droop arc (r=3 per design doc §3.3)
+        const r = 3 * blinkScale;
+        if (r > 0.2) { this.sensor.circle(x, y, r); this.sensor.fill({ color: 0xffffff, alpha: 0.45 }); }
+        this.sensor.arc(x, y + 2, 5.5, 0.3, Math.PI - 0.3);
+        this.sensor.stroke({ color: 0xffffff, alpha: 0.22, width: 1 });
+        break;
+      }
     }
   }
 
@@ -139,12 +277,12 @@ class PetCharacter {
     target.fill({ color, alpha });
   }
 
-  private drawOrbit(target: Graphics, x: number, y: number, rx: number, ry: number, rotation: number, color: number, alpha: number, backHalf: boolean) {
+  private drawOrbit(target: Graphics, x: number, y: number, rx: number, ry: number, rotation: number, color: number, alpha: number, width: number) {
     target.ellipse(x, y, rx, ry);
     target.rotation = rotation;
     target.pivot.set(x, y);
     target.position.set(x, y);
-    target.stroke({ color, alpha, width: backHalf ? 2 : 2.5 });
+    target.stroke({ color, alpha, width });
   }
 }
 
@@ -210,12 +348,13 @@ export function PetWindow() {
       pet.container.position.set(BODY_CX, BODY_CY);
       app.stage.addChild(pet.container);
       const name = new Text({ text: '灵枢', style: { fontSize: 12, fontWeight: '600', fill: 0xffffff, fontFamily: 'system-ui, sans-serif', align: 'center' } });
+      name.style.fill = 0x2e6bff;
       name.anchor.set(0.5, 0); name.position.set(BODY_CX, BODY_CY + 58);
       app.stage.addChild(name);
       app.ticker.add((t) => pet.update(t.deltaTime));
       const moods: Mood[] = ['idle', 'thinking', 'idle', 'speaking', 'idle', 'happy', 'sleepy'];
       let i = 0;
-      timer = setInterval(() => { i = (i + 1) % moods.length; pet.setMood(moods[i]); }, 5000);
+      if (!isTauri()) timer = setInterval(() => { i = (i + 1) % moods.length; pet.setMood(moods[i]); }, 5000);
     })();
 
     return () => {
@@ -232,6 +371,7 @@ export function PetWindow() {
 
   const handleClick = useCallback(() => {
     if (draggedRef.current) { draggedRef.current = false; return; }
+    petRef.current?.burst();
     petRef.current?.bounce();
     setDialogOpen((open) => !open);
     if (!dialogOpenRef.current) setBubble(null);
@@ -260,16 +400,24 @@ export function PetWindow() {
     setTimeout(() => petRef.current?.setMood('idle'), 1800);
   }, [draft]);
 
-  // Drag — synchronous startDragging() via the pre-loaded window handle.
+  // Press feedback + drag — squish() fires on body mousedown (design doc §6),
+  // and only body presses arm the window drag, so text selection inside the
+  // dialog input is not hijacked. startDragging() is called synchronously via
+  // the pre-loaded window handle.
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0 || !inTauri) return;
+    if (e.button !== 0) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const inBody = Math.hypot(e.clientX - rect.left - BODY_CX, e.clientY - rect.top - BODY_CY) <= BODY_HIT_RADIUS;
+    if (!inBody) return;
+    petRef.current?.squish();
+    if (!inTauri) return;
     const sx = e.clientX, sy = e.clientY; draggedRef.current = false;
     const onMove = (ev: MouseEvent) => {
       if (draggedRef.current) return;
       if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > DRAG_THRESHOLD_PX) {
         draggedRef.current = true; cleanup();
         document.body.style.cursor = 'grabbing';
-        petRef.current?.squish();
         const done = () => { document.body.style.cursor = ''; petRef.current?.relax(); };
         if (petWindowRef.current) {
           petWindowRef.current.startDragging().then(done).catch(done);
@@ -286,7 +434,21 @@ export function PetWindow() {
   useEffect(() => {
     if (!inTauri) return;
     const ws = new WebSocket('ws://127.0.0.1:8080/ws');
-    ws.onmessage = (e) => { try { const m = JSON.parse(e.data); if (m.type === 'calendar' || m.type === 'thought') { const reply = (m.type === 'calendar' ? '日程：' : '想法：') + m.title; setDialogReply(reply); if (getReplyDisplayTarget(reply) === 'bubble') setBubble(reply); else setDialogOpen(true); petRef.current?.bounce(); setTimeout(() => setBubble(null), 4000); } } catch { /* */ } };
+    ws.onmessage = (e) => {
+      try {
+        const m = JSON.parse(e.data);
+        if (m.type === 'mood') {
+          petRef.current?.setMood(m.title as Mood);
+          if (m.data) petRef.current?.applyPersonality(m.data as PersonalityTraits);
+        } else if (m.type === 'calendar' || m.type === 'thought') {
+          const reply = (m.type === 'calendar' ? '日程：' : '想法：') + m.title;
+          setDialogReply(reply);
+          if (getReplyDisplayTarget(reply) === 'bubble') setBubble(reply); else setDialogOpen(true);
+          petRef.current?.bounce();
+          setTimeout(() => setBubble(null), 4000);
+        }
+      } catch { /* */ }
+    };
     return () => ws.close();
   }, [inTauri]);
 
@@ -365,7 +527,7 @@ export function PetWindow() {
           </div>
         </form>
       )}
-      {!inTauri && !dialogOpen && <div style={{ position: 'absolute', left: '50%', top: 'calc(50% + 122px)', transform: 'translateX(-50%)', padding: '2px 8px', borderRadius: 8, background: 'rgba(0,0,0,0.5)', color: '#fffa', fontSize: 10 }}>Tauri 未连接</div>}
+      {!inTauri && !dialogOpen && <div style={{ position: 'absolute', left: '50%', top: 'calc(50% + 112px)', transform: 'translateX(-50%)', padding: '2px 8px', borderRadius: 8, background: 'rgba(0,0,0,0.5)', color: '#fffa', fontSize: 10 }}>Tauri 未连接</div>}
       <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(4px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }`}</style>
     </div>
   );

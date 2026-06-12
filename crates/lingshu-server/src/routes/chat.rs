@@ -23,7 +23,7 @@ use crate::llm::forgetting::{self, ForgettingPolicy};
 use crate::llm::prompts::{personality_prompt, PersonalityValues};
 use crate::models::personality::PersonalityTraits;
 use crate::routes::settings::llm_settings_for_user;
-use crate::state::AppState;
+use crate::state::{AppState, PetNotification};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/api/v1/chat", post(chat))
@@ -100,6 +100,7 @@ pub async fn chat(
     let personality_values = load_active_personality(&state.db, user_id).await;
     let personality_snippet = personality_prompt(&personality_values);
     let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
+
     let system_prompt = build_system_prompt(
         &personality_snippet,
         &memory_context,
@@ -163,6 +164,25 @@ pub async fn chat(
         temperature: Some(settings.temperature),
         num_predict: Some(settings.max_tokens),
     };
+
+    // Tell the pet window to enter the thinking state, carrying the current
+    // personality traits so it can adjust animation speed / blink / bounce.
+    // Sent after the fallible setup above: every remaining exit goes through
+    // the stream (which restores idle/happy on done and on error), so the pet
+    // can no longer be stranded in `thinking` by an early `?` return.
+    {
+        let mut payload = serde_json::to_value(&personality_values).unwrap_or_default();
+        if let serde_json::Value::Object(ref mut m) = payload {
+            m.insert(
+                "has_role_prompt".into(),
+                serde_json::Value::Bool(!role_prompt.is_empty()),
+            );
+        }
+        state
+            .pet_notifications
+            .send(PetNotification::mood_with_data("thinking", payload))
+            .ok();
+    }
 
     // ── Calendar intent routing ────────────────────────────────────
     let calendar_hint =
@@ -271,6 +291,16 @@ pub async fn chat(
             llm.chat_stream(&model, messages, Some(options))
         };
 
+    // Notify the pet window to enter speaking state — skip for screen-read
+    // handoffs which produce no content (the pet stays in thinking until
+    // the frontend re-submits with screen_context).
+    if !tool_effects.screen_read_request {
+        state
+            .pet_notifications
+            .send(PetNotification::mood("speaking"))
+            .ok();
+    }
+
     // ── Build the SSE stream with optional assistant collection ──────
     let assistant_accumulator: Arc<Mutex<AssistantStreamAccumulator>> =
         Arc::new(Mutex::new(AssistantStreamAccumulator::new()));
@@ -311,6 +341,8 @@ pub async fn chat(
     let model_name = settings.model.clone();
     let embed_model_name = state.config.llm.embed_model.clone();
     let um_clone = user_message.clone();
+    let pet_tx = state.pet_notifications.clone();
+    let humor_for_done = personality_values.humor;
 
     let sse_stream = chunk_stream.then(move |result| {
         let assistant_accumulator = Arc::clone(&assistant_accumulator);
@@ -325,6 +357,7 @@ pub async fn chat(
         let apple_deletes_ref = Arc::clone(&apple_deletes_ref);
         let automation_ref = Arc::clone(&automation_ref);
         let perm_req_ref = Arc::clone(&perm_req_ref);
+        let pet_tx = pet_tx.clone();
 
         async move {
             match result {
@@ -374,6 +407,14 @@ pub async fn chat(
                         let automation_final =
                             automation_ref.lock().ok().and_then(|mut g| g.take());
                         let perm_req_final = perm_req_ref.lock().ok().and_then(|mut g| g.take());
+                        // Screen-read handoff keeps the pet in `thinking`: the
+                        // client immediately re-submits with screen_context,
+                        // which restarts the mood cycle.
+                        if chunk.screen_read_request != Some(true) {
+                            let done_mood =
+                                if humor_for_done > 0.6 { "happy" } else { "idle" };
+                            pet_tx.send(PetNotification::mood(done_mood)).ok();
+                        }
                         return Ok(Event::default().data(
                             serde_json::to_string(&ChatChunk {
                                 content: chunk.content,
@@ -396,6 +437,7 @@ pub async fn chat(
                     if let Ok(mut acc) = assistant_accumulator.lock() {
                         acc.mark_error();
                     }
+                    pet_tx.send(PetNotification::mood("idle")).ok();
                     if mark_stream_finalized(&stream_finalized) {
                         spawn_post_stream_tasks(
                             db,

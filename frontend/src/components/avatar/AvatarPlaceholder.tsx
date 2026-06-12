@@ -16,8 +16,8 @@ export function AvatarPlaceholder() {
         width: '124px',
         height: '124px',
         borderRadius: '50%',
-        background: 'radial-gradient(circle at 50% 44%, rgba(255,255,255,0.28), rgba(46,107,255,0.92) 46%, rgba(88,72,245,0.82) 76%)',
-        boxShadow: '0 18px 48px rgba(46, 107, 255, 0.26)',
+        background: 'radial-gradient(circle at 50% 48%, rgba(255,255,255,0.22), rgba(46,107,255,0.28) 38%, rgba(46,107,255,0.08) 62%, transparent 72%)',
+        boxShadow: '0 18px 52px rgba(46, 107, 255, 0.18)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -27,18 +27,33 @@ export function AvatarPlaceholder() {
       }}>
         <div style={{
           position: 'absolute',
-          width: '148px',
-          height: '42px',
-          border: '2px solid rgba(255,255,255,0.56)',
+          width: '150px',
+          height: '38px',
+          border: '2px solid rgba(46,107,255,0.42)',
           borderRadius: '50%',
           transform: 'rotate(-18deg)',
         }} />
         <div style={{
+          position: 'absolute',
+          width: '72px',
+          height: '72px',
+          border: '1.5px solid rgba(255,255,255,0.38)',
+          borderRadius: '50%',
+          background: 'rgba(46,107,255,0.18)',
+        }} />
+        <div style={{
+          width: 44,
+          height: 44,
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(255,255,255,0.92), rgba(46,107,255,0.34) 48%, rgba(46,107,255,0.14) 70%)',
+          position: 'absolute',
+        }} />
+        <div style={{
           width: 0,
           height: 0,
-          borderLeft: '16px solid transparent',
-          borderRight: '16px solid transparent',
-          borderBottom: '38px solid rgba(255,255,255,0.82)',
+          borderLeft: '10px solid transparent',
+          borderRight: '10px solid transparent',
+          borderBottom: '26px solid rgba(255,255,255,0.86)',
           filter: 'drop-shadow(0 4px 10px rgba(31,42,68,0.16))',
           transform: 'rotate(45deg)',
         }} />

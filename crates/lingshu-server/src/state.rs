@@ -23,6 +23,10 @@ pub struct PetNotification {
     pub body: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_url: Option<String>,
+    /// Arbitrary extra payload — used by `mood` events to carry personality
+    /// traits so the pet window can adjust its animation parameters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 impl PetNotification {
@@ -32,7 +36,18 @@ impl PetNotification {
             title: title.into(),
             body: body.into(),
             action_url: None,
+            data: None,
         }
+    }
+
+    /// Send a bare mood change (no extra data).
+    pub fn mood(m: &str) -> Self {
+        Self { kind: "mood".into(), title: m.into(), body: String::new(), action_url: None, data: None }
+    }
+
+    /// Send a mood change with an attached JSON payload (e.g. personality traits).
+    pub fn mood_with_data(m: &str, data: serde_json::Value) -> Self {
+        Self { kind: "mood".into(), title: m.into(), body: String::new(), action_url: None, data: Some(data) }
     }
 }
 
