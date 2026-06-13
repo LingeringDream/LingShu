@@ -48,8 +48,17 @@ jobs:
       - name: Build Tauri app
         run: npm run tauri build
         working-directory: frontend
+        env:
+          # CI runners have no "LingShu Dev" cert in their keychain, so the
+          # tauri.conf signingIdentity makes codesign fail ("item could not be
+          # found in the keychain"). APPLE_SIGNING_IDENTITY takes precedence over
+          # tauri.conf, so "-" makes tauri build ad-hoc sign the bundle (incl.
+          # the lingshu-server sidecar) with no cert. Local builds leave this
+          # unset → keep "LingShu Dev" (stable signature so the macOS
+          # Accessibility grant survives rebuilds).
+          APPLE_SIGNING_IDENTITY: "-"
 
-      # ── Ad-hoc sign (reduces some Gatekeeper paths) ────────────
+      # ── Re-sign ad-hoc, --deep, to ensure every nested binary is covered ──
       - name: Codesign app
         run: |
           codesign --force --deep --sign - \
