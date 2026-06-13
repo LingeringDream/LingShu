@@ -20,16 +20,76 @@ mod ws;
 
 use axum::http::{HeaderValue, Method};
 use axum::Router;
+#[cfg(unix)]
+use std::ffi::OsStr;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::AppConfig;
 use crate::state::AppState;
 
+#[cfg(unix)]
+const EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
+#[cfg(unix)]
+const EXIT_WITH_PARENT_VALUE: &str = "1";
 const LOCAL_FRONTEND_ORIGIN: &str = "http://localhost:5173";
+
+/// When launched as the Tauri desktop sidecar (the spawner sets
+/// `LINGSHU_EXIT_WITH_PARENT=1`), terminate ourselves as soon as that parent
+/// process dies. The desktop app only kills the sidecar on a *graceful* exit;
+/// an abrupt one (Ctrl+C on `tauri dev`, a rebuild-triggered restart, or a
+/// crash) skips that cleanup and orphans us still holding :8080, which then
+/// blocks the next launch ("address already in use"). macOS reparents orphans
+/// to launchd, so a changed `getppid()` means the spawner is gone — release the
+/// port and quit. No-op when the env var is unset (standalone `cargo run`,
+/// Docker), so a manually-run backend is never affected.
+#[cfg(unix)]
+fn exit_when_parent_dies() {
+    let requested = std::env::var_os(EXIT_WITH_PARENT_ENV);
+    if !parent_watch_requested(requested.as_deref()) {
+        return;
+    }
+    let original_ppid = unsafe { libc::getppid() };
+    if !parent_watch_can_start(original_ppid) {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("parent-watch".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let current_ppid = unsafe { libc::getppid() };
+            if parent_has_died(original_ppid, current_ppid) {
+                // Parent gone; free :8080 immediately for the next launch.
+                std::process::exit(0);
+            }
+        })
+        .ok();
+}
+
+#[cfg(unix)]
+fn parent_watch_requested(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|value| value == EXIT_WITH_PARENT_VALUE)
+}
+
+#[cfg(unix)]
+fn parent_has_died(original_ppid: libc::pid_t, current_ppid: libc::pid_t) -> bool {
+    parent_watch_can_start(original_ppid) && current_ppid != original_ppid
+}
+
+#[cfg(unix)]
+fn parent_watch_can_start(original_ppid: libc::pid_t) -> bool {
+    original_ppid > 1
+}
+
+#[cfg(not(unix))]
+fn exit_when_parent_dies() {}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Must run before dotenv so a local .env file cannot accidentally opt a
+    // standalone backend into sidecar lifecycle behavior.
+    exit_when_parent_dies();
+
     // Load .env file (silently skip if missing)
     let _ = dotenvy::dotenv();
 
@@ -129,6 +189,35 @@ fn allowed_cors_origins(config: &crate::config::CorsConfig) -> Vec<HeaderValue> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::ffi::OsStr;
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_watch_env_requires_exact_opt_in_value() {
+        assert!(!parent_watch_requested(None));
+        assert!(!parent_watch_requested(Some(OsStr::new(""))));
+        assert!(!parent_watch_requested(Some(OsStr::new("0"))));
+        assert!(parent_watch_requested(Some(OsStr::new("1"))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_watch_exits_only_after_original_parent_changes() {
+        assert!(!parent_has_died(1, 1));
+        assert!(!parent_has_died(1, 99));
+        assert!(!parent_has_died(42, 42));
+        assert!(parent_has_died(42, 1));
+        assert!(parent_has_died(42, 99));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_watch_starts_only_with_real_parent() {
+        assert!(!parent_watch_can_start(0));
+        assert!(!parent_watch_can_start(1));
+        assert!(parent_watch_can_start(2));
+    }
 
     #[test]
     fn wildcard_cors_origin_falls_back_to_localhost_frontend() {

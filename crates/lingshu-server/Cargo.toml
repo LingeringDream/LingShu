@@ -38,6 +38,9 @@ futures = { workspace = true }
 bytes = { workspace = true }
 
 dotenvy = "0.15"
+# getppid() for the "exit when the Tauri parent dies" sidecar watchdog (unix
+# only; the call site is #[cfg(unix)]-gated).
+libc = "0.2"
 
 # Internal crates
 lingshu-vector = { path = "../lingshu-vector" }
