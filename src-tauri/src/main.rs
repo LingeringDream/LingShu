@@ -19,6 +19,8 @@ use tauri_plugin_shell::ShellExt;
 
 const BACKEND_PORT: u16 = 8080;
 const SIDECAR_BINARY_NAME: &str = "lingshu-server";
+const SIDECAR_EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
+const SIDECAR_EXIT_WITH_PARENT_VALUE: &str = "1";
 
 #[path = "eventkit.rs"]
 mod eventkit;
@@ -331,33 +333,49 @@ fn main() {
             match app.shell().sidecar(SIDECAR_BINARY_NAME) {
                 Ok(sidecar) => {
                     terminate_stale_bundled_sidecars(BACKEND_PORT);
+                    // Have the sidecar self-terminate if this app dies, so an
+                    // abrupt exit (Ctrl+C on `tauri dev`, a rebuild-triggered
+                    // restart, or a crash) can't orphan it on :8080 and block
+                    // the next launch.
+                    let sidecar = sidecar.env(
+                        SIDECAR_EXIT_WITH_PARENT_ENV,
+                        SIDECAR_EXIT_WITH_PARENT_VALUE,
+                    );
                     match sidecar.spawn() {
-                    Ok((mut rx, child)) => {
-                        app.manage(SidecarGuard(Mutex::new(Some(child))));
-                        tauri::async_runtime::spawn(async move {
-                            while let Some(event) = rx.recv().await {
-                                match event {
-                                    tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                                        println!("[lingshu-server] {}", String::from_utf8_lossy(&line));
+                        Ok((mut rx, child)) => {
+                            app.manage(SidecarGuard(Mutex::new(Some(child))));
+                            tauri::async_runtime::spawn(async move {
+                                while let Some(event) = rx.recv().await {
+                                    match event {
+                                        tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
+                                            println!(
+                                                "[lingshu-server] {}",
+                                                String::from_utf8_lossy(&line)
+                                            );
+                                        }
+                                        tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+                                            eprintln!(
+                                                "[lingshu-server] {}",
+                                                String::from_utf8_lossy(&line)
+                                            );
+                                        }
+                                        tauri_plugin_shell::process::CommandEvent::Terminated(
+                                            status,
+                                        ) => {
+                                            println!("[lingshu-server] exited with {status:?}");
+                                        }
+                                        tauri_plugin_shell::process::CommandEvent::Error(err) => {
+                                            eprintln!("[lingshu-server] error: {err}");
+                                        }
+                                        _ => {}
                                     }
-                                    tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                                        eprintln!("[lingshu-server] {}", String::from_utf8_lossy(&line));
-                                    }
-                                    tauri_plugin_shell::process::CommandEvent::Terminated(status) => {
-                                        println!("[lingshu-server] exited with {status:?}");
-                                    }
-                                    tauri_plugin_shell::process::CommandEvent::Error(err) => {
-                                        eprintln!("[lingshu-server] error: {err}");
-                                    }
-                                    _ => {}
                                 }
-                            }
-                        });
-                        println!("[lingshu-tauri] sidecar launched");
-                    }
-                    Err(e) => {
-                        eprintln!("[lingshu-tauri] failed to spawn sidecar: {e}");
-                    }
+                            });
+                            println!("[lingshu-tauri] sidecar launched");
+                        }
+                        Err(e) => {
+                            eprintln!("[lingshu-tauri] failed to spawn sidecar: {e}");
+                        }
                     }
                 }
                 Err(e) => {
@@ -479,5 +497,11 @@ mod tests {
         assert!(!command_looks_like_bundled_lingshu_sidecar(
             "/Users/ymqz/projects/PA/target/debug/lingshu-server --port 8080"
         ));
+    }
+
+    #[test]
+    fn sidecar_parent_watch_env_contract_is_stable() {
+        assert_eq!(SIDECAR_EXIT_WITH_PARENT_ENV, "LINGSHU_EXIT_WITH_PARENT");
+        assert_eq!(SIDECAR_EXIT_WITH_PARENT_VALUE, "1");
     }
 }

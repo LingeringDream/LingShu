@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-13
+
+### Version 1.0.3
+
+- `fix(desktop)`: Tauri-spawned `lingshu-server` now self-terminates when its parent app process dies, preventing orphaned sidecars from holding port 8080 after dev Ctrl+C, Rust rebuild restarts, crashes, or force quits.
+- `test`: add parent-watch env/PPID tests and a Tauri env-contract test for the sidecar lifecycle handoff.
+
 ## 2026-06-12
 
 ### Version 1.0.0
