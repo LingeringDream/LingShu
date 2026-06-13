@@ -153,7 +153,8 @@ impl AppState {
                 if config.qdrant.url.is_empty() {
                     None
                 } else {
-                    match try_connect_qdrant(&config.qdrant.url, config.llm.embed_dim, &http).await {
+                    match try_connect_qdrant(&config.qdrant.url, config.llm.embed_dim, &http).await
+                    {
                         Ok(client) => {
                             tracing::info!("Qdrant connected");
                             Some(client)
