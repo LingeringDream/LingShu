@@ -101,14 +101,8 @@ pub struct AppState {
 
 impl AppState {
     pub async fn new(config: &AppConfig) -> anyhow::Result<Self> {
-        // PostgreSQL (required)
-        let db = PgPoolOptions::new()
-            .max_connections(config.database.max_connections)
-            .acquire_timeout(std::time::Duration::from_secs(5))
-            .connect(&config.database.url)
-            .await?;
-
-        // Shared HTTP client — used by both LlmClient and QdrantClient.
+        // Shared HTTP client — used by both LlmClient and QdrantClient. Built
+        // first because the Qdrant connect below borrows it.
         //
         // NOTE: deliberately NOT using `.timeout()`. reqwest's total timeout
         // caps the WHOLE request including the streaming response body, so a
@@ -127,37 +121,53 @@ impl AppState {
             .read_timeout(std::time::Duration::from_secs(180))
             .build()?;
 
-        // Redis (optional — skip if URL is empty or connection fails)
-        let redis = if config.redis.url.is_empty() {
-            None
-        } else {
-            match try_connect_redis(&config.redis.url).await {
-                Ok(client) => {
-                    tracing::info!("Redis connected");
-                    Some(client)
-                }
-                Err(e) => {
-                    tracing::warn!("Redis unavailable (non-fatal): {}", e);
+        // Connect PostgreSQL (required) + Redis + Qdrant (both optional)
+        // concurrently. These are independent network round-trips, so doing them
+        // together shaves cold-start latency before the server binds :8080 — and
+        // the desktop app keeps its window hidden until :8080 is up, so a faster
+        // startup makes the window appear sooner.
+        let (db, redis, vector) = tokio::join!(
+            PgPoolOptions::new()
+                .max_connections(config.database.max_connections)
+                .acquire_timeout(std::time::Duration::from_secs(5))
+                .connect(&config.database.url),
+            async {
+                // Redis (optional — skip if URL is empty or connection fails)
+                if config.redis.url.is_empty() {
                     None
+                } else {
+                    match try_connect_redis(&config.redis.url).await {
+                        Ok(client) => {
+                            tracing::info!("Redis connected");
+                            Some(client)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Redis unavailable (non-fatal): {}", e);
+                            None
+                        }
+                    }
                 }
-            }
-        };
-
-        // Qdrant (optional — skip if URL is empty or connection fails)
-        let vector = if config.qdrant.url.is_empty() {
-            None
-        } else {
-            match try_connect_qdrant(&config.qdrant.url, config.llm.embed_dim, &http).await {
-                Ok(client) => {
-                    tracing::info!("Qdrant connected");
-                    Some(client)
-                }
-                Err(e) => {
-                    tracing::warn!("Qdrant unavailable (non-fatal): {}", e);
+            },
+            async {
+                // Qdrant (optional — skip if URL is empty or connection fails)
+                if config.qdrant.url.is_empty() {
                     None
+                } else {
+                    match try_connect_qdrant(&config.qdrant.url, config.llm.embed_dim, &http).await {
+                        Ok(client) => {
+                            tracing::info!("Qdrant connected");
+                            Some(client)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Qdrant unavailable (non-fatal): {}", e);
+                            None
+                        }
+                    }
                 }
-            }
-        };
+            },
+        );
+        // PostgreSQL is required — abort if it is unreachable.
+        let db = db?;
 
         // Pre-derive the encryption cipher once at startup (100k-round KDF)
         let token_cipher: Option<Arc<TokenCipher>> = match config.security.encryption_key.as_deref()

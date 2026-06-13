@@ -79,13 +79,29 @@ export default function App() {
   const bootLocalSession = useCallback(async () => {
     setSessionState('loading');
     setSessionError(null);
-    try {
-      await ensureLocalSession(true);
-      setSessionState('ready');
-    } catch (e) {
-      setSessionError(getErrorMessage(e, '本地会话启动失败'));
-      setSessionState('error');
+    // The bundled backend sidecar needs a few seconds to boot on launch
+    // (connect to Postgres, run migrations, bind :8080). A single attempt that
+    // fires the instant the window opens loses the race and strands the UI in
+    // the error state even though the backend comes up moments later. Retry
+    // with light backoff for up to ~30 s, staying in the 'loading' state so the
+    // user sees "connecting" rather than "failed" during a normal cold start.
+    const deadlineMs = Date.now() + 30_000;
+    let lastError: unknown;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await ensureLocalSession(true);
+        setSessionState('ready');
+        return;
+      } catch (e) {
+        lastError = e;
+        if (Date.now() >= deadlineMs) break;
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(500 + attempt * 250, 2000)),
+        );
+      }
     }
+    setSessionError(getErrorMessage(lastError, '本地会话启动失败'));
+    setSessionState('error');
   }, []);
 
   useEffect(() => {
