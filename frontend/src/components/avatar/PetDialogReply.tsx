@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import { ArrowUpRightIcon } from '../icons';
 
 interface PetDialogReplyProps {
   content: string;
@@ -68,7 +69,8 @@ export function PetDialogReply({ content, streaming = false, onExpand }: PetDial
             cursor: 'pointer',
           }}
         >
-          在主窗口查看完整回复 ↗
+          在主窗口查看完整回复{' '}
+          <ArrowUpRightIcon size={11} style={{ verticalAlign: '-1px' }} />
         </button>
       )}
     </div>

@@ -9,6 +9,7 @@ pub mod permissions;
 pub mod personality;
 pub mod project_members;
 pub mod projects;
+pub mod providers;
 pub mod sessions;
 pub mod settings;
 pub mod signals;
@@ -93,6 +94,13 @@ use utoipa::OpenApi;
         sessions::list_sessions,
         sessions::get_session,
         sessions::delete_session,
+        providers::list_providers,
+        providers::get_provider,
+        providers::create_provider,
+        providers::update_provider,
+        providers::delete_provider,
+        providers::activate_provider,
+        providers::test_connectivity,
     ),
     components(schemas(
         system::HealthResponse,
@@ -136,6 +144,12 @@ use utoipa::OpenApi;
         chat::ChatRequest,
         signals::SignalIngestRequest,
         sessions::SessionResponse,
+        providers::ProviderResponse,
+        providers::CreateProviderRequest,
+        providers::UpdateProviderRequest,
+        providers::ConnectivityResult,
+        providers::ProviderModel,
+        providers::BuiltInProvider,
     ))
 )]
 pub struct ApiDoc;

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiFetch } from '../../lib/api';
+import { ChevronIcon } from '../icons';
 
 interface Permissions {
   l0_enabled: boolean;
@@ -93,7 +94,10 @@ export function PermissionSettings() {
         <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-secondary)' }}>
           权限分级
         </span>
-        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{expanded ? '▼' : '▶'}</span>
+        <ChevronIcon
+          size={14}
+          style={{ color: 'var(--text-secondary)', transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}
+        />
       </div>
 
       {expanded && (

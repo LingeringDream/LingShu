@@ -3,6 +3,15 @@ import { apiFetch, postSignal } from '../../lib/api';
 import { runAutomationAction } from '../../lib/automation';
 import { isTauri, invokeTauri } from '../../lib/tauri';
 import { MarkdownContent } from './MarkdownContent';
+import {
+  ThumbsUpIcon,
+  ThumbsDownIcon,
+  RulerIcon,
+  ScissorsIcon,
+  PenIcon,
+  CheckIcon,
+  UnlockIcon,
+} from '../icons';
 
 export interface Message {
   id: string;
@@ -86,7 +95,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             title="点赞"
             style={feedbackChipStyle(feedbackSent === 'reply_thumb_up')}
           >
-            👍
+            <ThumbsUpIcon size={14} title="点赞" />
           </button>
 
           {/* Thumbs down */}
@@ -96,7 +105,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             title="点踩"
             style={feedbackChipStyle(feedbackSent === 'reply_thumb_down')}
           >
-            👎
+            <ThumbsDownIcon size={14} title="点踩" />
           </button>
 
           {/* Style chips */}
@@ -106,7 +115,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             title="太长了"
             style={feedbackChipStyle(feedbackSent === 'reply_style_tag')}
           >
-            📏 太长了
+            <RulerIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />太长了
           </button>
           <button
             disabled={!canSendFeedback}
@@ -114,7 +123,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             title="太短了"
             style={feedbackChipStyle()}
           >
-            ✂️ 太短了
+            <ScissorsIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />太短了
           </button>
           <button
             disabled={!canSendFeedback}
@@ -122,7 +131,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
             title="太正式"
             style={feedbackChipStyle()}
           >
-            📝 太正式
+            <PenIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />太正式
           </button>
         </div>
       )}
@@ -209,13 +218,16 @@ function PermissionGrantButton({ requests }: { requests: PermissionRequest[] }) 
             opacity: loading ? 0.6 : 1,
           }}
         >
+          {granted.has(req.target)
+            ? <CheckIcon size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+            : <UnlockIcon size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />}
           {req.kind === 'accessibility'
             ? granted.has(req.target)
-              ? '✅ 已开启 L3 权限——请在系统设置中勾选「灵枢」后重试'
-              : '🔓 开启屏幕识别权限'
+              ? '已开启 L3 权限——请在系统设置中勾选「灵枢」后重试'
+              : '开启屏幕识别权限'
             : granted.has(req.target)
-              ? `✅ 已授权并打开 ${req.target}`
-              : `🔓 授予权限并打开 ${req.target}`}
+              ? `已授权并打开 ${req.target}`
+              : `授予权限并打开 ${req.target}`}
         </button>
       ))}
     </div>

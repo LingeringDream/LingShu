@@ -5,6 +5,7 @@
 mod auth;
 mod cache;
 mod config;
+mod cooldown;
 mod crypto;
 mod db;
 mod error;
@@ -112,6 +113,28 @@ async fn main() -> anyhow::Result<()> {
 
     // Load configuration
     let config = AppConfig::load()?;
+
+    // Refuse to start with insecure default secrets in non-sidecar mode.
+    // Sidecar mode (LINGSHU_EXIT_WITH_PARENT=1) is the Tauri desktop bundle
+    // where the backend is an internal process not exposed to the network.
+    let is_sidecar = cfg!(unix)
+        && std::env::var_os(EXIT_WITH_PARENT_ENV).is_some_and(|v| v == EXIT_WITH_PARENT_VALUE);
+    if !is_sidecar {
+        let insecure_defaults = [
+            "lingshu-local-dev",
+            "change-me-in-production",
+            "change-me-dev-jwt-secret",
+        ];
+        if insecure_defaults.contains(&config.security.jwt_secret.as_str()) {
+            anyhow::bail!(
+                "JWT_SECRET is set to an insecure default value ({}). \
+                 Generate a strong random key and set it in config.toml or .env. \
+                 Example: openssl rand -hex 32",
+                config.security.jwt_secret
+            );
+        }
+    }
+
     tracing::info!(
         "Starting LingShu server on {}:{}",
         config.server.host,
@@ -158,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::integrations::router())
         .merge(routes::signals::router())
         .merge(routes::audit::router())
+        .merge(routes::providers::router())
         .merge(
             utoipa_swagger_ui::SwaggerUi::new("/swagger-ui")
                 .url("/api-docs/openapi.json", routes::openapi_spec()),

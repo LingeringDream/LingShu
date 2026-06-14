@@ -36,11 +36,13 @@ api_base_url = ""
 
 [security]
 # Change this for any non-local deployment
-jwt_secret = "change-me-dev-jwt-secret"
+# Generate with: openssl rand -hex 32
+jwt_secret = "CHANGE-ME-TO-A-RANDOM-SECRET"
 # encryption_key derives an AES-256-GCM key (via SHA-256) used to encrypt
 # integration access/refresh tokens at rest. Required before creating any
 # integration — POST /api/v1/integrations is rejected until this is set.
-# encryption_key = "change-me-dev-encryption-key"
+# Generate with: openssl rand -hex 32
+# encryption_key = "CHANGE-ME-TO-A-HIGH-ENTROPY-RANDOM-KEY"
 
 [cors]
 # Allowed origins for browser requests

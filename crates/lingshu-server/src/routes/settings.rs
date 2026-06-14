@@ -70,6 +70,27 @@ impl Default for LlmSettings {
     }
 }
 
+impl LlmSettings {
+    /// Return a copy with the API key masked for safe external consumption.
+    pub fn masked(&self) -> Self {
+        let mut s = self.clone();
+        if !s.api_key.is_empty() {
+            s.api_key = mask_api_key(&s.api_key);
+        }
+        s
+    }
+}
+
+/// Mask an API key: show first 4 and last 4 characters, replace middle with `***`.
+fn mask_api_key(key: &str) -> String {
+    if key.len() <= 8 {
+        return "***".to_string();
+    }
+    let prefix = &key[..4];
+    let suffix = &key[key.len() - 4..];
+    format!("{prefix}***{suffix}")
+}
+
 pub async fn llm_settings_for_user(state: &AppState, user_id: Uuid) -> LlmSettings {
     // 1. In-memory (fast path)
     {
@@ -135,7 +156,8 @@ async fn get_llm_settings(
     auth: Option<AuthUser>,
 ) -> Result<Json<LlmSettings>, AppError> {
     let user_id = auth::require_user(auth).await?;
-    Ok(Json(llm_settings_for_user(&state, user_id).await))
+    let settings = llm_settings_for_user(&state, user_id).await;
+    Ok(Json(settings.masked()))
 }
 
 #[utoipa::path(
@@ -158,10 +180,8 @@ async fn update_llm_settings(
 
     if let Some(provider) = patch.provider {
         let p = provider.trim().to_lowercase();
-        if p != "ollama" && p != "openai" {
-            return Err(AppError::Validation(
-                "provider must be 'ollama' or 'openai'".into(),
-            ));
+        if p.is_empty() {
+            return Err(AppError::Validation("provider must not be empty".into()));
         }
         settings.provider = p;
     }

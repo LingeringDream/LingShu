@@ -690,6 +690,32 @@ impl LlmClient {
         parse_byte_stream(byte_stream, parse_openai_line)
     }
 
+    /// Expose the shared HTTP client for external callers (e.g. connectivity tests).
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// Test Ollama connectivity by fetching the model list.
+    pub async fn test_ollama_models(&self, url: &str) -> anyhow::Result<usize> {
+        #[derive(Deserialize)]
+        struct TagsResponse {
+            models: Vec<TagModel>,
+        }
+        #[derive(Deserialize)]
+        struct TagModel {
+            name: String,
+        }
+        let resp: TagsResponse = self
+            .http
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(resp.models.len())
+    }
+
     fn openai_chat_completions_url(&self) -> String {
         let base_url = self
             .api_base_url

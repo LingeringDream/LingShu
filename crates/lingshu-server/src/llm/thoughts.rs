@@ -6,8 +6,6 @@
 //! deduplicated, and inserted into `thought_queue` with status `pending`.
 
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
 use crate::llm::client::{ChatMessage, LlmClient};
@@ -33,30 +31,8 @@ const SUPPRESS_DISMISSED_DAYS: i32 = 14;
 
 // ── Cooldown tracking ─────────────────────────────────────────────
 
-static LAST_GENERATIONS: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
-
 pub fn should_generate_thoughts(user_id: Uuid) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let mut map = last_generations()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-    if let Some(last) = map.get(&user_id) {
-        if now.saturating_sub(*last) < THOUGHT_COOLDOWN_SECS {
-            return false;
-        }
-    }
-
-    map.insert(user_id, now);
-    true
-}
-
-fn last_generations() -> &'static Mutex<HashMap<Uuid, u64>> {
-    LAST_GENERATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+    crate::cooldown::thought_generations().should_run(user_id)
 }
 
 // ── Candidate type ────────────────────────────────────────────────

@@ -17,6 +17,10 @@ pub fn llm_settings_cache_key(user_id: Uuid) -> String {
     format!("lingshu:user:{user_id}:llm_settings:v1")
 }
 
+pub fn llm_providers_cache_key(user_id: Uuid) -> String {
+    format!("lingshu:user:{user_id}:llm_providers:v1")
+}
+
 pub fn chat_sessions_cache_key(user_id: Uuid) -> String {
     format!("lingshu:user:{user_id}:chat_sessions:v1")
 }

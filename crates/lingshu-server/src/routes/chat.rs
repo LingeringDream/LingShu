@@ -7,9 +7,8 @@ use chrono::{DateTime, Local, Utc};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
     convert::Infallible,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
 };
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -686,22 +685,18 @@ fn has_assistant_response(assistant_response: &Option<String>) -> bool {
 /// Minimum seconds between automatic forgetting sweeps per user.
 const FORGETTING_SWEEP_COOLDOWN_SECS: u64 = 24 * 60 * 60; // 24 hours
 
-static LAST_FORGETTING_SWEEPS: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
-
 /// Check whether the per-user cooldown allows a forgetting sweep to run now.
 fn should_run_sweep(user_id: Uuid) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let mut map = last_forgetting_sweeps()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    should_run_sweep_at(&mut map, user_id, now)
+    crate::cooldown::forgetting_sweeps().should_run(user_id)
 }
 
 /// Pure helper — testable without a real system clock.
-fn should_run_sweep_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: u64) -> bool {
+#[cfg(test)]
+fn should_run_sweep_at(
+    last: &mut std::collections::HashMap<Uuid, u64>,
+    user_id: Uuid,
+    now: u64,
+) -> bool {
     if let Some(prev) = last.get(&user_id) {
         if now.saturating_sub(*prev) < FORGETTING_SWEEP_COOLDOWN_SECS {
             return false;
@@ -709,10 +704,6 @@ fn should_run_sweep_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: u64) -
     }
     last.insert(user_id, now);
     true
-}
-
-fn last_forgetting_sweeps() -> &'static Mutex<HashMap<Uuid, u64>> {
-    LAST_FORGETTING_SWEEPS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// `(id, importance, last_accessed_at, created_at)` — one row of decay input.
@@ -868,10 +859,13 @@ const THOUGHT_MAINTENANCE_COOLDOWN_SECS: u64 = 24 * 60 * 60; // 24 hours
 /// Pending/shown thoughts older than this are auto-expired.
 const STALE_THOUGHT_DAYS: i32 = 14;
 
-static LAST_THOUGHT_MAINTENANCE: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
-
 /// Per-user cooldown gate. Pure helper — testable without a real system clock.
-fn should_run_maintenance_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: u64) -> bool {
+#[cfg(test)]
+fn should_run_maintenance_at(
+    last: &mut std::collections::HashMap<Uuid, u64>,
+    user_id: Uuid,
+    now: u64,
+) -> bool {
     if let Some(prev) = last.get(&user_id) {
         if now.saturating_sub(*prev) < THOUGHT_MAINTENANCE_COOLDOWN_SECS {
             return false;
@@ -882,15 +876,7 @@ fn should_run_maintenance_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: 
 }
 
 fn should_run_thought_maintenance(user_id: Uuid) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let mut map = LAST_THOUGHT_MAINTENANCE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    should_run_maintenance_at(&mut map, user_id, now)
+    crate::cooldown::thought_maintenance().should_run(user_id)
 }
 
 /// Best-effort background maintenance: expire stale pending/shown thoughts
@@ -2303,6 +2289,7 @@ async fn run_tool_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn chat_tools_includes_calendar_and_automation_tools() {
