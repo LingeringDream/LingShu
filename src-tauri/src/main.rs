@@ -10,7 +10,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
@@ -21,6 +26,9 @@ const BACKEND_PORT: u16 = 8080;
 const SIDECAR_BINARY_NAME: &str = "lingshu-server";
 const SIDECAR_EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
 const SIDECAR_EXIT_WITH_PARENT_VALUE: &str = "1";
+const SIDECAR_ENCRYPTION_KEY_ENV: &str = "ENCRYPTION_KEY";
+const SIDECAR_ENCRYPTION_KEY_FILE: &str = "sidecar-encryption-key";
+const SIDECAR_ENCRYPTION_KEY_LEN: usize = 32;
 
 #[path = "eventkit.rs"]
 mod eventkit;
@@ -266,6 +274,116 @@ fn save_pet_window_position(app: &tauri::AppHandle, position: PetWindowPosition)
     }
 }
 
+fn sidecar_encryption_key_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join(SIDECAR_ENCRYPTION_KEY_FILE))
+}
+
+fn normalize_encryption_key(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn normalize_config_assignment_value(value: &str) -> Option<String> {
+    let without_inline_comment = value.split('#').next().unwrap_or(value).trim();
+    let unquoted = without_inline_comment
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(without_inline_comment);
+    normalize_encryption_key(unquoted)
+}
+
+fn file_has_non_empty_assignment(path: &Path, key: &str) -> bool {
+    let Ok(content) = fs::read_to_string(path) else {
+        return false;
+    };
+
+    content.lines().any(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return false;
+        }
+        let Some((name, value)) = trimmed.split_once('=') else {
+            return false;
+        };
+        name.trim() == key && normalize_config_assignment_value(value).is_some()
+    })
+}
+
+fn backend_config_has_encryption_key(cwd: &Path) -> bool {
+    file_has_non_empty_assignment(&cwd.join(".env"), SIDECAR_ENCRYPTION_KEY_ENV)
+        || file_has_non_empty_assignment(&cwd.join("config.toml"), "encryption_key")
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn generate_sidecar_encryption_key() -> Option<String> {
+    let mut bytes = [0u8; SIDECAR_ENCRYPTION_KEY_LEN];
+    getrandom::getrandom(&mut bytes).ok()?;
+    Some(encode_hex(&bytes))
+}
+
+fn write_secret_file(path: &Path, value: &str) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let mut file = options.open(path)?;
+    file.write_all(value.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(())
+}
+
+fn load_or_create_sidecar_encryption_key_at(
+    path: &Path,
+    generate: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if let Ok(existing) = fs::read_to_string(path) {
+        if let Some(key) = normalize_encryption_key(&existing) {
+            return Some(key);
+        }
+    }
+
+    let key = generate()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok()?;
+    }
+    write_secret_file(path, &key).ok()?;
+    Some(key)
+}
+
+fn sidecar_encryption_key(app: &tauri::AppHandle) -> Option<String> {
+    if let Ok(value) = std::env::var(SIDECAR_ENCRYPTION_KEY_ENV) {
+        if let Some(key) = normalize_encryption_key(&value) {
+            return Some(key);
+        }
+    }
+    if std::env::current_dir()
+        .ok()
+        .as_deref()
+        .is_some_and(backend_config_has_encryption_key)
+    {
+        return None;
+    }
+
+    let path = sidecar_encryption_key_path(app)?;
+    load_or_create_sidecar_encryption_key_at(&path, generate_sidecar_encryption_key)
+}
+
 fn default_pet_position(
     monitor_width: u32,
     monitor_height: u32,
@@ -368,6 +486,12 @@ fn main() {
                         SIDECAR_EXIT_WITH_PARENT_ENV,
                         SIDECAR_EXIT_WITH_PARENT_VALUE,
                     );
+                    let sidecar = if let Some(encryption_key) = sidecar_encryption_key(app.handle())
+                    {
+                        sidecar.env(SIDECAR_ENCRYPTION_KEY_ENV, encryption_key)
+                    } else {
+                        sidecar
+                    };
                     match sidecar.spawn() {
                         Ok((mut rx, child)) => {
                             app.manage(SidecarGuard(Mutex::new(Some(child))));
@@ -558,5 +682,76 @@ mod tests {
     fn sidecar_parent_watch_env_contract_is_stable() {
         assert_eq!(SIDECAR_EXIT_WITH_PARENT_ENV, "LINGSHU_EXIT_WITH_PARENT");
         assert_eq!(SIDECAR_EXIT_WITH_PARENT_VALUE, "1");
+    }
+
+    #[test]
+    fn load_or_create_sidecar_encryption_key_reuses_existing_key_file() {
+        let path = unique_temp_path("existing-sidecar-key");
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&path, "  existing-key  \n").unwrap();
+
+        let key = load_or_create_sidecar_encryption_key_at(&path, || {
+            panic!("existing key should not be regenerated")
+        })
+        .expect("existing key");
+
+        assert_eq!(key, "existing-key");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_or_create_sidecar_encryption_key_creates_missing_key_file() {
+        let path = unique_temp_path("new-sidecar-key");
+        let _ = fs::remove_file(&path);
+
+        let key =
+            load_or_create_sidecar_encryption_key_at(&path, || Some("generated-key".to_string()))
+                .expect("generated key");
+
+        assert_eq!(key, "generated-key");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "generated-key\n");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn backend_config_has_encryption_key_detects_existing_local_config() {
+        let dir = unique_temp_path("config-with-key");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(".env"),
+            "JWT_SECRET=test\nENCRYPTION_KEY=existing-key\n",
+        )
+        .unwrap();
+
+        assert!(backend_config_has_encryption_key(&dir));
+
+        let _ = fs::remove_file(dir.join(".env"));
+        let _ = fs::remove_dir(dir);
+    }
+
+    #[test]
+    fn backend_config_has_encryption_key_ignores_empty_and_commented_values() {
+        let dir = unique_temp_path("config-without-key");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("config.toml"),
+            "# encryption_key = \"commented\"\n[security]\nencryption_key = \"\"\n",
+        )
+        .unwrap();
+
+        assert!(!backend_config_has_encryption_key(&dir));
+
+        let _ = fs::remove_file(dir.join("config.toml"));
+        let _ = fs::remove_dir(dir);
+    }
+
+    fn unique_temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "lingshu-tauri-{name}-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ))
     }
 }

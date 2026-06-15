@@ -23,17 +23,17 @@ pub fn router() -> Router<AppState> {
             get(list_providers).post(create_provider),
         )
         .route(
-            "/api/v1/settings/providers/{id}",
+            "/api/v1/settings/providers/:id",
             get(get_provider)
                 .patch(update_provider)
                 .delete(delete_provider),
         )
         .route(
-            "/api/v1/settings/providers/{id}/activate",
+            "/api/v1/settings/providers/:id/activate",
             post(activate_provider),
         )
         .route(
-            "/api/v1/settings/providers/{id}/test",
+            "/api/v1/settings/providers/:id/test",
             post(test_connectivity),
         )
 }
@@ -396,9 +396,10 @@ async fn sync_llm_settings_from_active_provider(
 
 fn encrypt_api_key(state: &AppState, key: &str) -> Result<Vec<u8>, AppError> {
     let cipher = state.token_cipher.as_ref().ok_or_else(|| {
-        AppError::Internal(anyhow::anyhow!(
-            "ENCRYPTION_KEY not configured — cannot encrypt API key"
-        ))
+        AppError::Validation(
+            "ENCRYPTION_KEY is required before saving provider API keys; set it in config.toml or .env and restart LingShu."
+                .into(),
+        )
     })?;
     cipher
         .encrypt(key)
@@ -407,9 +408,10 @@ fn encrypt_api_key(state: &AppState, key: &str) -> Result<Vec<u8>, AppError> {
 
 fn decrypt_api_key(state: &AppState, encrypted: &[u8]) -> Result<String, AppError> {
     let cipher = state.token_cipher.as_ref().ok_or_else(|| {
-        AppError::Internal(anyhow::anyhow!(
-            "ENCRYPTION_KEY not configured — cannot decrypt API key"
-        ))
+        AppError::Validation(
+            "ENCRYPTION_KEY is required before reading provider API keys; set it in config.toml or .env and restart LingShu."
+                .into(),
+        )
     })?;
     cipher
         .decrypt(encrypted)
@@ -549,6 +551,48 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn encrypt_api_key_reports_missing_encryption_key_as_validation_error() {
+        let state = test_state_without_token_cipher();
+
+        let err = encrypt_api_key(&state, "sk-test").expect_err("missing cipher should fail");
+
+        match err {
+            AppError::Validation(message) => {
+                assert!(message.contains("ENCRYPTION_KEY"));
+                assert!(message.contains("provider API keys"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_id_route_matches_path_segments() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::util::ServiceExt;
+
+        let provider_id = Uuid::new_v4();
+        let app = router().with_state(test_state_without_token_cipher());
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/settings/providers/{provider_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "provider id routes must match before auth rejects the request"
+        );
+    }
+
     #[test]
     fn llm_settings_from_provider_row_uses_active_provider_model_and_base_url() {
         let row = crate::models::provider::LlmProviderRow {
@@ -573,5 +617,42 @@ mod tests {
         assert_eq!(settings.model, "gemma4:12b");
         assert_eq!(settings.max_tokens, 4096);
         assert_eq!(settings.context_messages, 20);
+    }
+
+    fn test_state_without_token_cipher() -> AppState {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        use sqlx::postgres::PgPoolOptions;
+        use tokio::sync::RwLock;
+
+        AppState {
+            db: PgPoolOptions::new()
+                .connect_lazy("postgres://lingshu:lingshu@localhost:5432/lingshu")
+                .expect("lazy db pool"),
+            config: crate::config::AppConfig {
+                server: crate::config::ServerConfig::default(),
+                database: crate::config::DatabaseConfig::default(),
+                redis: crate::config::RedisConfig::default(),
+                qdrant: crate::config::QdrantConfig::default(),
+                llm: crate::config::LlmConfig::default(),
+                security: crate::config::SecurityConfig::default(),
+                cors: crate::config::CorsConfig::default(),
+            },
+            start_time: std::time::Instant::now(),
+            llm: crate::llm::client::LlmClient::new(
+                reqwest::Client::new(),
+                "http://localhost:11434",
+                None,
+                None,
+            ),
+            redis: None,
+            vector: None,
+            llm_settings: Arc::new(RwLock::new(HashMap::new())),
+            permissions: Arc::new(RwLock::new(HashMap::new())),
+            role_prompts: Arc::new(RwLock::new(HashMap::new())),
+            token_cipher: None,
+            pet_notifications: tokio::sync::broadcast::channel(1).0,
+        }
     }
 }
