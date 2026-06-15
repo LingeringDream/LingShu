@@ -109,6 +109,27 @@ cd src-tauri && cargo build
 
 When adding new API endpoints, register them with `utoipa` attributes in `crates/lingshu-server/src/routes/mod.rs`. Once the Phase 1 contract gate exists, include a test or generated-spec update that validates the OpenAPI schema.
 
+## Releasing / Version Bump
+
+The project version lives in **one source of truth**: the `[workspace.package]` version
+in the root `Cargo.toml`. Everything else derives from it or is updated by one script —
+you never hand-edit version strings across the tree.
+
+```bash
+# Bump every manifest + regenerate the OpenAPI contract in one command
+./scripts/bump-version.sh 1.2.0
+```
+
+This updates `Cargo.toml`, `src-tauri/Cargo.toml`, `frontend/package.json`, and
+regenerates `openapi.json`. These derive automatically and need no edits:
+
+- **`tauri.conf.json`** — `version` points at `../frontend/package.json`.
+- **OpenAPI `info.version`** — omitted in code, so `utoipa` uses `CARGO_PKG_VERSION`.
+- **README version badge** — a shields.io `dynamic/toml` badge reads `Cargo.toml` on `main`.
+
+After running the script: write a `CHANGELOG.md` entry, commit, and tag `vX.Y.Z`.
+`CHANGELOG.md` is the only place a version is written by hand (it's the release log).
+
 ## Project Structure
 
 ```

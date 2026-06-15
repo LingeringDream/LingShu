@@ -1,7 +1,7 @@
 # LingShu MVP 完成度对照 · MVP Status vs PRD
 
 > 对照 `CLAUDE.md` 的 MVP 范围与 `AI-PersonalAssistant-PRD.md`，记录截至当前的实现状态、
-> 已知局限与剩余可选项。版本：v1.0.0，日期：2026-06-12。
+> 已知局限与剩余可选项。日期：2026-06-15（版本见 [CHANGELOG](../CHANGELOG.md)）。
 > 图例：✅ 已实现并测试 · ◐ 已实现但有验证缺口/局限 · ⏳ 未做（可选/非 MVP）
 
 ## 一、MVP 四大件（CLAUDE.md 范围）
@@ -67,4 +67,4 @@ Chat 侧工具调用、WebSocket 实时推送、角色提示词、Markdown 渲�
 LLM 设置与权限分级的 PostgreSQL 持久化，以及 OpenAPI 契约门禁均已完工。
 CI 全绿：test + fmt + clippy + type-check + lint + build。
 
-**v1.0.0 发布于 2026-06-12。**
+**当前里程碑发布于 2026-06-15（版本号见 [CHANGELOG](../CHANGELOG.md)）。**

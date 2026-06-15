@@ -1,6 +1,6 @@
 # 灵枢 · LingShu
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FLingeringDream%2FLingShu%2Fmain%2FCargo.toml&query=%24.workspace.package.version&label=version&prefix=v&color=blue)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.88-orange)](./rust-toolchain.toml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](./CONTRIBUTING.md)
@@ -29,7 +29,7 @@ macOS 桌面宠物式 AI 个人助理：常驻桌面的悬浮形象，具备长�
 
 ## 项目状态
 
-**v1.0.0 — 核心功能完成，进入桌面/原生集成收尾阶段。** SoulLedger 记忆系统、人格、思考队列、权限分级、向量检索、信号埋点、工具调用、日历 EventKit 写入/删除等均已实现。后端含 **300+ 测试函数（16 项 DB 门控 ignored）**，前端新增 Vitest 套件（stores / lib / 组件，18 项）。
+**核心功能完成，进入桌面/原生集成收尾阶段。** SoulLedger 记忆系统、人格、思考队列、权限分级、向量检索、信号埋点、工具调用、日历 EventKit 写入/删除等均已实现。后端含 **300+ 测试函数（16 项 DB 门控 ignored）**，前端新增 Vitest 套件（stores / lib / 组件，18 项）。
 
 - ✅ Rust + Axum 后端（API、WebSocket、数据库迁移 001–0022）
 - ✅ React + TypeScript + Vite 前端（聊天 + 记忆/人格/日历/思绪中心 + 设置 + 角色提示词 + 工作区）

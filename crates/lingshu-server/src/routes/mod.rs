@@ -23,9 +23,10 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(
+    // `version` is intentionally omitted: utoipa falls back to CARGO_PKG_VERSION
+    // (the workspace version in the root Cargo.toml), our single source of truth.
     info(
         title = "LingShu API",
-        version = "1.0.0",
         description = "灵枢 macOS 桌面 AI 个人助理 API"
     ),
     paths(

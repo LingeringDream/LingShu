@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-15
+
+### Version 1.1.0
+
+- `chore`: bump all version numbers to 1.1.0 (Cargo.toml, package.json, tauri.conf.json, openapi.json).
+- Updated README.md, README.en.md, CLAUDE.md, and docs/mvp-status.md with v1.1.0.
+
 ## 2026-06-13
 
 ### Version 1.0.3
