@@ -272,7 +272,10 @@ export function ProviderSelector({ onProviderChange, onProvidersLoaded }: Provid
         method: 'POST',
       });
       if (resp.ok) {
+        const activated: SavedProvider = await resp.json();
         await fetchProviders();
+        const model = activated.models[0]?.id || '';
+        onProviderChange?.(activated.provider_id, model);
       }
     } catch {
       // best-effort

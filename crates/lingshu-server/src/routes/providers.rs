@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::models::provider::{built_in_providers, find_built_in};
+use crate::routes::settings;
 
 pub use crate::models::provider::{
     BuiltInProvider, ConnectivityResult, CreateProviderRequest, ProviderModel, ProviderResponse,
@@ -156,6 +157,10 @@ async fn create_provider(
     .bind(req.activate)
     .execute(&state.db)
     .await?;
+
+    if req.activate {
+        sync_llm_settings_from_active_provider(&state, user_id, id).await?;
+    }
 
     let row = load_provider_by_id(&state, user_id, id).await?;
     Ok((axum::http::StatusCode::CREATED, Json(row.into())))
@@ -385,38 +390,8 @@ async fn sync_llm_settings_from_active_provider(
     provider_id: Uuid,
 ) -> Result<(), AppError> {
     let row = load_provider_by_id(state, user_id, provider_id).await?;
-
-    let model = row
-        .models
-        .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(|m| m.get("id").or(m.get("name")))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let llm_settings = serde_json::json!({
-        "provider": row.provider_id,
-        "api_base_url": row.api_base_url,
-        "model": model,
-        "temperature": 0.7,
-        "max_tokens": 4096,
-        "context_messages": 20,
-    });
-
-    sqlx::query("UPDATE users SET llm_settings = $1, updated_at = NOW() WHERE id = $2")
-        .bind(&llm_settings)
-        .bind(user_id)
-        .execute(&state.db)
-        .await?;
-
-    // Invalidate in-memory cache
-    {
-        let mut map = state.llm_settings.write().await;
-        map.remove(&user_id);
-    }
-
-    Ok(())
+    let llm_settings = settings::llm_settings_from_provider_row(&row);
+    settings::persist_llm_settings_for_user(state, user_id, &llm_settings).await
 }
 
 fn encrypt_api_key(state: &AppState, key: &str) -> Result<Vec<u8>, AppError> {
@@ -537,6 +512,8 @@ async fn test_openai_compatible(
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
+
     use super::*;
 
     #[test]
@@ -570,5 +547,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn llm_settings_from_provider_row_uses_active_provider_model_and_base_url() {
+        let row = crate::models::provider::LlmProviderRow {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            provider_id: "ollama".into(),
+            display_name: "Ollama（本地）".into(),
+            api_key_encrypted: None,
+            api_base_url: Some("http://localhost:11434".into()),
+            models: serde_json::json!([
+                { "id": "gemma4:12b", "name": "gemma4:12b", "display_name": "gemma4:12b" }
+            ]),
+            is_active: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        let settings = settings::llm_settings_from_provider_row(&row);
+
+        assert_eq!(settings.provider, "ollama");
+        assert_eq!(settings.api_base_url, "http://localhost:11434");
+        assert_eq!(settings.model, "gemma4:12b");
+        assert_eq!(settings.max_tokens, 4096);
+        assert_eq!(settings.context_messages, 20);
     }
 }

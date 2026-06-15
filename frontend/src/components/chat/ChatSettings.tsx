@@ -33,18 +33,25 @@ export function ChatSettings({ collapsed: initialCollapsed = true }: ChatSetting
     setActiveProvider(data.saved.find((s) => s.is_active) ?? null);
   }, []);
 
+  const loadSettings = useCallback(async () => {
+    setLoading(true);
+    try {
+      const resp = await apiFetch('/api/v1/settings/llm');
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data: LlmSettings = await resp.json();
+      setSettings(data);
+      setError(null);
+    } catch (e) {
+      setError(`加载配置失败: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   // Load settings on mount
   useEffect(() => {
-    setLoading(true);
-    apiFetch('/api/v1/settings/llm')
-      .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
-      .then((data: LlmSettings) => {
-        setSettings(data);
-        setError(null);
-      })
-      .catch((e) => setError(`加载配置失败: ${e}`))
-      .finally(() => setLoading(false));
-  }, []);
+    void loadSettings();
+  }, [loadSettings]);
 
   const handleSave = async () => {
     if (!settings) return;
@@ -143,6 +150,7 @@ export function ChatSettings({ collapsed: initialCollapsed = true }: ChatSetting
           <ProviderSelector
             onProviderChange={(providerId, model) => {
               setSettings((s) => s ? { ...s, provider: providerId, model } : s);
+              void loadSettings();
             }}
             onProvidersLoaded={handleProvidersLoaded}
           />

@@ -277,15 +277,36 @@ fn default_pet_position(
     }
 }
 
+fn clamp_pet_position_to_monitor(
+    position: PetWindowPosition,
+    monitor_width: u32,
+    monitor_height: u32,
+    monitor_scale_factor: f64,
+) -> PetWindowPosition {
+    let default = default_pet_position(monitor_width, monitor_height, monitor_scale_factor);
+    PetWindowPosition {
+        x: position.x.clamp(0, default.x.max(0)),
+        y: position.y.clamp(0, default.y.max(0)),
+    }
+}
+
 fn pet_start_position(
     saved: Option<PetWindowPosition>,
     monitor_width: u32,
     monitor_height: u32,
     monitor_scale_factor: f64,
 ) -> PetWindowPosition {
-    saved.unwrap_or_else(|| {
-        default_pet_position(monitor_width, monitor_height, monitor_scale_factor)
-    })
+    saved.map_or_else(
+        || default_pet_position(monitor_width, monitor_height, monitor_scale_factor),
+        |position| {
+            clamp_pet_position_to_monitor(
+                position,
+                monitor_width,
+                monitor_height,
+                monitor_scale_factor,
+            )
+        },
+    )
 }
 
 fn main() {
@@ -299,11 +320,17 @@ fn main() {
             }
             if window.label() == "pet" {
                 if let tauri::WindowEvent::Moved(position) = event {
+                    // `Moved` reports PHYSICAL pixels, but the position math
+                    // (default_pet_position / clamp) and set_position below all
+                    // work in LOGICAL points. Convert to logical on save so the
+                    // saved value round-trips correctly (otherwise the pet
+                    // drifts by the scale factor each relaunch).
+                    let scale = window.scale_factor().unwrap_or(1.0);
                     save_pet_window_position(
                         window.app_handle(),
                         PetWindowPosition {
-                            x: position.x,
-                            y: position.y,
+                            x: (position.x as f64 / scale).round() as i32,
+                            y: (position.y as f64 / scale).round() as i32,
                         },
                     );
                 }
@@ -431,7 +458,12 @@ fn main() {
                         size.height,
                         scale,
                     );
-                    let _ = pet.set_position(tauri::PhysicalPosition::new(position.x, position.y));
+                    // `position` is in LOGICAL points (default_pet_position
+                    // divides by scale, and the clamp works in the same space),
+                    // so set it as a LogicalPosition. Using PhysicalPosition
+                    // here put the pet at logical (x/scale, y/scale) — up in the
+                    // center, hidden behind the main window ("宠物没了").
+                    let _ = pet.set_position(tauri::LogicalPosition::new(position.x, position.y));
                 }
             }
 
@@ -466,6 +498,29 @@ mod tests {
             pet_start_position(None, 1920, 1080, 2.0),
             PetWindowPosition { x: 740, y: 240 }
         );
+    }
+
+    #[test]
+    fn pet_start_position_clamps_saved_position_to_visible_screen() {
+        let saved = PetWindowPosition { x: 2786, y: 994 };
+
+        assert_eq!(
+            pet_start_position(Some(saved), 2560, 1664, 2.0),
+            PetWindowPosition { x: 1060, y: 532 }
+        );
+    }
+
+    #[test]
+    fn pet_window_config_uses_relative_app_url() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let windows = config["app"]["windows"].as_array().unwrap();
+        let pet = windows
+            .iter()
+            .find(|window| window["label"].as_str() == Some("pet"))
+            .unwrap();
+
+        assert_eq!(pet["url"].as_str(), Some("pet.html"));
     }
 
     #[test]

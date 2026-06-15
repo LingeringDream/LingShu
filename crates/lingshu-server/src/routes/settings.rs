@@ -7,6 +7,8 @@ use crate::error::AppError;
 use crate::state::AppState;
 use uuid::Uuid;
 
+use crate::models::provider::LlmProviderRow;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -99,23 +101,30 @@ pub async fn llm_settings_for_user(state: &AppState, user_id: Uuid) -> LlmSettin
             return s.clone();
         }
     }
-    // 2. Redis cache
+
+    // 2. Redis cache. Older builds could leave this out of sync with the
+    // active provider row, so reconcile it once before warming in-memory cache.
     let key = crate::cache::llm_settings_cache_key(user_id);
     if let Some(cached) = crate::cache::get_json::<LlmSettings>(&state.redis, &key).await {
+        let cached = reconcile_llm_settings_with_active_provider(state, user_id, cached).await;
         let mut map = state.llm_settings.write().await;
         map.insert(user_id, cached.clone());
         return cached;
     }
+
     // 3. PostgreSQL — durable source of truth, survives restarts even with no Redis.
     if let Some(stored) = load_llm_settings_from_db(state, user_id).await {
+        let stored = reconcile_llm_settings_with_active_provider(state, user_id, stored).await;
         // Warm both caches so subsequent reads skip the DB.
         crate::cache::set_json(&state.redis, &key, &stored, None).await;
         let mut map = state.llm_settings.write().await;
         map.insert(user_id, stored.clone());
         return stored;
     }
+
     // 4. Fallback: config defaults
-    state.default_llm_settings()
+    let defaults = state.default_llm_settings();
+    reconcile_llm_settings_with_active_provider(state, user_id, defaults).await
 }
 
 /// Load persisted LLM settings from `users.llm_settings`. The column defaults to
@@ -130,6 +139,115 @@ async fn load_llm_settings_from_db(state: &AppState, user_id: Uuid) -> Option<Ll
             .ok()
             .flatten();
     raw.and_then(|v| serde_json::from_value::<LlmSettings>(v).ok())
+}
+
+async fn load_active_provider_from_db(state: &AppState, user_id: Uuid) -> Option<LlmProviderRow> {
+    sqlx::query_as::<_, LlmProviderRow>(
+        r#"SELECT id, user_id, provider_id, display_name, api_key_encrypted, api_base_url, models, is_active, created_at, updated_at
+           FROM llm_providers
+           WHERE user_id = $1 AND is_active = true AND deleted_at IS NULL
+           ORDER BY updated_at DESC
+           LIMIT 1"#,
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn reconcile_llm_settings_with_active_provider(
+    state: &AppState,
+    user_id: Uuid,
+    settings: LlmSettings,
+) -> LlmSettings {
+    let Some(active_provider) = load_active_provider_from_db(state, user_id).await else {
+        return settings;
+    };
+    if active_provider.provider_id == settings.provider {
+        return settings;
+    }
+
+    let repaired =
+        llm_settings_from_provider_row_preserving_generation(&active_provider, &settings);
+    if persist_llm_settings_for_user(state, user_id, &repaired)
+        .await
+        .is_ok()
+    {
+        repaired
+    } else {
+        settings
+    }
+}
+
+pub(crate) async fn persist_llm_settings_for_user(
+    state: &AppState,
+    user_id: Uuid,
+    settings: &LlmSettings,
+) -> Result<(), AppError> {
+    let value = serde_json::to_value(settings)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize LLM settings: {e}")))?;
+    sqlx::query("UPDATE users SET llm_settings = $1, updated_at = NOW() WHERE id = $2")
+        .bind(value)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+
+    {
+        let mut map = state.llm_settings.write().await;
+        map.insert(user_id, settings.clone());
+    }
+    crate::cache::set_json(
+        &state.redis,
+        &crate::cache::llm_settings_cache_key(user_id),
+        settings,
+        None,
+    )
+    .await;
+
+    Ok(())
+}
+
+pub(crate) fn llm_settings_from_provider_row(row: &LlmProviderRow) -> LlmSettings {
+    llm_settings_from_provider_row_with_generation(row, 0.7, 4096, 20)
+}
+
+fn llm_settings_from_provider_row_preserving_generation(
+    row: &LlmProviderRow,
+    previous: &LlmSettings,
+) -> LlmSettings {
+    llm_settings_from_provider_row_with_generation(
+        row,
+        previous.temperature,
+        previous.max_tokens,
+        previous.context_messages,
+    )
+}
+
+fn llm_settings_from_provider_row_with_generation(
+    row: &LlmProviderRow,
+    temperature: f32,
+    max_tokens: u32,
+    context_messages: u32,
+) -> LlmSettings {
+    let model = row
+        .models
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|m| m.get("id").or(m.get("name")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    LlmSettings {
+        provider: row.provider_id.clone(),
+        api_key: String::new(),
+        api_base_url: row.api_base_url.clone().unwrap_or_default(),
+        model,
+        temperature,
+        max_tokens,
+        context_messages,
+    }
 }
 
 /// Partial update — all fields optional. Only provided fields are applied.
@@ -223,25 +341,7 @@ async fn update_llm_settings(
     let result = settings.clone();
     drop(all_settings);
 
-    // Durable persistence — survives restarts even when Redis is unavailable.
-    // This is the whole point: without it, settings live only in memory/Redis
-    // and every backend restart forces the user to re-enter their model config.
-    let value = serde_json::to_value(&result)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize LLM settings: {e}")))?;
-    sqlx::query("UPDATE users SET llm_settings = $1, updated_at = NOW() WHERE id = $2")
-        .bind(value)
-        .bind(user_id)
-        .execute(&state.db)
-        .await?;
-
-    // Write-through to Redis (no TTL — config persists until explicitly changed)
-    crate::cache::set_json(
-        &state.redis,
-        &crate::cache::llm_settings_cache_key(user_id),
-        &result,
-        None,
-    )
-    .await;
+    persist_llm_settings_for_user(&state, user_id, &result).await?;
 
     Ok(Json(result))
 }
@@ -397,5 +497,41 @@ mod tests {
         };
         assert_eq!(patch.provider.as_deref(), Some("openai"));
         assert!(patch.api_key.is_none());
+    }
+
+    #[test]
+    fn provider_repair_preserves_generation_controls() {
+        let row = LlmProviderRow {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            provider_id: "ollama".into(),
+            display_name: "Ollama（本地）".into(),
+            api_key_encrypted: None,
+            api_base_url: Some("http://localhost:11434".into()),
+            models: serde_json::json!([
+                { "id": "gemma4:12b", "name": "gemma4:12b", "display_name": "gemma4:12b" }
+            ]),
+            is_active: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let previous = LlmSettings {
+            provider: "openai".into(),
+            api_key: String::new(),
+            api_base_url: "https://api.deepseek.com".into(),
+            model: "deepseek-v4-flash".into(),
+            temperature: 1.1,
+            max_tokens: 10_000,
+            context_messages: 64,
+        };
+
+        let repaired = llm_settings_from_provider_row_preserving_generation(&row, &previous);
+
+        assert_eq!(repaired.provider, "ollama");
+        assert_eq!(repaired.api_base_url, "http://localhost:11434");
+        assert_eq!(repaired.model, "gemma4:12b");
+        assert!((repaired.temperature - 1.1).abs() < f32::EPSILON);
+        assert_eq!(repaired.max_tokens, 10_000);
+        assert_eq!(repaired.context_messages, 64);
     }
 }
