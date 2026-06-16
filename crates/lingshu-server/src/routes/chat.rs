@@ -21,7 +21,7 @@ use crate::llm::client::{
 use crate::llm::forgetting::{self, ForgettingPolicy};
 use crate::llm::prompts::{personality_prompt, PersonalityValues};
 use crate::models::personality::PersonalityTraits;
-use crate::routes::settings::llm_settings_for_user;
+use crate::routes::settings::{llm_settings_for_user, resolve_client_for_user};
 use crate::state::{AppState, PetNotification};
 
 pub fn router() -> Router<AppState> {
@@ -64,23 +64,10 @@ pub async fn chat(
         )));
     }
 
-    // Use per-user provider config if set, otherwise fall back to server defaults
-    let llm = if settings.provider == "openai" && !settings.api_base_url.is_empty() {
-        state.llm.with_overrides(
-            if settings.api_key.is_empty() {
-                None
-            } else {
-                Some(settings.api_key.clone())
-            },
-            if settings.api_base_url.is_empty() {
-                None
-            } else {
-                Some(settings.api_base_url.clone())
-            },
-        )
-    } else {
-        state.llm.clone()
-    };
+    // Route to the user's active provider: OpenAI-compatible providers apply
+    // their base URL + (decrypted) API key; Ollama uses the server default.
+    // See settings::resolve_client_for_user.
+    let llm = resolve_client_for_user(&state, user_id, &settings).await;
 
     let session_id = req.session_id;
     let user_message = req.message.clone();

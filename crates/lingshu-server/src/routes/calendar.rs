@@ -11,7 +11,7 @@ use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::llm::client::ChatMessage;
 use crate::routes::permissions::{permissions_for_user, PermissionSettings};
-use crate::routes::settings::llm_settings_for_user;
+use crate::routes::settings::{llm_settings_for_user, resolve_client_for_user};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -235,22 +235,7 @@ pub async fn parse_and_create_event(
 
     // Use per-user provider overrides so calendar parsing uses the same
     // LLM backend as chat (e.g. DeepSeek) instead of falling back to Ollama.
-    let llm = if settings.provider == "openai" && !settings.api_base_url.is_empty() {
-        state.llm.with_overrides(
-            if settings.api_key.is_empty() {
-                None
-            } else {
-                Some(settings.api_key.clone())
-            },
-            if settings.api_base_url.is_empty() {
-                None
-            } else {
-                Some(settings.api_base_url.clone())
-            },
-        )
-    } else {
-        state.llm.clone()
-    };
+    let llm = resolve_client_for_user(state, user_id, &settings).await;
 
     let now = Utc::now().to_rfc3339();
     let prompt = format!(

@@ -133,6 +133,9 @@ export function ProviderSelector({ onProviderChange, onProvidersLoaded }: Provid
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<ConnectivityResult | null>(null);
 
+  // Error from activate/delete actions (shown as a banner near the list).
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const [saving, setSaving] = useState(false);
 
   const fetchProviders = useCallback(async () => {
@@ -267,6 +270,7 @@ export function ProviderSelector({ onProviderChange, onProvidersLoaded }: Provid
   };
 
   const handleActivate = async (savedId: string) => {
+    setActionError(null);
     try {
       const resp = await apiFetch(`/api/v1/settings/providers/${savedId}/activate`, {
         method: 'POST',
@@ -276,13 +280,19 @@ export function ProviderSelector({ onProviderChange, onProvidersLoaded }: Provid
         await fetchProviders();
         const model = activated.models[0]?.id || '';
         onProviderChange?.(activated.provider_id, model);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        setActionError(
+          (err as { error?: { message?: string } }).error?.message ?? `激活失败：HTTP ${resp.status}`,
+        );
       }
-    } catch {
-      // best-effort
+    } catch (e) {
+      setActionError(e instanceof Error ? `激活失败：${e.message}` : '激活失败');
     }
   };
 
   const handleDelete = async (savedId: string) => {
+    setActionError(null);
     try {
       const resp = await apiFetch(`/api/v1/settings/providers/${savedId}`, {
         method: 'DELETE',
@@ -290,9 +300,14 @@ export function ProviderSelector({ onProviderChange, onProvidersLoaded }: Provid
       if (resp.ok) {
         await fetchProviders();
         if (editingSavedId === savedId) resetForm();
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        setActionError(
+          (err as { error?: { message?: string } }).error?.message ?? `删除失败：HTTP ${resp.status}`,
+        );
       }
-    } catch {
-      // best-effort
+    } catch (e) {
+      setActionError(e instanceof Error ? `删除失败：${e.message}` : '删除失败');
     }
   };
 
@@ -306,9 +321,13 @@ export function ProviderSelector({ onProviderChange, onProvidersLoaded }: Provid
       if (resp.ok) {
         const result: ConnectivityResult = await resp.json();
         setTestResult(result);
+      } else {
+        const err = await resp.json().catch(() => ({}));
+        const msg = (err as { error?: { message?: string } }).error?.message ?? `HTTP ${resp.status}`;
+        setTestResult({ ok: false, message: msg, latency_ms: 0 });
       }
-    } catch {
-      setTestResult({ ok: false, message: '请求失败', latency_ms: 0 });
+    } catch (e) {
+      setTestResult({ ok: false, message: e instanceof Error ? e.message : '请求失败', latency_ms: 0 });
     } finally {
       setTesting(null);
     }
@@ -532,6 +551,23 @@ export function ProviderSelector({ onProviderChange, onProvidersLoaded }: Provid
           </div>
         </div>
       ) : null}
+
+      {/* Activate/delete action error */}
+      {actionError && (
+        <div
+          style={{
+            margin: '0 20px 12px',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            fontSize: '12px',
+            background: 'rgba(229, 57, 53, 0.1)',
+            color: '#e53935',
+            border: '1px solid #e53935',
+          }}
+        >
+          <CloseIcon size={13} style={{ verticalAlign: '-2px' }} /> {actionError}
+        </div>
+      )}
 
       {/* Connectivity test result */}
       {testResult && (

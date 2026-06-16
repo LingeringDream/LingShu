@@ -356,7 +356,7 @@ impl LlmClient {
         }
     }
 
-    fn is_openai(&self) -> bool {
+    pub(crate) fn is_openai(&self) -> bool {
         self.api_base_url.is_some()
     }
 

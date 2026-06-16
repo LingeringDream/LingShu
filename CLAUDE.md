@@ -32,6 +32,9 @@ macOS desktop pet AI assistant: floating desktop avatar, Apple Calendar scheduli
 ## Quick Commands
 
 ```bash
+# One-command local debug (browser mode, no Tauri build): infra + migrations + backend + frontend
+./scripts/dev.sh          # or: npm run dev  → open http://localhost:5173
+
 # Infrastructure only (default profile)
 docker compose -f docker/docker-compose.dev.yml up -d
 

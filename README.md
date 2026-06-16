@@ -206,7 +206,10 @@ SoulLedger 关键模块（`crates/lingshu-server/src/llm/`）：`memory.rs`（�
 ```
 
 ```bash
-# 浏览器模式（无需 Tauri）
+# 一键启动（推荐）：基础设施 + 迁移 + 后端 + 前端，浏览器模式无需编译 Tauri
+./scripts/dev.sh          # 或 npm run dev；就绪后浏览器打开 http://localhost:5173
+
+# 浏览器模式（手动分步，无需 Tauri）
 cargo run -p lingshu-server &
 cd frontend && npm run dev
 

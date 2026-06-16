@@ -1,6 +1,6 @@
 [package]
 name = "lingshu-tauri"
-version = "1.2.0"
+version = "1.3.0"
 description = "灵枢 (LingShu) — macOS Desktop AI Assistant"
 edition = "2021"
 license = "MIT"

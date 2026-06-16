@@ -301,7 +301,19 @@ async fn test_connectivity(
         .unwrap_or("openai_compatible");
 
     let api_key = match &row.api_key_encrypted {
-        Some(enc) => Some(decrypt_api_key(&state, enc)?),
+        // A decrypt failure here usually means ENCRYPTION_KEY changed since the
+        // key was saved. Surface that as an actionable test result rather than a
+        // 500, so the user knows to re-enter the key.
+        Some(enc) => match decrypt_api_key(&state, enc) {
+            Ok(key) => Some(key),
+            Err(_) => {
+                return Ok(Json(ConnectivityResult {
+                    ok: false,
+                    message: "无法解密已保存的 API Key（加密密钥可能已更改）。请重新输入 API Key 并保存后再测试。".into(),
+                    latency_ms: 0,
+                }));
+            }
+        },
         None => None,
     };
 

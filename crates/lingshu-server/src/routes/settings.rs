@@ -81,6 +81,84 @@ impl LlmSettings {
         }
         s
     }
+
+    /// Whether this provider speaks an OpenAI-compatible HTTP API. Ollama is the
+    /// only built-in provider with a native (non-OpenAI) protocol; every other
+    /// provider — including `custom` and any unknown id — is OpenAI-compatible.
+    pub fn uses_openai_compatible_api(&self) -> bool {
+        !provider_uses_ollama_protocol(&self.provider)
+    }
+
+    /// Resolve the LLM client for this user by layering the per-user provider's
+    /// base URL + API key over the server-default client.
+    ///
+    /// Every OpenAI-compatible provider (OpenAI, DeepSeek, Qwen, SiliconFlow,
+    /// OpenRouter, custom, …) must apply these overrides — not just the built-in
+    /// `openai` provider. Otherwise switching to any other cloud provider would
+    /// silently fall back to the default Ollama backend and the model switch
+    /// would not take effect. Ollama uses the server-default client (its native
+    /// `/api/chat` path).
+    pub fn resolve_client(
+        &self,
+        default: &crate::llm::client::LlmClient,
+    ) -> crate::llm::client::LlmClient {
+        if self.uses_openai_compatible_api() && !self.api_base_url.is_empty() {
+            default.with_overrides(
+                (!self.api_key.is_empty()).then(|| self.api_key.clone()),
+                Some(self.api_base_url.clone()),
+            )
+        } else {
+            default.clone()
+        }
+    }
+}
+
+/// Whether `provider` uses Ollama's native protocol (`/api/chat`). Unknown
+/// provider ids are treated as OpenAI-compatible.
+pub(crate) fn provider_uses_ollama_protocol(provider: &str) -> bool {
+    crate::models::provider::find_built_in(provider)
+        .map(|p| p.protocol == "ollama")
+        .unwrap_or(false)
+}
+
+/// Resolve the LLM client for a request, layering the active provider's stored
+/// API key (decrypted on demand) on top of the routing decision in
+/// [`LlmSettings::resolve_client`].
+///
+/// The provider's key lives encrypted in `llm_providers`; we decrypt it per
+/// request rather than copying plaintext into `users.llm_settings`. Without
+/// this, switching to an authenticated cloud provider would route to the right
+/// base URL but send no `Authorization` header.
+pub async fn resolve_client_for_user(
+    state: &AppState,
+    user_id: Uuid,
+    settings: &LlmSettings,
+) -> crate::llm::client::LlmClient {
+    // Ollama (or any provider missing a base URL) needs no key injection.
+    if !settings.uses_openai_compatible_api() || settings.api_base_url.is_empty() {
+        return settings.resolve_client(&state.llm);
+    }
+
+    // Prefer an explicit key from settings; otherwise decrypt the active
+    // provider's stored key. `None` lets `with_overrides` fall back to the
+    // server-default key (e.g. from env), keeping single-key setups working.
+    let api_key = if settings.api_key.is_empty() {
+        active_provider_api_key(state, user_id).await
+    } else {
+        Some(settings.api_key.clone())
+    };
+
+    state
+        .llm
+        .with_overrides(api_key, Some(settings.api_base_url.clone()))
+}
+
+/// Decrypt the active provider's stored API key, if present and decryptable.
+async fn active_provider_api_key(state: &AppState, user_id: Uuid) -> Option<String> {
+    let provider = load_active_provider_from_db(state, user_id).await?;
+    let encrypted = provider.api_key_encrypted?;
+    let cipher = state.token_cipher.as_ref()?;
+    cipher.decrypt(&encrypted).ok()
 }
 
 /// Mask an API key: show first 4 and last 4 characters, replace middle with `***`.
@@ -533,5 +611,80 @@ mod tests {
         assert!((repaired.temperature - 1.1).abs() < f32::EPSILON);
         assert_eq!(repaired.max_tokens, 10_000);
         assert_eq!(repaired.context_messages, 64);
+    }
+
+    fn default_ollama_client() -> crate::llm::client::LlmClient {
+        crate::llm::client::LlmClient::new(
+            reqwest::Client::new(),
+            "http://localhost:11434",
+            None,
+            None,
+        )
+    }
+
+    fn settings_for(provider: &str, api_base_url: &str) -> LlmSettings {
+        LlmSettings {
+            provider: provider.into(),
+            api_base_url: api_base_url.into(),
+            model: "test-model".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn only_ollama_uses_native_protocol() {
+        assert!(provider_uses_ollama_protocol("ollama"));
+        for p in [
+            "openai",
+            "deepseek",
+            "qwen",
+            "siliconflow",
+            "openrouter",
+            "moonshot",
+            "zhipu",
+            "google",
+            "custom",
+            "anthropic",
+            "some-unknown-provider",
+        ] {
+            assert!(
+                !provider_uses_ollama_protocol(p),
+                "{p} should be treated as OpenAI-compatible"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_client_applies_overrides_for_non_openai_cloud_providers() {
+        // Regression: switching to any OpenAI-compatible cloud provider other
+        // than the literal `openai` must route to its base URL, not fall back to
+        // the default Ollama client.
+        let default = default_ollama_client();
+        for provider in ["deepseek", "qwen", "siliconflow", "openrouter", "custom"] {
+            let settings = settings_for(provider, "https://api.example.com");
+            assert!(
+                settings.resolve_client(&default).is_openai(),
+                "provider {provider} must use the OpenAI-compatible path"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_client_keeps_ollama_on_native_path() {
+        let default = default_ollama_client();
+        let settings = settings_for("ollama", "http://localhost:11434");
+        assert!(
+            !settings.resolve_client(&default).is_openai(),
+            "Ollama must keep using its native /api/chat client"
+        );
+    }
+
+    #[test]
+    fn resolve_client_falls_back_without_base_url() {
+        // A non-Ollama provider with no base URL can't be overridden; it stays on
+        // the default client rather than producing a broken request.
+        let default = default_ollama_client();
+        let settings = settings_for("deepseek", "");
+        assert!(!settings.resolve_client(&default).is_openai());
     }
 }
