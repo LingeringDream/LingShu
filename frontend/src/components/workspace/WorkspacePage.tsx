@@ -3,6 +3,13 @@ import { apiFetch } from '../../lib/api';
 import { useProjectStore, type Project } from '../../stores/projectStore';
 import { isTauri } from '../../lib/tauri';
 import { syncEventToAppleCalendar, deleteAppleCalendarEvent } from '../../lib/eventkit';
+import {
+  formatRecurrenceLabel,
+  isRecurringEvent,
+  prepareCalendarEventsForDisplay,
+  type CalendarRecurrenceFrequency,
+  type CalendarRecurrenceRule,
+} from '../../lib/calendarPresentation';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -15,6 +22,7 @@ interface CalendarEvent {
   end_time: string;
   status: string;
   calendar_name: string;
+  recurrence?: CalendarRecurrenceRule | null;
   parse_confidence?: number;
   apple_event_id?: string;
   external_event_id?: string;
@@ -45,6 +53,7 @@ function getErrorMessage(e: unknown, fallback: string): string {
 
 function CalendarSection() {
   const [text, setText] = useState('');
+  const [recurrenceFrequency, setRecurrenceFrequency] = useState<'auto' | CalendarRecurrenceFrequency>('auto');
   const [parsing, setParsing] = useState(false);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -103,18 +112,22 @@ function CalendarSection() {
     if (!text.trim()) return;
     setParsing(true); setError(null); setFeedback(null);
     try {
+      const recurrence = recurrenceFrequency === 'auto'
+        ? undefined
+        : { frequency: recurrenceFrequency, interval: 1 };
       const resp = await apiFetch('/api/v1/calendar/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, recurrence }),
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
         throw new Error((err as { error?: { message?: string } }).error?.message ?? `HTTP ${resp.status}`);
       }
       const ev: CalendarEvent = await resp.json();
-      setFeedback(`已创建：${ev.title}（${fmtTime(ev.start_time)} — ${fmtTime(ev.end_time)}）`);
+      setFeedback(`已创建：${ev.title}（${fmtTime(ev.start_time)} — ${fmtTime(ev.end_time)} · ${formatRecurrenceLabel(ev.recurrence)}）`);
       setText('');
+      setRecurrenceFrequency('auto');
       await fetchEvents();
     } catch (e) {
       setError(getErrorMessage(e, '解析失败'));
@@ -180,6 +193,8 @@ function CalendarSection() {
     }
   };
 
+  const visibleEvents = prepareCalendarEventsForDisplay(events);
+
   return (
     <section style={{ marginBottom: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -192,7 +207,7 @@ function CalendarSection() {
       {!collapsed && (
         <>
           {/* Parse input */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
             <input
               value={text}
               onChange={(e) => setText(e.target.value)}
@@ -200,13 +215,33 @@ function CalendarSection() {
               placeholder="输入自然语言日程，如「明天下午3点和张三开会」"
               disabled={parsing}
               style={{
-                flex: 1, padding: '8px 10px', fontSize: 13,
+                flex: '1 1 220px', padding: '8px 10px', fontSize: 13,
                 background: 'var(--bg-tertiary, #f5f5f5)',
                 border: '1px solid var(--color-border, #ddd)',
                 borderRadius: 6, color: 'var(--text-primary, #333)',
                 outline: 'none', fontFamily: 'inherit',
               }}
             />
+            <select
+              value={recurrenceFrequency}
+              onChange={(e) => setRecurrenceFrequency(e.target.value as 'auto' | CalendarRecurrenceFrequency)}
+              disabled={parsing}
+              aria-label="重复设置"
+              style={{
+                padding: '8px 10px', fontSize: 13,
+                background: 'var(--bg-tertiary, #f5f5f5)',
+                border: '1px solid var(--color-border, #ddd)',
+                borderRadius: 6, color: 'var(--text-primary, #333)',
+                outline: 'none', fontFamily: 'inherit',
+              }}
+            >
+              <option value="auto">自动识别</option>
+              <option value="none">一次</option>
+              <option value="daily">每天</option>
+              <option value="weekly">每周</option>
+              <option value="monthly">每月</option>
+              <option value="yearly">每年</option>
+            </select>
             <button onClick={handleParse} disabled={parsing || !text.trim()}
               style={{
                 padding: '8px 16px', fontSize: 13, whiteSpace: 'nowrap',
@@ -224,24 +259,34 @@ function CalendarSection() {
           <div style={{ maxHeight: 240, overflowY: 'auto' }}>
             {loadingEvents ? (
               <p style={{ fontSize: 13, color: 'var(--color-secondary-text, #888)' }}>加载中...</p>
-            ) : events.length === 0 ? (
+            ) : visibleEvents.length === 0 ? (
               <p style={{ fontSize: 13, color: 'var(--color-secondary-text, #888)' }}>暂无日程</p>
             ) : (
-              events.map((ev) => (
-                <div key={ev.id} style={{
+              visibleEvents.map((ev) => {
+                const recurring = isRecurringEvent(ev);
+                return (
+                <div key={ev.occurrenceId} style={{
                   padding: '8px 12px', marginBottom: 6, fontSize: 13,
                   border: '1px solid var(--color-border, #ddd)', borderRadius: 6,
-                  background: ev.status === 'pending_confirmation' ? '#fff8e1' : 'transparent',
+                  background: ev.urgency === 'overdue_pending'
+                    ? '#fff1f2'
+                    : ev.status === 'pending_confirmation'
+                      ? '#fff8e1'
+                      : 'transparent',
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <strong>{ev.title}</strong>
-                    <span style={{ fontSize: 11, color: 'var(--color-secondary-text, #888)' }}>
-                      {ev.status === 'pending_confirmation' ? '待确认' : ev.status}
+                    <span style={{
+                      fontSize: 11,
+                      color: ev.urgency === 'overdue_pending' ? '#e05555' : 'var(--color-secondary-text, #888)',
+                    }}>
+                      {ev.displayStatus}
                     </span>
                   </div>
                   <div style={{ color: 'var(--color-secondary-text, #888)', fontSize: 12, marginTop: 2 }}>
-                    {fmtTime(ev.start_time)} — {fmtTime(ev.end_time)}
+                    {fmtTime(ev.startsAt.toISOString())} — {fmtTime(ev.endsAt.toISOString())}
                     {ev.location ? ` · ${ev.location}` : ''}
+                    {` · ${formatRecurrenceLabel(ev.recurrence)}`}
                   </div>
                   <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
                     {ev.status === 'pending_confirmation' && (
@@ -261,7 +306,12 @@ function CalendarSection() {
                         color: confirmingDelete === ev.id ? '#fff' : '#e05555',
                       }}
                     >{confirmingDelete === ev.id ? '确认删除？' : '删除'}</button>
-                    {inTauri && (
+                    {inTauri && recurring && ev.status === 'confirmed' && (
+                      <span style={{ alignSelf: 'center', fontSize: 11, color: 'var(--color-secondary-text, #888)' }}>
+                        循环暂不支持同步
+                      </span>
+                    )}
+                    {inTauri && !recurring && (
                       <button
                         onClick={() => handleSync(ev)}
                         disabled={syncing.has(ev.id)}
@@ -270,7 +320,8 @@ function CalendarSection() {
                     )}
                   </div>
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </>

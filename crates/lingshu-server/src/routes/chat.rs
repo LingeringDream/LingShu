@@ -2235,10 +2235,11 @@ async fn execute_tool_call(
             match crate::routes::calendar::parse_and_create_event(state, user_id, text).await {
                 Ok(event) => Ok((
                     format!(
-                        "日程已创建：\n- 标题：{}\n- 时间：{} 至 {}\n- 状态：{}\n- 日历：{}",
+                        "日程已创建：\n- 标题：{}\n- 时间：{} 至 {}\n- 重复：{}\n- 状态：{}\n- 日历：{}",
                         event.title,
                         event.start_time,
                         event.end_time,
+                        crate::routes::calendar::recurrence_label(&event.recurrence),
                         event.status,
                         event.calendar_name
                     ),
@@ -2264,8 +2265,13 @@ async fn execute_tool_call(
                             .iter()
                             .map(|e| {
                                 format!(
-                                    "- [{}] {}：{} 至 {}（{}）",
-                                    e.id, e.title, e.start_time, e.end_time, e.status
+                                    "- [{}] {}：{} 至 {}，{}（{}）",
+                                    e.id,
+                                    e.title,
+                                    e.start_time,
+                                    e.end_time,
+                                    crate::routes::calendar::recurrence_label(&e.recurrence),
+                                    e.status
                                 )
                             })
                             .collect();

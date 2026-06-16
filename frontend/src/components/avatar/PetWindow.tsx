@@ -13,6 +13,7 @@ import {
 import { PetDialogReply } from './PetDialogReply';
 import { TauriOriginalPet } from './TauriOriginalPet';
 import { combinePetRenderScale } from './petScale';
+import { subscribeToCalendarReminders } from '../../lib/calendarReminderEvents';
 import {
   PET_BODY,
   PET_REPLY_BUBBLE_RECT,
@@ -503,6 +504,18 @@ export function PetWindow() {
   }, [applyAvatarControls]);
 
   useEffect(() => subscribeToAvatarControlSettings(applyAvatarControls), [applyAvatarControls]);
+
+  useEffect(() => subscribeToCalendarReminders((reminder) => {
+    const reply = `日程提醒：${reminder.message}`;
+    setDialogReply(reply);
+    setDialogOpen(false);
+    setBubble(reply);
+    setTauriPetMood('happy');
+    petRef.current?.setMood('happy');
+    triggerTauriPetReaction();
+    petRef.current?.bounce();
+    setTimeout(() => setBubble(null), 5000);
+  }), [triggerTauriPetReaction]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!petVisibleRef.current) return;
