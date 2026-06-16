@@ -1,6 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MessageBubble, type Message } from '../MessageBubble';
+import { postSignal } from '../../../lib/api';
+
+vi.mock('../../../lib/api', () => ({
+  apiFetch: vi.fn(),
+  postSignal: vi.fn().mockResolvedValue(undefined),
+}));
+
+const mockedPostSignal = vi.mocked(postSignal);
 
 function makeMessage(overrides: Partial<Message> = {}): Message {
   return {
@@ -13,6 +21,10 @@ function makeMessage(overrides: Partial<Message> = {}): Message {
 }
 
 describe('MessageBubble', () => {
+  beforeEach(() => {
+    mockedPostSignal.mockClear();
+  });
+
   it('renders user message content', () => {
     render(<MessageBubble message={makeMessage({ role: 'user', content: 'Hello' })} />);
     expect(screen.getByText('Hello')).toBeInTheDocument();
@@ -40,5 +52,54 @@ describe('MessageBubble', () => {
     expect(span).toBeInTheDocument();
     // The span should preserve newlines
     expect(span.style.whiteSpace).toBe('pre-wrap');
+  });
+
+  it('marks the selected style feedback chip as active', async () => {
+    render(
+      <MessageBubble
+        message={makeMessage({
+          role: 'assistant',
+          content: 'Short answer',
+          dbId: '0d9a76f7-75f7-47a2-8d46-80cfa00f7e40',
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('太短了'));
+
+    await waitFor(() => {
+      expect(screen.getByTitle('太短了')).toHaveStyle({ background: 'var(--accent)' });
+    });
+    expect(screen.getByTitle('太长了')).not.toHaveStyle({ background: 'var(--accent)' });
+  });
+
+  it('keeps style signal metadata unchanged and requests regeneration for the selected style', async () => {
+    const onStyleRegenerate = vi.fn();
+
+    render(
+      <MessageBubble
+        message={makeMessage({
+          role: 'assistant',
+          content: 'Short answer',
+          dbId: '0d9a76f7-75f7-47a2-8d46-80cfa00f7e40',
+        })}
+        onStyleRegenerate={onStyleRegenerate}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('太正式'));
+
+    await waitFor(() => {
+      expect(mockedPostSignal).toHaveBeenCalledWith({
+        event_type: 'reply_style_tag',
+        entity_type: 'message',
+        entity_id: '0d9a76f7-75f7-47a2-8d46-80cfa00f7e40',
+        metadata: { tag: 'too_formal' },
+      });
+    });
+    expect(onStyleRegenerate).toHaveBeenCalledWith(
+      'test-1',
+      'too_formal',
+    );
   });
 });

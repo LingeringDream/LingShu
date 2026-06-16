@@ -6,7 +6,14 @@ import { apiFetch } from '../../lib/api';
 import { getChatScrollBehavior } from './chatScroll';
 
 export function ChatWindow() {
-  const { messages, isLoading, sendMessage, sessionId, clearMessages } = useChatStore();
+  const {
+    messages,
+    isLoading,
+    sendMessage,
+    regenerateAssistantMessage,
+    sessionId,
+    clearMessages,
+  } = useChatStore();
 
   const handleClear = useCallback(async () => {
     // Delete the conversation on the backend (soft-delete)
@@ -97,7 +104,11 @@ export function ChatWindow() {
           </div>
         )}
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
+          <MessageBubble
+            key={msg.id}
+            message={msg}
+            onStyleRegenerate={regenerateAssistantMessage}
+          />
         ))}
         <div ref={messagesEndRef} />
       </div>

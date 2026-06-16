@@ -235,7 +235,8 @@ pub async fn parse_and_create_event(
 
     // Use per-user provider overrides so calendar parsing uses the same
     // LLM backend as chat (e.g. DeepSeek) instead of falling back to Ollama.
-    let llm = resolve_client_for_user(state, user_id, &settings).await;
+    // Propagate a decrypt failure (stale ENCRYPTION_KEY) as a clear error.
+    let llm = resolve_client_for_user(state, user_id, &settings).await?;
 
     let now = Utc::now().to_rfc3339();
     let prompt = format!(

@@ -1,4 +1,4 @@
-/* global CustomEvent */
+/* global CustomEvent, TextEncoder, ReadableStream */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   CHAT_SESSION_SYNC_DEBOUNCE_MS,
@@ -6,9 +6,29 @@ import {
   installChatSessionSync,
   useChatStore,
 } from '../chatStore';
+import { apiFetch } from '../../lib/api';
+
+vi.mock('../../lib/api', () => ({
+  apiFetch: vi.fn(),
+}));
+
+const mockedApiFetch = vi.mocked(apiFetch);
+
+function sseResponse(chunks: Array<Record<string, unknown>>): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+      }
+      controller.close();
+    },
+  }), { status: 200 });
+}
 
 describe('chatStore', () => {
   beforeEach(() => {
+    mockedApiFetch.mockReset();
     // Reset the store state between tests
     useChatStore.setState({
       messages: [],
@@ -146,5 +166,46 @@ describe('chatStore', () => {
 
     window.removeEventListener(CHAT_SESSION_SYNC_EVENT, handleSync);
     unsubscribe();
+  });
+
+  it('regenerates an assistant message with the selected style and replaces the same bubble', async () => {
+    useChatStore.setState({
+      messages: [
+        { id: 'u1', role: 'user', content: '介绍一下你自己', timestamp: new Date() },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: '您好，我是灵枢。',
+          timestamp: new Date(),
+          dbId: 'db-a1',
+        },
+      ],
+      isLoading: false,
+      streamingId: null,
+      sessionId: 'session-123',
+    });
+    mockedApiFetch.mockResolvedValueOnce(sseResponse([
+      { content: '我是灵枢，', done: false },
+      { content: '可以帮你处理对话和本机任务。', done: true, assistant_message_id: 'db-a1' },
+    ]));
+
+    await useChatStore.getState().regenerateAssistantMessage('a1', 'too_formal');
+
+    expect(mockedApiFetch).toHaveBeenCalledWith(
+      '/api/v1/chat/messages/db-a1/regenerate',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ style_tag: 'too_formal' }),
+      }),
+    );
+    const state = useChatStore.getState();
+    expect(state.isLoading).toBe(false);
+    expect(state.streamingId).toBeNull();
+    expect(state.messages[1]).toMatchObject({
+      id: 'a1',
+      content: '我是灵枢，可以帮你处理对话和本机任务。',
+      dbId: 'db-a1',
+      revision: 1,
+    });
   });
 });

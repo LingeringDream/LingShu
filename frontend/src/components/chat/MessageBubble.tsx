@@ -13,6 +13,8 @@ import {
   UnlockIcon,
 } from '../icons';
 
+export type FeedbackStyleTag = 'too_long' | 'too_short' | 'too_formal';
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -21,23 +23,40 @@ export interface Message {
   /** Backend message UUID — set when the assistant response is persisted.
    *  Feedback buttons are disabled when this is undefined. */
   dbId?: string;
+  /** Local content revision. Used by multi-window sync so a regenerated answer
+   *  is not overwritten by an older, longer snapshot of the same bubble. */
+  revision?: number;
   /** L2 permission requests from the backend — shown as inline grant buttons. */
   permissionRequests?: Array<{ kind: string; target: string; reason: string }>;
 }
 
 interface MessageBubbleProps {
   message: Message;
+  onStyleRegenerate?: (messageId: string, styleTag: FeedbackStyleTag) => void | Promise<void>;
 }
 
 // ── MessageBubble ──────────────────────────────────────────────────
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, onStyleRegenerate }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [feedbackSent, setFeedbackSent] = useState<string | null>(null);
   const canSendFeedback = !isUser && message.dbId !== undefined;
 
+  const feedbackKey = (eventType: string, metadata?: Record<string, unknown>) => {
+    if (eventType === 'reply_style_tag' && typeof metadata?.tag === 'string') {
+      return `${eventType}:${metadata.tag}`;
+    }
+    return eventType;
+  };
+
+  const styleTagFromMetadata = (metadata?: Record<string, unknown>): FeedbackStyleTag | null => {
+    const tag = metadata?.tag;
+    return tag === 'too_long' || tag === 'too_short' || tag === 'too_formal' ? tag : null;
+  };
+
   const sendFeedback = async (eventType: string, metadata?: Record<string, unknown>) => {
     if (!canSendFeedback) return;
+    const key = feedbackKey(eventType, metadata);
     try {
       await postSignal({
         event_type: eventType,
@@ -45,9 +64,13 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         entity_id: message.dbId,
         metadata: metadata ?? {},
       });
-      setFeedbackSent(eventType);
     } catch {
       // best-effort — don't interrupt the UI
+    }
+    setFeedbackSent(key);
+    if (eventType === 'reply_style_tag') {
+      const styleTag = styleTagFromMetadata(metadata);
+      if (styleTag) void onStyleRegenerate?.(message.id, styleTag);
     }
   };
 
@@ -84,55 +107,59 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       {!isUser && (
         <div style={{
           display: 'flex',
-          gap: '6px',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          gap: '4px',
           opacity: canSendFeedback ? 1 : 0.3,
           transition: 'opacity 0.15s',
         }}>
-          {/* Thumbs up */}
-          <button
-            disabled={!canSendFeedback}
-            onClick={() => sendFeedback('reply_thumb_up')}
-            title="点赞"
-            style={feedbackChipStyle(feedbackSent === 'reply_thumb_up')}
-          >
-            <ThumbsUpIcon size={14} title="点赞" />
-          </button>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {/* Thumbs up */}
+            <button
+              disabled={!canSendFeedback}
+              onClick={() => sendFeedback('reply_thumb_up')}
+              title="点赞"
+              style={feedbackChipStyle(feedbackSent === 'reply_thumb_up')}
+            >
+              <ThumbsUpIcon size={14} title="点赞" />
+            </button>
 
-          {/* Thumbs down */}
-          <button
-            disabled={!canSendFeedback}
-            onClick={() => sendFeedback('reply_thumb_down')}
-            title="点踩"
-            style={feedbackChipStyle(feedbackSent === 'reply_thumb_down')}
-          >
-            <ThumbsDownIcon size={14} title="点踩" />
-          </button>
+            {/* Thumbs down */}
+            <button
+              disabled={!canSendFeedback}
+              onClick={() => sendFeedback('reply_thumb_down')}
+              title="点踩"
+              style={feedbackChipStyle(feedbackSent === 'reply_thumb_down')}
+            >
+              <ThumbsDownIcon size={14} title="点踩" />
+            </button>
 
-          {/* Style chips */}
-          <button
-            disabled={!canSendFeedback}
-            onClick={() => sendFeedback('reply_style_tag', { tag: 'too_long' })}
-            title="太长了"
-            style={feedbackChipStyle(feedbackSent === 'reply_style_tag')}
-          >
-            <RulerIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />太长了
-          </button>
-          <button
-            disabled={!canSendFeedback}
-            onClick={() => sendFeedback('reply_style_tag', { tag: 'too_short' })}
-            title="太短了"
-            style={feedbackChipStyle()}
-          >
-            <ScissorsIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />太短了
-          </button>
-          <button
-            disabled={!canSendFeedback}
-            onClick={() => sendFeedback('reply_style_tag', { tag: 'too_formal' })}
-            title="太正式"
-            style={feedbackChipStyle()}
-          >
-            <PenIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />太正式
-          </button>
+            {/* Style chips */}
+            <button
+              disabled={!canSendFeedback}
+              onClick={() => sendFeedback('reply_style_tag', { tag: 'too_long' })}
+              title="太长了"
+              style={feedbackChipStyle(feedbackSent === 'reply_style_tag:too_long')}
+            >
+              <RulerIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />太长了
+            </button>
+            <button
+              disabled={!canSendFeedback}
+              onClick={() => sendFeedback('reply_style_tag', { tag: 'too_short' })}
+              title="太短了"
+              style={feedbackChipStyle(feedbackSent === 'reply_style_tag:too_short')}
+            >
+              <ScissorsIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />太短了
+            </button>
+            <button
+              disabled={!canSendFeedback}
+              onClick={() => sendFeedback('reply_style_tag', { tag: 'too_formal' })}
+              title="太正式"
+              style={feedbackChipStyle(feedbackSent === 'reply_style_tag:too_formal')}
+            >
+              <PenIcon size={13} style={{ verticalAlign: '-2px', marginRight: 4 }} />太正式
+            </button>
+          </div>
         </div>
       )}
     </div>

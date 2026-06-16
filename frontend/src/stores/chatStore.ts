@@ -1,7 +1,7 @@
 /* global CustomEvent, StorageEvent */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Message } from '../components/chat/MessageBubble';
+import type { FeedbackStyleTag, Message } from '../components/chat/MessageBubble';
 import { apiFetch } from '../lib/api';
 import { deleteAppleCalendarEvent } from '../lib/eventkit';
 import { runAutomationAction, readScreen } from '../lib/automation';
@@ -29,6 +29,7 @@ interface ChatState {
    *  persists the exchange and can replay history on later turns. */
   sessionId: string | null;
   sendMessage: (content: string) => Promise<void>;
+  regenerateAssistantMessage: (messageId: string, styleTag: FeedbackStyleTag) => Promise<void>;
   clearMessages: () => void;
 }
 
@@ -69,6 +70,9 @@ function normalizeMessage(value: unknown): Message | null {
     timestamp: normalizeTimestamp(value.timestamp),
   };
   if (typeof value.dbId === 'string') message.dbId = value.dbId;
+  if (typeof value.revision === 'number' && Number.isFinite(value.revision)) {
+    message.revision = value.revision;
+  }
   const permissionRequests = normalizePermissionRequests(value.permissionRequests);
   if (permissionRequests && permissionRequests.length > 0) {
     message.permissionRequests = permissionRequests;
@@ -103,11 +107,16 @@ function canMergeChatSessionSnapshot(currentSessionId: string | null, nextSessio
 function chooseMessageWithMostContent(current: Message | undefined, incoming: Message): Message {
   if (!current || current.role !== incoming.role) return incoming;
 
-  const primary = current.content.length > incoming.content.length ? current : incoming;
+  const currentRevision = current.revision ?? 0;
+  const incomingRevision = incoming.revision ?? 0;
+  const primary = currentRevision !== incomingRevision
+    ? currentRevision > incomingRevision ? current : incoming
+    : current.content.length > incoming.content.length ? current : incoming;
   const fallback = primary === current ? incoming : current;
   const merged: Message = {
     ...primary,
     dbId: primary.dbId ?? fallback.dbId,
+    revision: Math.max(primary.revision ?? 0, fallback.revision ?? 0),
   };
 
   if (primary.permissionRequests && primary.permissionRequests.length > 0) {
@@ -178,6 +187,17 @@ async function ensureSessionId(
     return data.id;
   } catch {
     return null;
+  }
+}
+
+function regenerationStatus(styleTag: FeedbackStyleTag): string {
+  switch (styleTag) {
+    case 'too_long':
+      return '（正在按“更精简”重写…）';
+    case 'too_short':
+      return '（正在按“更展开”重写…）';
+    case 'too_formal':
+      return '（正在按“更口语”重写…）';
   }
 }
 
@@ -430,6 +450,140 @@ export const useChatStore = create<ChatState>()(
                     content: `错误: ${error instanceof Error ? error.message : '未知错误'}`,
                   }
                 : m,
+            ),
+          }));
+        }
+      },
+
+      regenerateAssistantMessage: async (messageId: string, styleTag: FeedbackStyleTag) => {
+        if (get().isLoading) return;
+
+        const target = get().messages.find((message) =>
+          message.id === messageId && message.role === 'assistant' && message.dbId,
+        );
+        if (!target?.dbId) return;
+
+        const targetDbId = target.dbId;
+        const previousContent = target.content;
+        const previousPermissionRequests = target.permissionRequests;
+        const nextRevision = (target.revision ?? 0) + 1;
+
+        set((state) => ({
+          isLoading: true,
+          streamingId: messageId,
+          messages: state.messages.map((message) =>
+            message.id === messageId
+              ? {
+                  ...message,
+                  content: regenerationStatus(styleTag),
+                  dbId: undefined,
+                  permissionRequests: undefined,
+                  revision: nextRevision,
+                }
+              : message,
+          ),
+        }));
+
+        try {
+          const response = await apiFetch(`/api/v1/chat/messages/${targetDbId}/regenerate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ style_tag: styleTag }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const reader = response.body?.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let regeneratedContent = '';
+
+          if (reader) {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+
+              while (true) {
+                const newlineIdx = buffer.indexOf('\n');
+                if (newlineIdx === -1) break;
+
+                const line = buffer.slice(0, newlineIdx).trim();
+                buffer = buffer.slice(newlineIdx + 1);
+
+                if (!line.startsWith('data: ')) continue;
+
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  if (data.content) {
+                    regeneratedContent += data.content;
+                    set((state) => ({
+                      messages: state.messages.map((message) =>
+                        message.id === messageId
+                          ? { ...message, content: regeneratedContent, revision: nextRevision }
+                          : message,
+                      ),
+                    }));
+                  }
+
+                  if (data.done) {
+                    const dbId = typeof data.assistant_message_id === 'string'
+                      ? data.assistant_message_id
+                      : targetDbId;
+                    set((state) => ({
+                      isLoading: false,
+                      streamingId: null,
+                      messages: state.messages.map((message) =>
+                        message.id === messageId
+                          ? {
+                              ...message,
+                              content: regeneratedContent || message.content || '（无响应）',
+                              dbId,
+                              revision: nextRevision,
+                            }
+                          : message,
+                      ),
+                    }));
+                    return;
+                  }
+                } catch {
+                  // Skip malformed JSON lines
+                }
+              }
+            }
+          }
+
+          set((state) => ({
+            isLoading: false,
+            streamingId: null,
+            messages: state.messages.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    content: regeneratedContent || '（无响应）',
+                    dbId: targetDbId,
+                    revision: nextRevision,
+                  }
+                : message,
+            ),
+          }));
+        } catch (error) {
+          set((state) => ({
+            isLoading: false,
+            streamingId: null,
+            messages: state.messages.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    content: previousContent || `错误: ${error instanceof Error ? error.message : '未知错误'}`,
+                    dbId: targetDbId,
+                    permissionRequests: previousPermissionRequests,
+                    revision: target.revision,
+                  }
+                : message,
             ),
           }));
         }

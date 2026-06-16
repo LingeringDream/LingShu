@@ -32,7 +32,7 @@ for arg in "$@"; do
         --tauri) MODE="tauri" ;;
         --watch) WATCH=1 ;;
         --help | -h) usage; exit 0 ;;
-        *) echo "✗ 未知参数: $arg（见 --help）" >&2; exit 1 ;;
+        *) echo "✗ 未知参数: ${arg}（见 --help）" >&2; exit 1 ;;
     esac
 done
 
@@ -61,8 +61,8 @@ check_port() {
     local port="$1" svc="$2"
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 &&
         ! docker ps --filter "publish=$port" --format '{{.Names}}' | grep -q .; then
-        echo "✗ 端口 $port（$svc）已被本机非容器进程占用，docker 容器无法绑定。" >&2
-        echo "  查看占用: lsof -nP -iTCP:$port -sTCP:LISTEN" >&2
+        echo "✗ 端口 ${port}（${svc}）已被本机非容器进程占用，docker 容器无法绑定。" >&2
+        echo "  查看占用: lsof -nP -iTCP:${port} -sTCP:LISTEN" >&2
         return 1
     fi
 }

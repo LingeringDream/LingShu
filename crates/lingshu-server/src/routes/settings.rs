@@ -7,7 +7,11 @@ use crate::error::AppError;
 use crate::state::AppState;
 use uuid::Uuid;
 
+use crate::crypto::TokenCipher;
 use crate::models::provider::LlmProviderRow;
+
+const PROVIDER_KEY_DECRYPTION_MESSAGE: &str =
+    "已保存的 API Key 无法用当前 ENCRYPTION_KEY 解密,请在「服务商设置」重新输入并保存。";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -133,32 +137,67 @@ pub async fn resolve_client_for_user(
     state: &AppState,
     user_id: Uuid,
     settings: &LlmSettings,
-) -> crate::llm::client::LlmClient {
+) -> Result<crate::llm::client::LlmClient, AppError> {
     // Ollama (or any provider missing a base URL) needs no key injection.
     if !settings.uses_openai_compatible_api() || settings.api_base_url.is_empty() {
-        return settings.resolve_client(&state.llm);
+        return Ok(settings.resolve_client(&state.llm));
     }
 
     // Prefer an explicit key from settings; otherwise decrypt the active
-    // provider's stored key. `None` lets `with_overrides` fall back to the
-    // server-default key (e.g. from env), keeping single-key setups working.
+    // provider's stored key. `Ok(None)` lets `with_overrides` fall back to the
+    // server-default key (e.g. from env), keeping single-key setups working;
+    // a stored-but-undecryptable key returns `Err` so the caller can surface a
+    // clear message instead of silently sending an unauthenticated request.
     let api_key = if settings.api_key.is_empty() {
-        active_provider_api_key(state, user_id).await
+        active_provider_api_key(state, user_id).await?
     } else {
         Some(settings.api_key.clone())
     };
 
-    state
+    Ok(state
         .llm
-        .with_overrides(api_key, Some(settings.api_base_url.clone()))
+        .with_overrides(api_key, Some(settings.api_base_url.clone())))
 }
 
-/// Decrypt the active provider's stored API key, if present and decryptable.
-async fn active_provider_api_key(state: &AppState, user_id: Uuid) -> Option<String> {
-    let provider = load_active_provider_from_db(state, user_id).await?;
-    let encrypted = provider.api_key_encrypted?;
-    let cipher = state.token_cipher.as_ref()?;
-    cipher.decrypt(&encrypted).ok()
+/// Decrypt the active provider's stored API key.
+///
+/// Returns `Ok(None)` when there is no active provider or it has no stored key
+/// (the caller falls back to the server default). Returns `Err` when a key IS
+/// stored but cannot be decrypted — see [`decrypt_provider_key`].
+async fn active_provider_api_key(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<Option<String>, AppError> {
+    let Some(provider) = load_active_provider_from_db(state, user_id).await else {
+        return Ok(None);
+    };
+    decrypt_provider_key(
+        provider.api_key_encrypted.as_deref(),
+        state.token_cipher.as_deref(),
+    )
+}
+
+/// Classify a provider's stored API-key blob against the active cipher:
+/// - `Ok(None)` — nothing stored, nothing to do.
+/// - `Ok(Some(key))` — decrypted successfully.
+/// - `Err(..)` — a key is stored but unreadable: the `ENCRYPTION_KEY` in effect
+///   differs from the one it was saved under (e.g. saved in the packaged app,
+///   now running native dev), or no cipher is configured at all. Surfacing this
+///   prevents the silent "send no Authorization header → upstream 401" failure.
+fn decrypt_provider_key(
+    encrypted: Option<&[u8]>,
+    cipher: Option<&TokenCipher>,
+) -> Result<Option<String>, AppError> {
+    let Some(blob) = encrypted else {
+        return Ok(None);
+    };
+    let Some(cipher) = cipher else {
+        return Err(AppError::Validation(PROVIDER_KEY_DECRYPTION_MESSAGE.into()));
+    };
+    cipher
+        .decrypt(blob)
+        .map(Some)
+        .map_err(|_| AppError::Validation(PROVIDER_KEY_DECRYPTION_MESSAGE.into()))
 }
 
 /// Mask an API key: show first 4 and last 4 characters, replace middle with `***`.
@@ -514,6 +553,49 @@ async fn update_role_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── decrypt_provider_key ──────────────────────────────────────
+
+    #[test]
+    fn decrypt_provider_key_no_blob_is_ok_none() {
+        let cipher = TokenCipher::from_key_str("k").unwrap();
+        assert!(decrypt_provider_key(None, Some(&cipher)).unwrap().is_none());
+        assert!(decrypt_provider_key(None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn decrypt_provider_key_succeeds_with_matching_cipher() {
+        let cipher = TokenCipher::from_key_str("right-key").unwrap();
+        let blob = cipher.encrypt("sk-secret").unwrap();
+        let got = decrypt_provider_key(Some(&blob), Some(&cipher)).unwrap();
+        assert_eq!(got.as_deref(), Some("sk-secret"));
+    }
+
+    #[test]
+    fn decrypt_provider_key_wrong_cipher_is_validation_err() {
+        // Regression: a key saved under one ENCRYPTION_KEY then read under another
+        // must surface a clear error, not be swallowed into a keyless request.
+        let saver = TokenCipher::from_key_str("key-saved-under").unwrap();
+        let blob = saver.encrypt("sk-secret").unwrap();
+        let other = TokenCipher::from_key_str("different-key").unwrap();
+        match decrypt_provider_key(Some(&blob), Some(&other)) {
+            Err(AppError::Validation(msg)) => assert!(msg.contains("ENCRYPTION_KEY")),
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decrypt_provider_key_stored_blob_without_cipher_is_err() {
+        let saver = TokenCipher::from_key_str("k").unwrap();
+        let blob = saver.encrypt("sk-secret").unwrap();
+        match decrypt_provider_key(Some(&blob), None) {
+            Err(AppError::Validation(msg)) => assert_eq!(
+                msg,
+                "已保存的 API Key 无法用当前 ENCRYPTION_KEY 解密,请在「服务商设置」重新输入并保存。"
+            ),
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
 
     #[test]
     fn llm_settings_default_provider_is_ollama() {

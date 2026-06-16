@@ -170,10 +170,21 @@ impl AppState {
         // PostgreSQL is required — abort if it is unreachable.
         let db = db?;
 
+        // Resolve the encryption key: an explicit env/config value wins; otherwise
+        // fall back to the shared key file the packaged app uses (macOS only) so
+        // every local launch mode (`cargo run`, `tauri dev`, packaged app) agrees
+        // on one key and can decrypt provider API keys saved by any other mode.
+        let effective_encryption_key = config
+            .security
+            .encryption_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .map(str::to_string)
+            .or_else(crate::crypto::load_or_create_shared_encryption_key);
+
         // Pre-derive the encryption cipher once at startup (100k-round KDF)
-        let token_cipher: Option<Arc<TokenCipher>> = match config.security.encryption_key.as_deref()
-        {
-            Some(key) if !key.is_empty() => match TokenCipher::from_key_str(key) {
+        let token_cipher: Option<Arc<TokenCipher>> = match effective_encryption_key {
+            Some(key) => match TokenCipher::from_key_str(&key) {
                 Ok(cipher) => {
                     tracing::info!("TokenCipher initialised");
                     Some(Arc::new(cipher))
@@ -183,7 +194,7 @@ impl AppState {
                     None
                 }
             },
-            _ => None,
+            None => None,
         };
 
         Ok(Self {

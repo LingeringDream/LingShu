@@ -1,11 +1,12 @@
 use axum::{
+    extract::Path,
     response::sse::{Event, Sse},
     routing::post,
     Json, Router,
 };
 use chrono::{DateTime, Local, Utc};
-use futures::{Stream, StreamExt};
-use serde::Deserialize;
+use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use std::{
     convert::Infallible,
     sync::{Arc, Mutex},
@@ -24,8 +25,13 @@ use crate::models::personality::PersonalityTraits;
 use crate::routes::settings::{llm_settings_for_user, resolve_client_for_user};
 use crate::state::{AppState, PetNotification};
 
+type ChatSse = Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>;
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/chat", post(chat))
+    Router::new().route("/api/v1/chat", post(chat)).route(
+        "/api/v1/chat/messages/:id/regenerate",
+        post(regenerate_message),
+    )
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -37,6 +43,21 @@ pub struct ChatRequest {
     /// a `read_screen` tool call; see the screen-read flow in this module.
     #[serde(default)]
     pub screen_context: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema)]
+pub enum ReplyStyleTag {
+    #[serde(rename = "too_long")]
+    Long,
+    #[serde(rename = "too_short")]
+    Short,
+    #[serde(rename = "too_formal")]
+    Formal,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RegenerateChatMessageRequest {
+    pub style_tag: ReplyStyleTag,
 }
 
 // ── Handler ───────────────────────────────────────────────────────
@@ -54,7 +75,7 @@ pub async fn chat(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<crate::auth::AuthUser>,
     Json(req): Json<ChatRequest>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
+) -> Result<ChatSse, AppError> {
     let user_id = auth::require_user(auth).await?;
     let settings = llm_settings_for_user(&state, user_id).await;
 
@@ -67,7 +88,21 @@ pub async fn chat(
     // Route to the user's active provider: OpenAI-compatible providers apply
     // their base URL + (decrypted) API key; Ollama uses the server default.
     // See settings::resolve_client_for_user.
-    let llm = resolve_client_for_user(&state, user_id, &settings).await;
+    //
+    // A stored API key that can't be decrypted (ENCRYPTION_KEY changed since it
+    // was saved) returns Err here. Surface it as a single SSE content event so
+    // the user sees an actionable message in the chat bubble, instead of a
+    // silent unauthenticated request the provider would reject with 401.
+    let llm = match resolve_client_for_user(&state, user_id, &settings).await {
+        Ok(client) => client,
+        Err(e) => {
+            let message = match e {
+                AppError::Validation(m) => m,
+                other => other.to_string(),
+            };
+            return Ok(single_chunk_sse(message, None));
+        }
+    };
 
     let session_id = req.session_id;
     let user_message = req.message.clone();
@@ -469,7 +504,199 @@ pub async fn chat(
         }
     });
 
-    Ok(Sse::new(sse_stream))
+    Ok(Sse::new(sse_stream.boxed()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/messages/{id}/regenerate",
+    params(
+        ("id" = Uuid, Path, description = "Assistant message id to regenerate")
+    ),
+    request_body = RegenerateChatMessageRequest,
+    responses(
+        (status = 200, description = "SSE stream of regenerated ChatChunk events", content_type = "text/event-stream"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Message not found")
+    )
+)]
+pub async fn regenerate_message(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<crate::auth::AuthUser>,
+    Path(message_id): Path<Uuid>,
+    Json(req): Json<RegenerateChatMessageRequest>,
+) -> Result<ChatSse, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    let settings = llm_settings_for_user(&state, user_id).await;
+
+    if settings.model.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Model not configured. Set it via PATCH /api/v1/settings/llm or LLM_DEFAULT_MODEL in .env."
+        )));
+    }
+
+    let llm = match resolve_client_for_user(&state, user_id, &settings).await {
+        Ok(client) => client,
+        Err(e) => {
+            let message = match e {
+                AppError::Validation(m) => m,
+                other => other.to_string(),
+            };
+            return Ok(single_chunk_sse(message, Some(message_id)));
+        }
+    };
+
+    let target = load_regeneration_target(&state.db, message_id, user_id).await?;
+    let history = load_chat_history_before(
+        &state.db,
+        target.conversation_id,
+        user_id,
+        settings.context_messages,
+        target.created_at,
+    )
+    .await?;
+    let latest_user_message = history
+        .iter()
+        .rev()
+        .find_map(|(role, content)| (role == "user").then(|| content.clone()))
+        .ok_or_else(|| {
+            AppError::Validation("找不到可重写的上一条用户消息，请重新发送一次。".to_string())
+        })?;
+
+    let memory_context = fetch_memory_context(
+        &state.db,
+        &state.vector,
+        &llm,
+        &state.config.llm.embed_model,
+        user_id,
+        &latest_user_message,
+    )
+    .await;
+    let style_exemplar_snippet = load_style_exemplar_snippet(&state.db, user_id).await;
+    let personality_values = load_active_personality(&state.db, user_id).await;
+    let personality_snippet = personality_prompt(&personality_values);
+    let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
+    let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
+    let capabilities = capability_section(&perms);
+    let system_prompt = build_system_prompt(
+        &personality_snippet,
+        &memory_context,
+        &style_exemplar_snippet,
+        &role_prompt,
+        &capabilities,
+    );
+
+    let mut messages = vec![ChatMessage::system(system_prompt)];
+    for (role, content) in history {
+        messages.push(ChatMessage {
+            role,
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
+    messages.push(ChatMessage::user(regeneration_prompt(
+        req.style_tag,
+        &target.content,
+    )));
+
+    let options = ChatOptions {
+        temperature: Some(settings.temperature),
+        num_predict: Some(settings.max_tokens),
+    };
+
+    state
+        .pet_notifications
+        .send(PetNotification::mood("thinking"))
+        .ok();
+    state
+        .pet_notifications
+        .send(PetNotification::mood("speaking"))
+        .ok();
+
+    let chunk_stream = llm.chat_stream(&settings.model, messages, Some(options));
+    let assistant_accumulator: Arc<Mutex<AssistantStreamAccumulator>> =
+        Arc::new(Mutex::new(AssistantStreamAccumulator::new()));
+    let stream_finalized = Arc::new(Mutex::new(false));
+    let db_clone = state.db.clone();
+    let redis_clone = state.redis.clone();
+    let model_name = settings.model.clone();
+    let pet_tx = state.pet_notifications.clone();
+
+    let sse_stream = chunk_stream.then(move |result| {
+        let assistant_accumulator = Arc::clone(&assistant_accumulator);
+        let stream_finalized = Arc::clone(&stream_finalized);
+        let db = db_clone.clone();
+        let redis = redis_clone.clone();
+        let model = model_name.clone();
+        let pet_tx = pet_tx.clone();
+
+        async move {
+            match result {
+                Ok(chunk) => {
+                    if let Ok(mut acc) = assistant_accumulator.lock() {
+                        acc.push_chunk(&chunk.content);
+                    }
+
+                    let event =
+                        Ok(Event::default()
+                            .data(serde_json::to_string(&chunk).unwrap_or_default()));
+
+                    if chunk.done && mark_stream_finalized(&stream_finalized) {
+                        let assistant_response = assistant_accumulator
+                            .lock()
+                            .ok()
+                            .and_then(|acc| acc.finalize());
+                        let assistant_message_id =
+                            if let Some(content) = assistant_response.as_ref() {
+                                replace_assistant_message(
+                                    &db, &redis, message_id, user_id, content, &model,
+                                )
+                                .await
+                            } else {
+                                None
+                            };
+                        pet_tx.send(PetNotification::mood("idle")).ok();
+                        return Ok(Event::default().data(
+                            serde_json::to_string(&ChatChunk {
+                                content: chunk.content,
+                                done: true,
+                                assistant_message_id,
+                                apple_calendar_deletes: None,
+                                automation_actions: None,
+                                permission_requests: None,
+                                screen_read_request: None,
+                            })
+                            .unwrap_or_default(),
+                        ));
+                    }
+
+                    event
+                }
+                Err(e) => {
+                    if let Ok(mut acc) = assistant_accumulator.lock() {
+                        acc.mark_error();
+                    }
+                    pet_tx.send(PetNotification::mood("idle")).ok();
+                    mark_stream_finalized(&stream_finalized);
+                    Ok(Event::default().data(
+                        serde_json::to_string(&ChatChunk {
+                            content: format!("[stream error: {e}]"),
+                            done: true,
+                            assistant_message_id: None,
+                            apple_calendar_deletes: None,
+                            automation_actions: None,
+                            permission_requests: None,
+                            screen_read_request: None,
+                        })
+                        .unwrap_or_default(),
+                    ))
+                }
+            }
+        }
+    });
+
+    Ok(Sse::new(sse_stream.boxed()))
 }
 
 // ── System prompt ────────────────────────────────────────────────────
@@ -597,6 +824,67 @@ fn build_system_prompt(
 
 // ── Helpers ───────────────────────────────────────────────────────
 
+struct RegenerationTarget {
+    conversation_id: Uuid,
+    content: String,
+    created_at: DateTime<Utc>,
+}
+
+fn single_chunk_sse(content: String, assistant_message_id: Option<Uuid>) -> ChatSse {
+    let event = Event::default().data(
+        serde_json::to_string(&ChatChunk {
+            content,
+            done: true,
+            assistant_message_id,
+            apple_calendar_deletes: None,
+            automation_actions: None,
+            permission_requests: None,
+            screen_read_request: None,
+        })
+        .unwrap_or_default(),
+    );
+    Sse::new(futures::stream::once(async move { Ok::<Event, Infallible>(event) }).boxed())
+}
+
+fn regeneration_instruction(style_tag: ReplyStyleTag) -> &'static str {
+    match style_tag {
+        ReplyStyleTag::Long => {
+            "用户觉得上一版太长。请明显压缩篇幅，只保留最关键的信息，语气自然，不要丢掉必要结论。"
+        }
+        ReplyStyleTag::Short => {
+            "用户觉得上一版太短。请在保持重点清晰的前提下适当展开，补足有用细节、原因或下一步。"
+        }
+        ReplyStyleTag::Formal => {
+            "用户觉得上一版太正式。请改成更自然、更口语的表达，像日常协作里的简洁说明。"
+        }
+    }
+}
+
+fn regeneration_prompt(style_tag: ReplyStyleTag, previous_reply: &str) -> String {
+    let previous_reply = truncate_for_prompt(previous_reply, 12_000);
+    format!(
+        "用户刚刚对你上一版回复点了反馈。请基于同一条用户问题，直接重新生成一版助手回复。\n\n\
+         反馈要求：{}\n\n\
+         上一版回复：\n{}\n\n\
+         输出规则：\n\
+         - 只输出重写后的回复正文，不要解释你做了什么。\n\
+         - 不要提到“上一版”“反馈按钮”或“我会重写”。\n\
+         - 不要新增未验证事实，也不要声称执行了新的工具或本机操作。",
+        regeneration_instruction(style_tag),
+        previous_reply
+    )
+}
+
+fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
+    let mut iter = value.chars();
+    let truncated: String = iter.by_ref().take(max_chars).collect();
+    if iter.next().is_some() {
+        format!("{truncated}\n\n[内容过长，已截断]")
+    } else {
+        truncated
+    }
+}
+
 /// Persist an assistant message to the database, bump session metadata,
 /// and invalidate the cached session list. Returns the inserted message's
 /// UUID so the frontend can attach it to feedback signals.
@@ -644,6 +932,95 @@ async fn persist_assistant_message(
     crate::cache::del(redis, &crate::cache::chat_sessions_cache_key(user_id)).await;
 
     Some(row.0)
+}
+
+async fn load_regeneration_target(
+    db: &sqlx::PgPool,
+    message_id: Uuid,
+    user_id: Uuid,
+) -> Result<RegenerationTarget, AppError> {
+    let row: Option<(Uuid, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT m.conversation_id, m.content, m.created_at \
+         FROM messages m \
+         JOIN conversations c ON c.id = m.conversation_id \
+         WHERE m.id = $1 \
+           AND m.role = 'assistant' \
+           AND c.user_id = $2 \
+           AND c.deleted_at IS NULL",
+    )
+    .bind(message_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+
+    let Some((conversation_id, content, created_at)) = row else {
+        return Err(AppError::NotFound("Message not found".to_string()));
+    };
+
+    Ok(RegenerationTarget {
+        conversation_id,
+        content,
+        created_at,
+    })
+}
+
+async fn replace_assistant_message(
+    db: &sqlx::PgPool,
+    redis: &crate::state::OptionalRedis,
+    message_id: Uuid,
+    user_id: Uuid,
+    content: &str,
+    model: &str,
+) -> Option<Uuid> {
+    let row: Option<(Uuid,)> = match sqlx::query_as(
+        "UPDATE messages m \
+         SET content = $1, \
+             model_id = $2, \
+             metadata = m.metadata || jsonb_build_object('regenerated', true, 'regenerated_at', NOW()) \
+         WHERE m.id = $3 \
+           AND m.role = 'assistant' \
+           AND EXISTS ( \
+             SELECT 1 FROM conversations c \
+             WHERE c.id = m.conversation_id \
+               AND c.user_id = $4 \
+               AND c.deleted_at IS NULL \
+           ) \
+         RETURNING m.conversation_id",
+    )
+    .bind(content)
+    .bind(model)
+    .bind(message_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(%message_id, %e, "Failed to replace regenerated assistant message");
+            return None;
+        }
+    };
+
+    let Some((conversation_id,)) = row else {
+        tracing::warn!(%message_id, "Regenerated assistant message was not found for update");
+        return None;
+    };
+
+    if let Err(e) = sqlx::query(
+        "UPDATE conversations SET updated_at = NOW() \
+         WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .execute(db)
+    .await
+    {
+        tracing::warn!(%conversation_id, %e, "Failed to bump regenerated conversation updated_at");
+    }
+
+    crate::cache::del(redis, &crate::cache::chat_sessions_cache_key(user_id)).await;
+
+    Some(message_id)
 }
 
 fn mark_stream_finalized(finalized: &Arc<Mutex<bool>>) -> bool {
@@ -1154,6 +1531,36 @@ async fn load_chat_history(
          ORDER BY created_at ASC",
     )
     .bind(conversation_id)
+    .bind(limit as i64)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows)
+}
+
+async fn load_chat_history_before(
+    db: &sqlx::PgPool,
+    conversation_id: Uuid,
+    user_id: Uuid,
+    limit: u32,
+    before: DateTime<Utc>,
+) -> Result<Vec<(String, String)>, AppError> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT role, content FROM ( \
+             SELECT m.role, m.content, m.created_at FROM messages m \
+             JOIN conversations c ON c.id = m.conversation_id \
+             WHERE m.conversation_id = $1 \
+               AND c.user_id = $2 \
+               AND c.deleted_at IS NULL \
+               AND m.created_at < $3 \
+             ORDER BY m.created_at DESC \
+             LIMIT $4 \
+         ) recent_messages \
+         ORDER BY created_at ASC",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .bind(before)
     .bind(limit as i64)
     .fetch_all(db)
     .await?;
@@ -2416,6 +2823,22 @@ mod tests {
         ));
         // …but "未开启" must never read as "功能不存在".
         assert!(denied.contains("不等于功能不存在"));
+    }
+
+    #[test]
+    fn regeneration_instruction_maps_style_tags_to_rewrite_requirements() {
+        assert!(regeneration_instruction(ReplyStyleTag::Long).contains("压缩篇幅"));
+        assert!(regeneration_instruction(ReplyStyleTag::Short).contains("适当展开"));
+        assert!(regeneration_instruction(ReplyStyleTag::Formal).contains("口语"));
+    }
+
+    #[test]
+    fn regeneration_prompt_asks_for_rewritten_body_only() {
+        let prompt = regeneration_prompt(ReplyStyleTag::Formal, "原来的正式回复");
+        assert!(prompt.contains("原来的正式回复"));
+        assert!(prompt.contains("只输出重写后的回复正文"));
+        assert!(prompt.contains("不要提到"));
+        assert!(prompt.contains("不要新增未验证事实"));
     }
 
     #[test]
