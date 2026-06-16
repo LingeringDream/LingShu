@@ -533,9 +533,31 @@ button {
   box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.16);
 }
 
+.timeline-dot.soon {
+  background: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.16);
+}
+
+.timeline-dot.overdue_pending {
+  background: #e05555;
+  box-shadow: 0 0 0 4px rgba(224, 85, 85, 0.16);
+}
+
 .timeline-item time {
   color: #475467;
   font-variant-numeric: tabular-nums;
+}
+
+.timeline-status-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fff1f2;
+  color: #b42318;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.5;
 }
 
 .todo-list {

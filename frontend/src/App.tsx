@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { AppLayout, type AppSectionKey } from './components/layout/AppLayout';
 import { ChatWindow } from './components/chat/ChatWindow';
 import { ChatSettings } from './components/chat/ChatSettings';
@@ -20,6 +20,13 @@ import { ensureLocalSession, apiFetch } from './lib/api';
 import { isTauri, MAIN_NAVIGATE_EVENT } from './lib/tauri';
 import { installChatSessionSync } from './stores/chatStore';
 import { useProjectStore } from './stores/projectStore';
+import {
+  collectDueCalendarReminders,
+  prepareCalendarEventsForDisplay,
+  type CalendarRecurrenceRule,
+  type CalendarUrgency,
+} from './lib/calendarPresentation';
+import { publishCalendarReminder } from './lib/calendarReminderEvents';
 
 // ── Dashboard data types ────────────────────────────────────────
 
@@ -27,7 +34,9 @@ interface CalendarEvent {
   id: string;
   title: string;
   start_time: string;
+  end_time: string;
   status: string;
+  recurrence?: CalendarRecurrenceRule | null;
 }
 
 interface TaskItem {
@@ -64,7 +73,13 @@ export default function App() {
   const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>(() => loadAvatarControlSettings());
 
   // Dashboard state
-  const [scheduleItems, setScheduleItems] = useState<{ id: string; time: string; title: string; state: string }[]>([]);
+  const [scheduleItems, setScheduleItems] = useState<{
+    id: string;
+    time: string;
+    title: string;
+    state: CalendarUrgency;
+    badge?: string;
+  }[]>([]);
   const [todoItems, setTodoItems] = useState<{ id: string; title: string; tag?: string }[]>([]);
   const [recentConversations, setRecentConversations] = useState<{ id: string; title: string; time: string }[]>([]);
   const [memoryBullets, setMemoryBullets] = useState<string[]>([]);
@@ -75,6 +90,7 @@ export default function App() {
   const [l1CalendarEnabled, setL1CalendarEnabled] = useState(false);
 
   const { fetchProjects } = useProjectStore();
+  const remindedCalendarEventIdsRef = useRef<Set<string>>(new Set());
 
   const bootLocalSession = useCallback(async () => {
     setSessionState('loading');
@@ -119,6 +135,30 @@ export default function App() {
 
   // ── Fetch dashboard data ──────────────────────────────────────
 
+  const scanCalendarReminders = useCallback(async () => {
+    try {
+      const permRes = await apiFetch('/api/v1/permissions');
+      if (!permRes.ok) return;
+      const perms: { l1_calendar: boolean } = await permRes.json();
+      if (!perms.l1_calendar) return;
+
+      const calRes = await apiFetch('/api/v1/calendar/events?limit=50');
+      if (!calRes.ok) return;
+      const events: CalendarEvent[] = await calRes.json();
+      const reminders = collectDueCalendarReminders(
+        events,
+        new Date(),
+        remindedCalendarEventIdsRef.current,
+      );
+      for (const reminder of reminders) {
+        remindedCalendarEventIdsRef.current.add(reminder.id);
+        await publishCalendarReminder(reminder);
+      }
+    } catch {
+      // Reminder scans are best-effort; the dashboard fetch still surfaces data.
+    }
+  }, []);
+
   const loadDashboard = useCallback(async () => {
     setDashboardLoading(true);
     try {
@@ -140,15 +180,17 @@ export default function App() {
         const calRes = await apiFetch('/api/v1/calendar/events?limit=5');
         if (calRes.ok) {
           const events: CalendarEvent[] = await calRes.json();
+          const visibleEvents = prepareCalendarEventsForDisplay(events).slice(0, 5);
           setScheduleItems(
-            events.map((e) => ({
+            visibleEvents.map((e) => ({
               id: e.id,
-              time: new Date(e.start_time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+              time: e.startsAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
               title: e.title,
-              state: e.status === 'confirmed' ? 'active' : 'muted',
+              state: e.urgency,
+              badge: e.displayStatus === '已确认' ? undefined : e.displayStatus,
             }))
           );
-          setStats((s) => ({ ...s, events: events.length }));
+          setStats((s) => ({ ...s, events: visibleEvents.length }));
         }
       } else {
         setScheduleItems([]);
@@ -211,6 +253,20 @@ export default function App() {
       loadDashboard();
     }
   }, [sessionState, activeSection, loadDashboard]);
+
+  useEffect(() => {
+    if (sessionState !== 'ready') return undefined;
+
+    scanCalendarReminders();
+    const timer = window.setInterval(scanCalendarReminders, 60_000);
+    const handler = () => scanCalendarReminders();
+    window.addEventListener('calendar-changed', handler);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('calendar-changed', handler);
+    };
+  }, [scanCalendarReminders, sessionState]);
 
   // Deep-link from the pet window: when the user expands a reply (or opens the
   // console), jump straight to the requested section (e.g. 'chat') instead of
@@ -358,7 +414,10 @@ export default function App() {
                 <div key={item.id} className="timeline-item">
                   <span className={`timeline-dot ${item.state}`} />
                   <time>{item.time}</time>
-                  <span>{item.title}</span>
+                  <span>
+                    {item.title}
+                    {item.badge && <em className="timeline-status-badge">{item.badge}</em>}
+                  </span>
                 </div>
               ))}
             </div>
