@@ -245,19 +245,28 @@ pub async fn enhance_chat(
     let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
     let capabilities = capability_section(&perms);
+    let now = Local::now();
+    let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
     let system_prompt = build_system_prompt(
         &personality_snippet,
         &memory_context,
         &style_exemplar_snippet,
         &role_prompt,
         &capabilities,
+        &now_str,
     );
 
     let mut base_messages = vec![ChatMessage::system(system_prompt.clone())];
     if let Some(sid) = session_id {
         let history =
             load_chat_history(&state.db, sid, user_id, base_settings.context_messages).await?;
-        for (role, content) in history {
+        for (role, content, ts) in history {
+            let content = if role == "user" {
+                let local_ts = ts.with_timezone(&Local);
+                format!("[{}]\n{}", local_ts.format("%Y-%m-%d %H:%M"), content)
+            } else {
+                content
+            };
             base_messages.push(ChatMessage {
                 role,
                 content,
@@ -266,7 +275,11 @@ pub async fn enhance_chat(
             });
         }
     }
-    base_messages.push(ChatMessage::user(user_message.clone()));
+    base_messages.push(ChatMessage::user(format!(
+        "[{}]\n{}",
+        now.format("%Y-%m-%d %H:%M"),
+        user_message
+    )));
 
     // Persist the user message (mirrors `chat`).
     if let Some(sid) = session_id {
@@ -521,12 +534,15 @@ pub async fn chat(
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
     let capabilities = capability_section(&perms);
 
+    let now = Local::now();
+    let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
     let system_prompt = build_system_prompt(
         &personality_snippet,
         &memory_context,
         &style_exemplar_snippet,
         &role_prompt,
         &capabilities,
+        &now_str,
     );
     let mut messages = vec![ChatMessage::system(system_prompt)];
 
@@ -535,7 +551,15 @@ pub async fn chat(
     // large-context cloud model (e.g. 200 for 1 M-token Gemini/Claude).
     if let Some(sid) = session_id {
         let history = load_chat_history(&state.db, sid, user_id, settings.context_messages).await?;
-        for (role, content) in history {
+        for (role, content, ts) in history {
+            // Prepend a local-time timestamp to user messages so the LLM can
+            // distinguish temporal references across sessions or days.
+            let content = if role == "user" {
+                let local_ts = ts.with_timezone(&Local);
+                format!("[{}]\n{}", local_ts.format("%Y-%m-%d %H:%M"), content)
+            } else {
+                content
+            };
             messages.push(ChatMessage {
                 role,
                 content,
@@ -545,8 +569,12 @@ pub async fn chat(
         }
     }
 
-    // Current user message
-    messages.push(ChatMessage::user(user_message.clone()));
+    // Current user message — timestamped so it's unambiguous relative to history
+    messages.push(ChatMessage::user(format!(
+        "[{}]\n{}",
+        now.format("%Y-%m-%d %H:%M"),
+        user_message
+    )));
 
     // Persist user message to DB before streaming (only when session_id is set)
     if let Some(sid) = session_id {
@@ -972,16 +1000,25 @@ pub async fn regenerate_message(
     let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
     let capabilities = capability_section(&perms);
+    let now = Local::now();
+    let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
     let system_prompt = build_system_prompt(
         &personality_snippet,
         &memory_context,
         &style_exemplar_snippet,
         &role_prompt,
         &capabilities,
+        &now_str,
     );
 
     let mut messages = vec![ChatMessage::system(system_prompt)];
-    for (role, content) in history {
+    for (role, content, ts) in history {
+        let content = if role == "user" {
+            let local_ts = ts.with_timezone(&Local);
+            format!("[{}]\n{}", local_ts.format("%Y-%m-%d %H:%M"), content)
+        } else {
+            content
+        };
         messages.push(ChatMessage {
             role,
             content,
@@ -1148,6 +1185,7 @@ fn build_system_prompt(
     style_exemplar_snippet: &str,
     role_prompt: &str,
     capabilities: &str,
+    now: &str,
 ) -> String {
     let base = r#"你是灵枢（LingShu），一个运行在 macOS 桌面上的 AI 个人助理。
 
@@ -1186,6 +1224,12 @@ fn build_system_prompt(
 - 你是一个 AI 助手，不是真正的意识体"#;
 
     let mut parts = vec![base.to_string()];
+
+    // Current time — injected early so every response is temporally anchored.
+    // Prevents the LLM from confusing "today", "this week", or message order.
+    if !now.is_empty() {
+        parts.push(format!("## 当前时间\n{now}"));
+    }
 
     // Real capability + permission picture (grant-aware), right after the base
     // identity so it anchors what the assistant can truthfully claim.
@@ -1901,7 +1945,7 @@ async fn load_chat_history(
     conversation_id: Uuid,
     user_id: Uuid,
     limit: u32,
-) -> Result<Vec<(String, String)>, AppError> {
+) -> Result<Vec<(String, String, DateTime<Utc>)>, AppError> {
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM conversations \
          WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)",
@@ -1915,8 +1959,8 @@ async fn load_chat_history(
         return Err(AppError::NotFound("Session not found".to_string()));
     }
 
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT role, content FROM ( \
+    let rows: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT role, content, created_at FROM ( \
              SELECT role, content, created_at FROM messages \
              WHERE conversation_id = $1 \
              ORDER BY created_at DESC \
@@ -1938,9 +1982,9 @@ async fn load_chat_history_before(
     user_id: Uuid,
     limit: u32,
     before: DateTime<Utc>,
-) -> Result<Vec<(String, String)>, AppError> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT role, content FROM ( \
+) -> Result<Vec<(String, String, DateTime<Utc>)>, AppError> {
+    let rows: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT role, content, created_at FROM ( \
              SELECT m.role, m.content, m.created_at FROM messages m \
              JOIN conversations c ON c.id = m.conversation_id \
              WHERE m.conversation_id = $1 \
@@ -3123,7 +3167,7 @@ mod tests {
     #[test]
     fn build_system_prompt_includes_personality_snippet() {
         let snippet = "## 当前人格参数\n测试人格";
-        let prompt = build_system_prompt(snippet, "", "", "", "");
+        let prompt = build_system_prompt(snippet, "", "", "", "", "");
         assert!(
             prompt.contains("当前人格参数"),
             "System prompt should include personality snippet. Got:\n{prompt}"
@@ -3137,7 +3181,7 @@ mod tests {
     #[test]
     fn build_system_prompt_skips_memory_when_empty() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "", "", "", "");
+        let prompt = build_system_prompt(snippet, "", "", "", "", "");
         assert!(
             !prompt.contains("用户档案与记忆"),
             "System prompt should NOT include memory section when memory is empty"
@@ -3148,7 +3192,7 @@ mod tests {
     fn build_system_prompt_includes_memory_when_present() {
         let snippet = "## 当前人格参数\n- 直接度：中";
         let memories = "- [偏好] 喜欢安静的环境\n- [事实] 住在北京";
-        let prompt = build_system_prompt(snippet, memories, "", "", "");
+        let prompt = build_system_prompt(snippet, memories, "", "", "", "");
         assert!(
             prompt.contains("用户档案与记忆"),
             "System prompt should include memory section when memories exist"
@@ -3238,7 +3282,7 @@ mod tests {
     fn build_system_prompt_contains_base_identity() {
         let snippet = "## 当前人格参数\n- 直接度：中";
         let caps = capability_section(&crate::routes::permissions::PermissionSettings::default());
-        let prompt = build_system_prompt(snippet, "", "", "", &caps);
+        let prompt = build_system_prompt(snippet, "", "", "", &caps, "");
         assert!(prompt.contains("灵枢"));
         assert!(prompt.contains("LingShu"));
         assert!(prompt.contains("权限边界"));
