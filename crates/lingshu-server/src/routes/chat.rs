@@ -980,7 +980,7 @@ pub async fn regenerate_message(
     let latest_user_message = history
         .iter()
         .rev()
-        .find_map(|(role, content)| (role == "user").then(|| content.clone()))
+        .find_map(|(role, content, _ts)| (role == "user").then(|| content.clone()))
         .ok_or_else(|| {
             AppError::Validation("找不到可重写的上一条用户消息，请重新发送一次。".to_string())
         })?;
@@ -1228,7 +1228,12 @@ fn build_system_prompt(
     // Current time — injected early so every response is temporally anchored.
     // Prevents the LLM from confusing "today", "this week", or message order.
     if !now.is_empty() {
-        parts.push(format!("## 当前时间\n{now}"));
+        parts.push(format!(
+            "## 时间感知\n\
+             当前时间：{now}\n\
+             用户的每条消息开头都带有 [YYYY-MM-DD HH:MM] 格式的本地时间戳，标注该消息的发送时刻。\
+             请结合这些时间戳理解对话中的时间引用（「今天」「刚才」「上周」等），不要声称看不到消息的发送时间。"
+        ));
     }
 
     // Real capability + permission picture (grant-aware), right after the base
