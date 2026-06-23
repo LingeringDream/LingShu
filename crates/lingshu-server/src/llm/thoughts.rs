@@ -89,7 +89,9 @@ pub async fn generate_and_save_thoughts(
     let active_goals = gather_active_goals(db, user_id).await?;
     let pending_tasks = gather_pending_tasks(db, user_id).await?;
     let entity_counts = gather_entity_counts(db, user_id).await?;
-    let now = chrono::Utc::now().to_rfc3339();
+    // Local time, matching the chat system prompt — the model reasons about the
+    // user's day in their own timezone, not UTC.
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M %Z").to_string();
 
     // 2. Build prompt and call LLM
     let prompt = thought_queue_prompt(

@@ -1254,7 +1254,7 @@ fn build_system_prompt(
 
     if !memory_context.is_empty() {
         parts.push(format!(
-            "## 用户档案与记忆\n以下是你在长期陪伴中记录的关于这位用户的信息。请自然地运用它们来个性化你的回复，但不要逐条复述——只在与当前对话直接相关时才引用。\n\n{memory_context}"
+            "## 用户档案与记忆\n以下是你在长期陪伴中记录的关于这位用户的信息。每条以 [类型·记于 YYYY-MM-DD] 开头，方括号内的日期是你记下这条信息的时间——理解其中的相对时间（「下周」「明天」等）时，请以该记录日期为基准，而非当前日期。请自然地运用这些信息来个性化你的回复，但不要逐条复述——只在与当前对话直接相关时才引用。\n\n{memory_context}"
         ));
     }
 
@@ -2052,7 +2052,7 @@ async fn fetch_memory_context(
     }
 
     // Bump access metadata
-    let ids: Vec<Uuid> = rows.iter().map(|(id, _, _)| *id).collect();
+    let ids: Vec<Uuid> = rows.iter().map(|(id, _, _, _)| *id).collect();
 
     // Signal: memory_retrieval_hit for each memory injected into context
     for memory_id in &ids {
@@ -2080,17 +2080,26 @@ async fn fetch_memory_context(
     }
 
     let mut ctx = String::new();
-    for (_, mtype, content) in &rows {
-        let label = match mtype.as_str() {
-            "preference" => "偏好",
-            "fact" => "事实",
-            "goal" => "目标",
-            "context" => "上下文",
-            _ => "信息",
-        };
-        ctx.push_str(&format!("- [{label}] {content}\n"));
+    for (_, mtype, content, created_at) in &rows {
+        ctx.push_str(&memory_context_line(mtype, content, *created_at));
     }
     ctx
+}
+
+/// Format one memory as a context line: a memory-type label, the local date the
+/// note was recorded, and its content. The recorded date lets the model anchor
+/// any relative time reference inside the memory ("下周出差", "明天交稿") to when
+/// the note was actually made, instead of mistaking it for the current week.
+fn memory_context_line(memory_type: &str, content: &str, recorded_at: DateTime<Utc>) -> String {
+    let label = match memory_type {
+        "preference" => "偏好",
+        "fact" => "事实",
+        "goal" => "目标",
+        "context" => "上下文",
+        _ => "信息",
+    };
+    let date = recorded_at.with_timezone(&Local).format("%Y-%m-%d");
+    format!("- [{label}·记于{date}] {content}\n")
 }
 
 /// Try the semantic path via the shared [`crate::llm::semantic::semantic_memory_search`].
@@ -2119,9 +2128,9 @@ async fn load_memories_by_ids(
     db: &sqlx::PgPool,
     user_id: Uuid,
     ids: &[Uuid],
-) -> Vec<(Uuid, String, String)> {
+) -> Vec<(Uuid, String, String, DateTime<Utc>)> {
     match sqlx::query_as(
-        "SELECT id, memory_type, content FROM memories \
+        "SELECT id, memory_type, content, created_at FROM memories \
          WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL AND importance >= 0.5",
     )
     .bind(ids)
@@ -2131,10 +2140,12 @@ async fn load_memories_by_ids(
     {
         Ok(rows) => {
             // Reorder rows to match the original Qdrant rank order
-            let mut row_map: std::collections::HashMap<Uuid, (String, String)> =
-                rows.into_iter().map(|(id, mt, c)| (id, (mt, c))).collect();
+            let mut row_map: std::collections::HashMap<Uuid, (String, String, DateTime<Utc>)> =
+                rows.into_iter()
+                    .map(|(id, mt, c, ts)| (id, (mt, c, ts)))
+                    .collect();
             ids.iter()
-                .filter_map(|id| row_map.remove(id).map(|(mt, c)| (*id, mt, c)))
+                .filter_map(|id| row_map.remove(id).map(|(mt, c, ts)| (*id, mt, c, ts)))
                 .collect()
         }
         Err(error) => {
@@ -2145,9 +2156,12 @@ async fn load_memories_by_ids(
 }
 
 /// Legacy fallback: top-N memories by importance + recency.
-async fn legacy_fetch_memories(db: &sqlx::PgPool, user_id: Uuid) -> Vec<(Uuid, String, String)> {
+async fn legacy_fetch_memories(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+) -> Vec<(Uuid, String, String, DateTime<Utc>)> {
     match sqlx::query_as(
-        "SELECT id, memory_type, content FROM memories \
+        "SELECT id, memory_type, content, created_at FROM memories \
          WHERE user_id = $1 AND deleted_at IS NULL AND importance >= 0.5 \
          ORDER BY importance DESC, updated_at DESC LIMIT 5",
     )
@@ -2327,7 +2341,7 @@ async fn preflight_calendar_intent(
         // The LLM will use these results — we just provide the data
         let list_text: String = events
             .iter()
-            .map(|e| format!("[{}] {}（{}）", e.id, e.title, e.start_time))
+            .map(|e| format!("[{}] {}（{}）", e.id, e.title, fmt_event_local(e.start_time)))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -2358,7 +2372,11 @@ async fn preflight_calendar_intent(
             .map(|e| {
                 format!(
                     "[{}] {}：{} 至 {}（{}）",
-                    e.id, e.title, e.start_time, e.end_time, e.status
+                    e.id,
+                    e.title,
+                    fmt_event_local(e.start_time),
+                    fmt_event_local(e.end_time),
+                    e.status
                 )
             })
             .collect::<Vec<_>>()
@@ -2377,7 +2395,10 @@ async fn preflight_calendar_intent(
             Ok(event) => {
                 return Some(format!(
                     "[系统] 你已成功为用户创建了以下日程（这是真实结果，不是编造的）：\n- 标题：{}\n- 时间：{} 至 {}\n- 状态：{}\n\n请用自然的语言告知用户。",
-                    event.title, event.start_time, event.end_time, event.status
+                    event.title,
+                    fmt_event_local(event.start_time),
+                    fmt_event_local(event.end_time),
+                    event.status
                 ));
             }
             Err(e) => {
@@ -2653,6 +2674,19 @@ async fn enforce_automation(
     }
 }
 
+/// Render an event time (`DateTime<Utc>` in the DB) in the user's local
+/// timezone with an explicit `YYYY-MM-DD HH:MM` format.
+///
+/// Calendar event times are stored as UTC. Formatting them with `{}` emits the
+/// UTC clock time (e.g. `2026-06-24 07:00:00 UTC`), while everything else the
+/// model sees — the message timestamps, the 时间感知 current time, and
+/// get_current_time — is local. That mismatch made the assistant misreport
+/// event times by the local UTC offset (8h for UTC+8). Converting to local here
+/// keeps all model-facing times in one consistent frame.
+fn fmt_event_local(dt: DateTime<Utc>) -> String {
+    dt.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()
+}
+
 /// Execute a single tool call and return a human-readable result string
 /// (for injection into the LLM conversation) plus any `ToolEffects` the
 /// frontend should carry out.
@@ -2680,8 +2714,8 @@ async fn execute_tool_call(
                     format!(
                         "日程已创建：\n- 标题：{}\n- 时间：{} 至 {}\n- 重复：{}\n- 状态：{}\n- 日历：{}",
                         event.title,
-                        event.start_time,
-                        event.end_time,
+                        fmt_event_local(event.start_time),
+                        fmt_event_local(event.end_time),
                         crate::routes::calendar::recurrence_label(&event.recurrence),
                         event.status,
                         event.calendar_name
@@ -2711,8 +2745,8 @@ async fn execute_tool_call(
                                     "- [{}] {}：{} 至 {}，{}（{}）",
                                     e.id,
                                     e.title,
-                                    e.start_time,
-                                    e.end_time,
+                                    fmt_event_local(e.start_time),
+                                    fmt_event_local(e.end_time),
                                     crate::routes::calendar::recurrence_label(&e.recurrence),
                                     e.status
                                 )
@@ -3153,6 +3187,48 @@ mod tests {
                 "missing tool {expected}"
             );
         }
+    }
+
+    #[test]
+    fn fmt_event_local_is_local_minute_precision() {
+        use chrono::TimeZone;
+        // A fixed UTC instant. Raw `DateTime<Utc>` Display would render this as
+        // "2026-06-24 07:00:00 UTC"; fmt_event_local must instead emit the local
+        // wall-clock time at minute precision with no timezone suffix.
+        let utc = Utc.with_ymd_and_hms(2026, 6, 24, 7, 0, 0).unwrap();
+        let out = fmt_event_local(utc);
+
+        // No UTC leakage and no seconds — the two things that confused the model.
+        assert!(!out.contains("UTC"), "must not leak the UTC Display suffix: {out}");
+        assert!(
+            out.matches(':').count() == 1,
+            "minute precision only (no seconds): {out}"
+        );
+        // Shape: YYYY-MM-DD HH:MM
+        let (date, time) = out.split_once(' ').expect("date and time separated by space");
+        assert_eq!(date.len(), 10, "YYYY-MM-DD: {out}");
+        assert_eq!(time.len(), 5, "HH:MM: {out}");
+
+        // It must equal the same instant converted to the machine's local zone,
+        // independent of what that zone is.
+        let expected = utc.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string();
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn memory_context_line_tags_label_and_local_date() {
+        use chrono::TimeZone;
+        let recorded = Utc.with_ymd_and_hms(2026, 6, 20, 1, 30, 0).unwrap();
+        let line = memory_context_line("goal", "下周要交方案", recorded);
+
+        assert!(line.starts_with("- [目标·记于"), "label + recorded marker: {line}");
+        assert!(line.contains("下周要交方案"), "content preserved: {line}");
+        assert!(!line.contains("UTC"), "no raw UTC suffix: {line}");
+        // Date is the local calendar date of the same instant, day precision.
+        let expected_date = recorded.with_timezone(&Local).format("%Y-%m-%d").to_string();
+        assert!(line.contains(&expected_date), "local date {expected_date} in: {line}");
+        // Unknown types fall back to the generic label.
+        assert!(memory_context_line("weird", "x", recorded).contains("[信息·记于"));
     }
 
     #[test]
