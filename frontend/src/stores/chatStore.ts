@@ -1,7 +1,12 @@
 /* global CustomEvent, StorageEvent */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { FeedbackStyleTag, Message } from '../components/chat/MessageBubble';
+import type {
+  EnhanceMember,
+  EnhanceState,
+  FeedbackStyleTag,
+  Message,
+} from '../components/chat/MessageBubble';
 import { apiFetch } from '../lib/api';
 import { deleteAppleCalendarEvent } from '../lib/eventkit';
 import { runAutomationAction, readScreen } from '../lib/automation';
@@ -19,6 +24,20 @@ interface ChatSessionSnapshot {
   isLoading?: boolean;
   streamingId?: string | null;
   sessionId: string | null;
+  enhanceEnabled?: boolean;
+  enhanceDefaultLoaded?: boolean;
+}
+
+export interface EnhanceMemberConfig {
+  provider_id: string;
+  model: string;
+}
+
+export interface EnhanceRequestOverride {
+  members?: EnhanceMemberConfig[];
+  aggregator?: EnhanceMemberConfig | null;
+  per_model_timeout_ms?: number;
+  max_parallel?: number;
 }
 
 interface ChatState {
@@ -28,7 +47,11 @@ interface ChatState {
   /** Active conversation id — created lazily on first message so the backend
    *  persists the exchange and can replay history on later turns. */
   sessionId: string | null;
-  sendMessage: (content: string) => Promise<void>;
+  enhanceEnabled: boolean;
+  enhanceDefaultLoaded: boolean;
+  setEnhanceEnabled: (enabled: boolean) => void;
+  loadEnhanceDefault: () => Promise<void>;
+  sendMessage: (content: string, enhanceOverride?: EnhanceRequestOverride) => Promise<void>;
   regenerateAssistantMessage: (messageId: string, styleTag: FeedbackStyleTag) => Promise<void>;
   clearMessages: () => void;
 }
@@ -58,6 +81,35 @@ function normalizePermissionRequests(value: unknown): Message['permissionRequest
     .filter((request) => request.kind && request.target && request.reason);
 }
 
+function normalizeEnhanceMember(value: unknown): EnhanceMember | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.id !== 'string' || typeof value.label !== 'string') return null;
+  if (value.status !== 'thinking' && value.status !== 'done' && value.status !== 'failed') return null;
+  return {
+    id: value.id,
+    label: value.label,
+    provider: typeof value.provider === 'string' ? value.provider : '',
+    status: value.status,
+    draft: typeof value.draft === 'string' ? value.draft : undefined,
+    error: typeof value.error === 'string' ? value.error : undefined,
+  };
+}
+
+function normalizeEnhanceState(value: unknown): EnhanceState | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.phase !== 'drafting' && value.phase !== 'aggregating' && value.phase !== 'done') {
+    return undefined;
+  }
+  const members = Array.isArray(value.members)
+    ? value.members.map(normalizeEnhanceMember).filter((member): member is EnhanceMember => member !== null)
+    : [];
+  return {
+    phase: value.phase,
+    members,
+    aggregatorLabel: typeof value.aggregatorLabel === 'string' ? value.aggregatorLabel : undefined,
+  };
+}
+
 function normalizeMessage(value: unknown): Message | null {
   if (!isRecord(value)) return null;
   if (value.role !== 'user' && value.role !== 'assistant') return null;
@@ -76,6 +128,13 @@ function normalizeMessage(value: unknown): Message | null {
   const permissionRequests = normalizePermissionRequests(value.permissionRequests);
   if (permissionRequests && permissionRequests.length > 0) {
     message.permissionRequests = permissionRequests;
+  }
+  if (typeof value.enhancing === 'boolean') {
+    message.enhancing = value.enhancing;
+  }
+  const enhance = normalizeEnhanceState(value.enhance);
+  if (enhance) {
+    message.enhance = enhance;
   }
   return message;
 }
@@ -97,6 +156,8 @@ function normalizeChatSessionSnapshot(value: unknown): ChatSessionSnapshot | nul
     isLoading: typeof state.isLoading === 'boolean' ? state.isLoading : undefined,
     streamingId: typeof state.streamingId === 'string' ? state.streamingId : null,
     sessionId: typeof state.sessionId === 'string' ? state.sessionId : null,
+    enhanceEnabled: typeof state.enhanceEnabled === 'boolean' ? state.enhanceEnabled : undefined,
+    enhanceDefaultLoaded: typeof state.enhanceDefaultLoaded === 'boolean' ? state.enhanceDefaultLoaded : undefined,
   };
 }
 
@@ -124,6 +185,8 @@ function chooseMessageWithMostContent(current: Message | undefined, incoming: Me
   } else if (fallback.permissionRequests && fallback.permissionRequests.length > 0) {
     merged.permissionRequests = fallback.permissionRequests;
   }
+  merged.enhancing = primary.enhancing ?? fallback.enhancing;
+  merged.enhance = primary.enhance ?? fallback.enhance;
 
   return merged;
 }
@@ -208,8 +271,33 @@ export const useChatStore = create<ChatState>()(
       isLoading: false,
       streamingId: null,
       sessionId: null,
+      enhanceEnabled: false,
+      enhanceDefaultLoaded: false,
 
-      sendMessage: async (content: string) => {
+      setEnhanceEnabled: (enabled: boolean) => set({
+        enhanceEnabled: enabled,
+        enhanceDefaultLoaded: true,
+      }),
+
+      loadEnhanceDefault: async () => {
+        if (get().enhanceDefaultLoaded) return;
+        try {
+          const resp = await apiFetch('/api/v1/settings/enhance');
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          if (get().enhanceDefaultLoaded) return;
+          set({
+            enhanceEnabled: Boolean(data.enabled_default),
+            enhanceDefaultLoaded: true,
+          });
+        } catch {
+          if (get().enhanceDefaultLoaded) return;
+          set({ enhanceDefaultLoaded: true });
+        }
+      },
+
+      sendMessage: async (content: string, enhanceOverride?: EnhanceRequestOverride) => {
+        const enhanceActive = get().enhanceEnabled;
         const userMessage: Message = {
           id: crypto.randomUUID(),
           role: 'user',
@@ -224,6 +312,8 @@ export const useChatStore = create<ChatState>()(
           role: 'assistant',
           content: '',
           timestamp: new Date(),
+          enhancing: enhanceActive,
+          enhance: enhanceActive ? { phase: 'drafting', members: [] } : undefined,
         };
 
         set((state) => ({
@@ -242,6 +332,175 @@ export const useChatStore = create<ChatState>()(
           const baseBody: Record<string, unknown> = sessionId
             ? { message: content, session_id: sessionId }
             : { message: content };
+
+          const updateAssistantMessage = (updater: (message: Message) => Message) => {
+            set((state) => ({
+              messages: state.messages.map((message) =>
+                message.id === assistantId ? updater(message) : message,
+              ),
+            }));
+          };
+
+          const runEnhancedChatStream = async (
+            body: Record<string, unknown>,
+          ): Promise<void> => {
+            const response = await apiFetch('/api/v1/chat/enhance', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+
+            const applyEnhanceEvent = (data: unknown): boolean => {
+              if (!isRecord(data) || typeof data.type !== 'string') return false;
+
+              switch (data.type) {
+                case 'start': {
+                  const members = Array.isArray(data.members)
+                    ? data.members.filter(isRecord).map((member, index): EnhanceMember => {
+                      const id = typeof member.id === 'string' ? member.id : String(index);
+                      return {
+                        id,
+                        label: typeof member.label === 'string' ? member.label : id,
+                        provider: typeof member.provider_id === 'string'
+                          ? member.provider_id
+                          : typeof member.provider === 'string'
+                            ? member.provider
+                            : '',
+                        status: 'thinking',
+                      };
+                    })
+                    : [];
+                  const aggregatorLabel = typeof data.aggregator === 'string' ? data.aggregator : undefined;
+                  updateAssistantMessage((message) => ({
+                    ...message,
+                    enhancing: true,
+                    enhance: { phase: 'drafting', members, aggregatorLabel },
+                  }));
+                  return false;
+                }
+                case 'candidate': {
+                  const id = typeof data.id === 'string' ? data.id : '';
+                  if (!id) return false;
+                  const status: EnhanceMember['status'] =
+                    data.status === 'done' ? 'done' : data.status === 'failed' ? 'failed' : 'thinking';
+                  const draft = typeof data.draft === 'string' ? data.draft : undefined;
+                  const error = typeof data.error === 'string' ? data.error : undefined;
+                  updateAssistantMessage((message) => {
+                    const current = message.enhance ?? { phase: 'drafting', members: [] };
+                    const hasMember = current.members.some((member) => member.id === id);
+                    const members = hasMember
+                      ? current.members.map((member) =>
+                        member.id === id ? { ...member, status, draft, error } : member,
+                      )
+                      : [...current.members, { id, label: id, provider: '', status, draft, error }];
+                    return {
+                      ...message,
+                      enhancing: true,
+                      enhance: { ...current, members },
+                    };
+                  });
+                  return false;
+                }
+                case 'aggregate': {
+                  updateAssistantMessage((message) => {
+                    const current = message.enhance ?? { phase: 'drafting', members: [] };
+                    return {
+                      ...message,
+                      enhancing: true,
+                      enhance: { ...current, phase: 'aggregating' },
+                    };
+                  });
+                  return false;
+                }
+                case 'content': {
+                  if (typeof data.content !== 'string' || data.content.length === 0) return false;
+                  updateAssistantMessage((message) => ({ ...message, content: message.content + data.content }));
+                  return false;
+                }
+                case 'error': {
+                  const messageText = typeof data.message === 'string' ? data.message : '增强输出失败。';
+                  updateAssistantMessage((message) => ({
+                    ...message,
+                    content: message.content.trim()
+                      ? `${message.content}\n\n错误: ${messageText}`
+                      : `错误: ${messageText}`,
+                  }));
+                  return false;
+                }
+                case 'done': {
+                  const dbId = typeof data.assistant_message_id === 'string'
+                    ? data.assistant_message_id
+                    : undefined;
+                  set((state) => ({
+                    isLoading: false,
+                    streamingId: null,
+                    messages: state.messages.map((message) => {
+                      if (message.id !== assistantId) return message;
+                      const current = message.enhance ?? { phase: 'done', members: [] };
+                      return {
+                        ...message,
+                        dbId,
+                        enhancing: false,
+                        enhance: { ...current, phase: 'done' },
+                      };
+                    }),
+                  }));
+                  return true;
+                }
+                default:
+                  return false;
+              }
+            };
+
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            if (reader) {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                while (true) {
+                  const newlineIdx = buffer.indexOf('\n');
+                  if (newlineIdx === -1) break;
+
+                  const line = buffer.slice(0, newlineIdx).trim();
+                  buffer = buffer.slice(newlineIdx + 1);
+
+                  if (!line.startsWith('data:')) continue;
+
+                  try {
+                    const finished = applyEnhanceEvent(JSON.parse(line.slice(5).trimStart()));
+                    if (finished) return;
+                  } catch {
+                    // Skip malformed JSON lines
+                  }
+                }
+              }
+            }
+
+            set((state) => ({
+              isLoading: false,
+              streamingId: null,
+              messages: state.messages.map((message) => {
+                if (message.id !== assistantId) return message;
+                const current = message.enhance ?? { phase: 'done', members: [] };
+                return {
+                  ...message,
+                  enhancing: false,
+                  content: message.content || '（无响应）',
+                  enhance: { ...current, phase: 'done' },
+                };
+              }),
+            }));
+          };
 
           // Run one chat request and stream its SSE response into the assistant
           // bubble. Returns 'screen_read' when the backend asked the desktop
@@ -362,6 +621,11 @@ export const useChatStore = create<ChatState>()(
             }));
             return 'done';
           };
+
+          if (enhanceActive) {
+            await runEnhancedChatStream(enhanceOverride ? { ...baseBody, enhance: enhanceOverride } : baseBody);
+            return;
+          }
 
           const outcome = await runChatStream(baseBody);
           if (outcome === 'screen_read') {
@@ -591,13 +855,15 @@ export const useChatStore = create<ChatState>()(
 
       // Start a fresh conversation: drop the session so the next message creates
       // a new one rather than appending to the previous thread.
-      clearMessages: () => set({ messages: [], sessionId: null }),
+      clearMessages: () => set({ messages: [], sessionId: null, enhanceDefaultLoaded: false }),
     }),
     {
       name: CHAT_SESSION_STORAGE_KEY,
       partialize: (state) => ({
         messages: state.messages,
         sessionId: state.sessionId,
+        enhanceEnabled: state.enhanceEnabled,
+        enhanceDefaultLoaded: state.enhanceDefaultLoaded,
       }),
     },
   ),
@@ -614,6 +880,8 @@ function createChatSessionSnapshot(state = useChatStore.getState()): ChatSession
     isLoading: state.isLoading,
     streamingId: state.streamingId,
     sessionId: state.sessionId,
+    enhanceEnabled: state.enhanceEnabled,
+    enhanceDefaultLoaded: state.enhanceDefaultLoaded,
   };
 }
 
@@ -639,6 +907,8 @@ function applyChatSessionSnapshot(value: unknown) {
         ? current.streamingId
         : snapshot.streamingId ?? null,
       sessionId: snapshot.sessionId ?? (snapshot.messages.length > 0 ? current.sessionId : null),
+      enhanceEnabled: snapshot.enhanceEnabled ?? current.enhanceEnabled,
+      enhanceDefaultLoaded: snapshot.enhanceDefaultLoaded ?? current.enhanceDefaultLoaded,
     });
   } finally {
     applyingRemoteSnapshot = false;

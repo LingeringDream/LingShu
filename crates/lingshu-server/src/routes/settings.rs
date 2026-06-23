@@ -23,6 +23,10 @@ pub fn router() -> Router<AppState> {
             "/api/v1/settings/role-prompt",
             get(get_role_prompt).patch(update_role_prompt),
         )
+        .route(
+            "/api/v1/settings/enhance",
+            get(get_enhance_settings).patch(update_enhance_settings),
+        )
 }
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -548,6 +552,205 @@ async fn update_role_prompt(
     }))
 }
 
+// ── Multi-Model Enhancement (MoA) Settings ──────────────────────────
+
+/// One participant in multi-model enhancement: a provider + the model to use.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EnhanceMemberConfig {
+    /// Provider id (matches `llm_providers.provider_id`), e.g. "deepseek".
+    pub provider_id: String,
+    /// Model name to call on that provider, e.g. "deepseek-chat".
+    pub model: String,
+}
+
+/// Per-user multi-model enhancement configuration, persisted in
+/// `users.enhance_settings`. When enhancement is requested for a turn, the turn
+/// is answered by all `members` in parallel and their drafts synthesised by
+/// `aggregator` into one final reply.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EnhanceSettings {
+    /// Whether enhancement is on by default for new chat turns.
+    #[serde(default)]
+    pub enabled_default: bool,
+    /// Models that each independently draft an answer.
+    #[serde(default)]
+    pub members: Vec<EnhanceMemberConfig>,
+    /// The model that synthesises the drafts into the final reply. Absent =
+    /// enhancement cannot run (caller falls back to a normal single-model turn).
+    #[serde(default)]
+    pub aggregator: Option<EnhanceMemberConfig>,
+    /// Per-member draft timeout in milliseconds. A member exceeding this is
+    /// dropped; the turn proceeds as long as at least one draft succeeds.
+    #[serde(default = "default_per_model_timeout_ms")]
+    pub per_model_timeout_ms: u64,
+    /// Maximum number of member drafts to run concurrently.
+    #[serde(default = "default_max_parallel")]
+    pub max_parallel: u32,
+}
+
+fn default_per_model_timeout_ms() -> u64 {
+    30_000
+}
+
+fn default_max_parallel() -> u32 {
+    4
+}
+
+impl Default for EnhanceSettings {
+    fn default() -> Self {
+        Self {
+            enabled_default: false,
+            members: Vec::new(),
+            aggregator: None,
+            per_model_timeout_ms: default_per_model_timeout_ms(),
+            max_parallel: default_max_parallel(),
+        }
+    }
+}
+
+impl EnhanceSettings {
+    /// Whether enhancement can actually run: needs ≥1 member and an aggregator.
+    pub fn is_runnable(&self) -> bool {
+        !self.members.is_empty() && self.aggregator.is_some()
+    }
+}
+
+/// Load per-user enhancement settings from `users.enhance_settings`. An absent
+/// or undeserializable value yields `EnhanceSettings::default()` (disabled).
+pub async fn enhance_settings_for_user(state: &AppState, user_id: Uuid) -> EnhanceSettings {
+    let raw: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT enhance_settings FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    raw.and_then(|v| serde_json::from_value::<EnhanceSettings>(v).ok())
+        .unwrap_or_default()
+}
+
+async fn persist_enhance_settings_for_user(
+    state: &AppState,
+    user_id: Uuid,
+    settings: &EnhanceSettings,
+) -> Result<(), AppError> {
+    let value = serde_json::to_value(settings)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize enhance settings: {e}")))?;
+    sqlx::query("UPDATE users SET enhance_settings = $1, updated_at = NOW() WHERE id = $2")
+        .bind(value)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+    Ok(())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/settings/enhance",
+    responses((status = 200, body = EnhanceSettings), (status = 401))
+)]
+async fn get_enhance_settings(
+    State(state): State<AppState>,
+    auth: Option<AuthUser>,
+) -> Result<Json<EnhanceSettings>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    Ok(Json(enhance_settings_for_user(&state, user_id).await))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/settings/enhance",
+    request_body = EnhanceSettings,
+    responses((status = 200, body = EnhanceSettings), (status = 401))
+)]
+async fn update_enhance_settings(
+    State(state): State<AppState>,
+    auth: Option<AuthUser>,
+    Json(settings): Json<EnhanceSettings>,
+) -> Result<Json<EnhanceSettings>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    persist_enhance_settings_for_user(&state, user_id, &settings).await?;
+    Ok(Json(settings))
+}
+
+// ── Enhancement client resolution ───────────────────────────────────
+
+/// A resolved member client for one enhancement participant.
+pub struct EnhanceClient {
+    /// Human-readable label for the UI, e.g. "DeepSeek · deepseek-chat".
+    pub label: String,
+    /// Provider id, echoed to the frontend so it can show a logo/badge.
+    pub provider_id: String,
+    /// The client configured for this member's provider (base URL + key).
+    pub client: crate::llm::client::LlmClient,
+    /// The model name to call on that client.
+    pub model: String,
+}
+
+/// Load one saved provider row by its `provider_id` for this user.
+async fn load_provider_by_id(
+    state: &AppState,
+    user_id: Uuid,
+    provider_id: &str,
+) -> Option<LlmProviderRow> {
+    sqlx::query_as::<_, LlmProviderRow>(
+        r#"SELECT id, user_id, provider_id, display_name, api_key_encrypted, api_base_url, models, is_active, created_at, updated_at
+           FROM llm_providers
+           WHERE user_id = $1 AND provider_id = $2 AND deleted_at IS NULL
+           ORDER BY updated_at DESC
+           LIMIT 1"#,
+    )
+    .bind(user_id)
+    .bind(provider_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Resolve an `LlmClient` for each enhancement member, layering the member
+/// provider's base URL + (decrypted) API key over the server-default client.
+/// Mirrors `resolve_client_for_user` but per-member, and never fails: a member
+/// whose provider can't be resolved falls back to the default client so one bad
+/// member can't abort the whole turn.
+pub async fn resolve_clients_for_enhance(
+    state: &AppState,
+    user_id: Uuid,
+    members: &[EnhanceMemberConfig],
+) -> Vec<EnhanceClient> {
+    let mut out = Vec::with_capacity(members.len());
+    for m in members {
+        let row = load_provider_by_id(state, user_id, &m.provider_id).await;
+        let (base_url, api_key, display) = match &row {
+            Some(r) => {
+                let key = decrypt_provider_key(
+                    r.api_key_encrypted.as_deref(),
+                    state.token_cipher.as_deref(),
+                )
+                .ok()
+                .flatten();
+                (r.api_base_url.clone(), key, r.display_name.clone())
+            }
+            None => (None, None, m.provider_id.clone()),
+        };
+        let use_default = provider_uses_ollama_protocol(&m.provider_id)
+            || base_url.as_deref().unwrap_or("").is_empty();
+        let client = if use_default {
+            state.llm.clone()
+        } else {
+            state.llm.with_overrides(api_key, base_url)
+        };
+        out.push(EnhanceClient {
+            label: format!("{display} · {}", m.model),
+            provider_id: m.provider_id.clone(),
+            client,
+            model: m.model.clone(),
+        });
+    }
+    out
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -657,6 +860,36 @@ mod tests {
         };
         assert_eq!(patch.provider.as_deref(), Some("openai"));
         assert!(patch.api_key.is_none());
+    }
+
+    #[test]
+    fn enhance_settings_default_is_disabled_and_not_runnable() {
+        let settings = EnhanceSettings::default();
+
+        assert!(!settings.enabled_default);
+        assert!(settings.members.is_empty());
+        assert!(settings.aggregator.is_none());
+        assert_eq!(settings.per_model_timeout_ms, 30_000);
+        assert_eq!(settings.max_parallel, 4);
+        assert!(!settings.is_runnable());
+    }
+
+    #[test]
+    fn enhance_settings_requires_member_and_aggregator_to_run() {
+        let member = EnhanceMemberConfig {
+            provider_id: "deepseek".into(),
+            model: "deepseek-chat".into(),
+        };
+        let mut settings = EnhanceSettings {
+            members: vec![member.clone()],
+            ..Default::default()
+        };
+
+        assert!(!settings.is_runnable());
+
+        settings.aggregator = Some(member);
+
+        assert!(settings.is_runnable());
     }
 
     #[test]

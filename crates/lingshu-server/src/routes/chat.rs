@@ -22,22 +22,416 @@ use crate::llm::client::{
 use crate::llm::forgetting::{self, ForgettingPolicy};
 use crate::llm::prompts::{personality_prompt, PersonalityValues};
 use crate::models::personality::PersonalityTraits;
-use crate::routes::settings::{llm_settings_for_user, resolve_client_for_user};
+use crate::routes::settings::{
+    llm_settings_for_user, resolve_client_for_user, EnhanceMemberConfig, EnhanceSettings,
+};
 use crate::state::{AppState, PetNotification};
 
 type ChatSse = Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/chat", post(chat)).route(
-        "/api/v1/chat/messages/:id/regenerate",
-        post(regenerate_message),
+    Router::new()
+        .route("/api/v1/chat", post(chat))
+        .route("/api/v1/chat/enhance", post(enhance_chat))
+        .route(
+            "/api/v1/chat/messages/:id/regenerate",
+            post(regenerate_message),
+        )
+}
+
+// ── Multi-Model Enhancement (MoA) ───────────────────────────────────
+
+/// One enhancement member, echoed to the frontend so it can render a chip.
+#[derive(Debug, Clone, Serialize)]
+struct EnhanceMemberInfo {
+    id: String,
+    label: String,
+    provider_id: String,
+}
+
+/// SSE event emitted by the enhancement endpoint. Tagged with `type` so the
+/// frontend can switch on it in the same `onmessage` parser.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum EnhanceChunk {
+    /// Sent once at the start: which members will draft and who aggregates.
+    Start {
+        members: Vec<EnhanceMemberInfo>,
+        aggregator: String,
+    },
+    /// A member's draft finished (done) or dropped (failed).
+    Candidate {
+        id: String,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        draft: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Drafts are in; the aggregator is now synthesising the final reply.
+    Aggregate,
+    /// An incremental delta of the aggregated final reply.
+    Content { content: String },
+    /// Terminal event. `assistant_message_id` is set when the reply was saved.
+    Done {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        assistant_message_id: Option<uuid::Uuid>,
+    },
+    /// A non-fatal error to surface in the chat bubble.
+    Error { message: String },
+}
+
+/// Per-turn override for MoA. The saved user settings remain the default, but
+/// the client can choose participants for the current message without
+/// persisting that choice.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
+pub struct EnhanceRequestOverride {
+    /// Models to draft this turn. Omitted = use saved members.
+    #[serde(default)]
+    pub members: Option<Vec<EnhanceMemberConfig>>,
+    /// Aggregator for this turn. Omitted/null = use saved aggregator.
+    #[serde(default)]
+    pub aggregator: Option<EnhanceMemberConfig>,
+    /// Per-member draft timeout for this turn. Omitted = use saved timeout.
+    #[serde(default)]
+    pub per_model_timeout_ms: Option<u64>,
+    /// Maximum member drafts to run concurrently this turn. Omitted = saved.
+    #[serde(default)]
+    pub max_parallel: Option<u32>,
+}
+
+fn apply_enhance_override(
+    mut settings: EnhanceSettings,
+    override_cfg: Option<EnhanceRequestOverride>,
+) -> EnhanceSettings {
+    let Some(override_cfg) = override_cfg else {
+        return settings;
+    };
+
+    if let Some(members) = override_cfg.members {
+        settings.members = members;
+    }
+    if let Some(aggregator) = override_cfg.aggregator {
+        settings.aggregator = Some(aggregator);
+    }
+    if let Some(timeout) = override_cfg.per_model_timeout_ms {
+        settings.per_model_timeout_ms = timeout.max(1_000);
+    }
+    if let Some(max_parallel) = override_cfg.max_parallel {
+        settings.max_parallel = max_parallel.max(1);
+    }
+
+    settings
+}
+
+/// Build the aggregator's user prompt: the question plus every member draft,
+/// with instructions to synthesise rather than concatenate. The system prompt
+/// (personality, memory, role) is supplied separately by the caller.
+fn build_aggregation_prompt(
+    user_message: &str,
+    drafts: &[(String, String)],
+    personality_snippet: &str,
+) -> String {
+    let mut s = String::new();
+    s.push_str("你正在综合多位 AI 助手对同一问题的回答,输出一份最终的、更完整优秀的回答。\n\n");
+    s.push_str("用户的问题:\n");
+    s.push_str(user_message);
+    s.push_str("\n\n各助手的回答(仅供参考,可能有错漏或冲突):\n");
+    for (i, (label, text)) in drafts.iter().enumerate() {
+        s.push_str(&format!("\n【回答 {} · {}】\n{}\n", i + 1, label, text));
+    }
+    s.push_str("\n综合要求:\n");
+    s.push_str("1. 取各家所长,补全任一回答遗漏的要点;\n");
+    s.push_str("2. 发现事实或逻辑冲突时,自行判断并只保留正确的一方,不要罗列分歧;\n");
+    s.push_str("3. 不要提及\"草稿\"\"其他助手\"\"综合\"等过程性词语,直接以你自己的口吻作答;\n");
+    s.push_str("4. 若所有回答质量都不佳,请基于你自己的判断重写一份更好的回答。\n");
+    if !personality_snippet.is_empty() {
+        s.push_str("5. 保持你一贯的语气与风格。\n");
+    }
+    s.push_str("\n现在请直接输出最终回答:\n");
+    s
+}
+
+/// Emit a single-error SSE stream (e.g. enhancement not configured).
+fn enhance_error_sse(message: String) -> ChatSse {
+    let chunks = vec![
+        EnhanceChunk::Error { message },
+        EnhanceChunk::Done {
+            assistant_message_id: None,
+        },
+    ];
+    let stream = futures::stream::iter(chunks.into_iter().map(|c| {
+        Ok::<_, Infallible>(
+            Event::default()
+                .json_data(c)
+                .unwrap_or_else(|_| Event::default().data("{\"type\":\"done\"}")),
+        )
+    }));
+    Sse::new(Box::pin(stream))
+}
+
+/// Multi-model enhanced chat. Several member models draft in parallel; a single
+/// aggregator model synthesises their drafts into one final reply, streamed to
+/// the client. Falls back to a direct answer if every member fails. Purely
+/// additive: ordinary `/api/v1/chat` is untouched.
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/enhance",
+    request_body = ChatRequest,
+    responses(
+        (status = 200, description = "SSE stream of EnhanceChunk events", content_type = "text/event-stream"),
+        (status = 401, description = "Unauthorized")
     )
+)]
+pub async fn enhance_chat(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<crate::auth::AuthUser>,
+    Json(req): Json<ChatRequest>,
+) -> Result<ChatSse, AppError> {
+    let user_id = auth::require_user(auth).await?;
+
+    let enhance = apply_enhance_override(
+        crate::routes::settings::enhance_settings_for_user(&state, user_id).await,
+        req.enhance.clone(),
+    );
+    if !enhance.is_runnable() {
+        return Ok(enhance_error_sse(
+            "尚未配置增强:请在设置中至少选择一个参与模型,并指定一个整合模型。".to_string(),
+        ));
+    }
+    let aggregator_cfg = enhance
+        .aggregator
+        .clone()
+        .expect("is_runnable ensured Some");
+
+    // Generation knobs come from the user's global LLM settings.
+    let base_settings = llm_settings_for_user(&state, user_id).await;
+    let options = crate::llm::client::ChatOptions {
+        temperature: Some(base_settings.temperature),
+        num_predict: Some(base_settings.max_tokens),
+    };
+
+    let members =
+        crate::routes::settings::resolve_clients_for_enhance(&state, user_id, &enhance.members)
+            .await;
+    let aggregator = crate::routes::settings::resolve_clients_for_enhance(
+        &state,
+        user_id,
+        std::slice::from_ref(&aggregator_cfg),
+    )
+    .await
+    .into_iter()
+    .next();
+    let Some(aggregator) = aggregator else {
+        return Ok(enhance_error_sse("无法解析整合模型。".to_string()));
+    };
+
+    let session_id = req.session_id;
+    let user_message = req.message.clone();
+
+    // Reuse the normal chat setup: memory + personality + system prompt.
+    let memory_context = fetch_memory_context(
+        &state.db,
+        &state.vector,
+        &aggregator.client,
+        &state.config.llm.embed_model,
+        user_id,
+        &user_message,
+    )
+    .await;
+    let style_exemplar_snippet = load_style_exemplar_snippet(&state.db, user_id).await;
+    let personality_values = load_active_personality(&state.db, user_id).await;
+    let personality_snippet = personality_prompt(&personality_values);
+    let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
+    let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
+    let capabilities = capability_section(&perms);
+    let system_prompt = build_system_prompt(
+        &personality_snippet,
+        &memory_context,
+        &style_exemplar_snippet,
+        &role_prompt,
+        &capabilities,
+    );
+
+    let mut base_messages = vec![ChatMessage::system(system_prompt.clone())];
+    if let Some(sid) = session_id {
+        let history =
+            load_chat_history(&state.db, sid, user_id, base_settings.context_messages).await?;
+        for (role, content) in history {
+            base_messages.push(ChatMessage {
+                role,
+                content,
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+    }
+    base_messages.push(ChatMessage::user(user_message.clone()));
+
+    // Persist the user message (mirrors `chat`).
+    if let Some(sid) = session_id {
+        let _ = sqlx::query(
+            "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)",
+        )
+        .bind(sid)
+        .bind(&user_message)
+        .execute(&state.db)
+        .await;
+        let _ = sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1")
+            .bind(sid)
+            .execute(&state.db)
+            .await;
+        crate::routes::sessions::invalidate_session_cache(&state, user_id).await;
+    }
+
+    let member_infos: Vec<EnhanceMemberInfo> = members
+        .iter()
+        .enumerate()
+        .map(|(i, m)| EnhanceMemberInfo {
+            id: i.to_string(),
+            label: m.label.clone(),
+            provider_id: m.provider_id.clone(),
+        })
+        .collect();
+    let aggregator_label = aggregator.label.clone();
+    let member_timeout = std::time::Duration::from_millis(enhance.per_model_timeout_ms);
+    let max_parallel = enhance.max_parallel.max(1) as usize;
+
+    // A producer task streams enhancement events through an unbounded channel;
+    // the SSE response forwards them. Using a channel (rather than the
+    // async-stream macro) keeps the parallel-draft + streamed-aggregate phases
+    // straightforward and avoids adding a new dependency.
+    let (tx, rx) = futures::channel::mpsc::unbounded::<EnhanceChunk>();
+
+    tokio::spawn(async move {
+        let _ = tx.unbounded_send(EnhanceChunk::Start {
+            members: member_infos,
+            aggregator: aggregator_label,
+        });
+
+        // ── Phase 1: parallel drafts (timeout + fault tolerant) ──
+        let mut futs = futures::stream::iter(members.into_iter().enumerate().map(|(i, m)| {
+            let msgs = base_messages.clone();
+            let opts = options.clone();
+            let id = i.to_string();
+            let label = m.label.clone();
+            async move {
+                let r =
+                    tokio::time::timeout(member_timeout, m.client.chat(&m.model, msgs, Some(opts)))
+                        .await;
+                (id, label, r)
+            }
+        }))
+        .buffer_unordered(max_parallel);
+
+        let mut drafts: Vec<(String, String)> = Vec::new();
+        while let Some((id, label, r)) = futs.next().await {
+            let chunk = match r {
+                Ok(Ok(text)) if !text.trim().is_empty() => {
+                    drafts.push((label, text.clone()));
+                    EnhanceChunk::Candidate {
+                        id,
+                        status: "done".into(),
+                        draft: Some(text),
+                        error: None,
+                    }
+                }
+                Ok(Ok(_)) => EnhanceChunk::Candidate {
+                    id,
+                    status: "failed".into(),
+                    draft: None,
+                    error: Some("空回复".into()),
+                },
+                Ok(Err(e)) => EnhanceChunk::Candidate {
+                    id,
+                    status: "failed".into(),
+                    draft: None,
+                    error: Some(e.to_string()),
+                },
+                Err(_) => EnhanceChunk::Candidate {
+                    id,
+                    status: "failed".into(),
+                    draft: None,
+                    error: Some("超时".into()),
+                },
+            };
+            let _ = tx.unbounded_send(chunk);
+        }
+
+        // ── Phase 2: aggregate (streamed). All-failed → answer directly. ──
+        let _ = tx.unbounded_send(EnhanceChunk::Aggregate);
+
+        let agg_user = if drafts.is_empty() {
+            user_message.clone()
+        } else {
+            build_aggregation_prompt(&user_message, &drafts, &personality_snippet)
+        };
+        let agg_messages = vec![
+            ChatMessage::system(system_prompt.clone()),
+            ChatMessage::user(agg_user),
+        ];
+
+        let mut full = String::new();
+        let agg_stream =
+            aggregator
+                .client
+                .chat_stream(&aggregator.model, agg_messages, Some(options.clone()));
+        futures::pin_mut!(agg_stream);
+        while let Some(delta) = agg_stream.next().await {
+            match delta {
+                Ok(d) => {
+                    if d.content.is_empty() {
+                        continue;
+                    }
+                    full.push_str(&d.content);
+                    let _ = tx.unbounded_send(EnhanceChunk::Content { content: d.content });
+                }
+                Err(e) => {
+                    let _ = tx.unbounded_send(EnhanceChunk::Error {
+                        message: e.to_string(),
+                    });
+                }
+            }
+        }
+
+        // Persist the assistant reply (best-effort).
+        let assistant_message_id = match (session_id, full.trim().is_empty()) {
+            (Some(sid), false) => sqlx::query_scalar::<_, uuid::Uuid>(
+                "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'assistant', $2) RETURNING id",
+            )
+            .bind(sid)
+            .bind(&full)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten(),
+            _ => None,
+        };
+
+        let _ = tx.unbounded_send(EnhanceChunk::Done {
+            assistant_message_id,
+        });
+    });
+
+    let stream = rx.map(|chunk: EnhanceChunk| {
+        Ok::<_, Infallible>(
+            Event::default()
+                .json_data(chunk)
+                .unwrap_or_else(|_| Event::default().data("{\"type\":\"done\"}")),
+        )
+    });
+
+    Ok(Sse::new(Box::pin(stream)))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ChatRequest {
     pub message: String,
     pub session_id: Option<Uuid>,
+    /// Optional per-turn MoA selection. Only used by `/api/v1/chat/enhance`;
+    /// normal `/api/v1/chat` ignores it.
+    #[serde(default)]
+    pub enhance: Option<EnhanceRequestOverride>,
     /// Screen text captured client-side (main app process) and fed back so the
     /// model can answer using it. Set only on the auto-continuation turn after
     /// a `read_screen` tool call; see the screen-read flow in this module.
@@ -2774,6 +3168,70 @@ mod tests {
             personality_pos < memory_pos,
             "Personality section ({personality_pos}) should come before memory section ({memory_pos})"
         );
+    }
+
+    #[test]
+    fn build_aggregation_prompt_includes_question_and_every_draft() {
+        let drafts = vec![
+            (
+                "DeepSeek · deepseek-chat".to_string(),
+                "先给出方案 A。".to_string(),
+            ),
+            ("OpenAI · gpt-4o".to_string(), "补充风险 B。".to_string()),
+        ];
+
+        let prompt = build_aggregation_prompt("如何规划一个 MoA 功能?", &drafts, "保持简洁");
+
+        assert!(prompt.contains("用户的问题"));
+        assert!(prompt.contains("如何规划一个 MoA 功能?"));
+        assert!(prompt.contains("DeepSeek · deepseek-chat"));
+        assert!(prompt.contains("先给出方案 A。"));
+        assert!(prompt.contains("OpenAI · gpt-4o"));
+        assert!(prompt.contains("补充风险 B。"));
+        assert!(prompt.contains("直接输出最终回答"));
+    }
+
+    #[test]
+    fn enhance_request_override_replaces_members_without_persisting_shape() {
+        let saved_member = EnhanceMemberConfig {
+            provider_id: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+        };
+        let selected_member = EnhanceMemberConfig {
+            provider_id: "deepseek".to_string(),
+            model: "deepseek-chat".to_string(),
+        };
+        let selected_aggregator = EnhanceMemberConfig {
+            provider_id: "anthropic".to_string(),
+            model: "claude-sonnet-4".to_string(),
+        };
+        let saved = EnhanceSettings {
+            enabled_default: true,
+            members: vec![saved_member],
+            aggregator: None,
+            per_model_timeout_ms: 30_000,
+            max_parallel: 4,
+        };
+
+        let merged = apply_enhance_override(
+            saved,
+            Some(EnhanceRequestOverride {
+                members: Some(vec![selected_member.clone()]),
+                aggregator: Some(selected_aggregator.clone()),
+                per_model_timeout_ms: Some(0),
+                max_parallel: Some(0),
+            }),
+        );
+
+        assert_eq!(merged.members.len(), 1);
+        assert_eq!(merged.members[0].provider_id, selected_member.provider_id);
+        assert_eq!(merged.members[0].model, selected_member.model);
+        assert_eq!(
+            merged.aggregator.as_ref().map(|m| (m.provider_id.as_str(), m.model.as_str())),
+            Some((selected_aggregator.provider_id.as_str(), selected_aggregator.model.as_str()))
+        );
+        assert_eq!(merged.per_model_timeout_ms, 1_000);
+        assert_eq!(merged.max_parallel, 1);
     }
 
     #[test]

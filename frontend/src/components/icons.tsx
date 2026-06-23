@@ -158,6 +158,16 @@ export function PersonaIcon(props: IconProps) {
   );
 }
 
+export function StarClusterIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M11 3 12.5 8.5 18 10l-5.5 1.5L11 17l-1.5-5.5L4 10l5.5-1.5Z" />
+      <path d="M18.5 3.5 19.2 6 22 6.8l-2.8.8-.7 2.4-.7-2.4-2.8-.8L17.8 6Z" />
+      <path d="M18 15l.8 2.8 2.7.7-2.7.7L18 22l-.8-2.8-2.7-.7 2.7-.7Z" />
+    </IconBase>
+  );
+}
+
 export function WrenchIcon(props: IconProps) {
   return (
     <IconBase {...props}>

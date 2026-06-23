@@ -35,6 +35,8 @@ describe('chatStore', () => {
       isLoading: false,
       streamingId: null,
       sessionId: null,
+      enhanceEnabled: false,
+      enhanceDefaultLoaded: false,
     });
   });
 
@@ -207,5 +209,110 @@ describe('chatStore', () => {
       dbId: 'db-a1',
       revision: 1,
     });
+  });
+
+  it('streams enhanced chat through the MoA endpoint and records member progress', async () => {
+    mockedApiFetch.mockImplementation(async (input, init) => {
+      if (input === '/api/v1/conversations' && init?.method === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ id: 'session-123' }),
+        } as Response;
+      }
+      if (input === '/api/v1/chat/enhance' && init?.method === 'POST') {
+        return sseResponse([
+          {
+            type: 'start',
+            members: [{ id: '0', label: 'DeepSeek · deepseek-chat', provider_id: 'deepseek' }],
+            aggregator: 'OpenAI · gpt-4o',
+          },
+          { type: 'candidate', id: '0', status: 'done', draft: '候选答案' },
+          { type: 'aggregate' },
+          { type: 'content', content: '最终' },
+          { type: 'content', content: '答案' },
+          { type: 'done', assistant_message_id: 'assistant-db-id' },
+        ]);
+      }
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    useChatStore.setState({ enhanceEnabled: true, enhanceDefaultLoaded: true });
+
+    await useChatStore.getState().sendMessage('解释 MoA');
+
+    expect(mockedApiFetch).toHaveBeenCalledWith(
+      '/api/v1/chat/enhance',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ message: '解释 MoA', session_id: 'session-123' }),
+      }),
+    );
+    const assistant = useChatStore.getState().messages.find((message) => message.role === 'assistant');
+    expect(assistant).toMatchObject({
+      content: '最终答案',
+      dbId: 'assistant-db-id',
+      enhance: {
+        phase: 'done',
+        aggregatorLabel: 'OpenAI · gpt-4o',
+        members: [
+          {
+            id: '0',
+            label: 'DeepSeek · deepseek-chat',
+            provider: 'deepseek',
+            status: 'done',
+            draft: '候选答案',
+          },
+        ],
+      },
+    });
+  });
+
+  it('sends the selected enhancement participants with the current chat turn', async () => {
+    mockedApiFetch.mockImplementation(async (input, init) => {
+      if (input === '/api/v1/conversations' && init?.method === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ id: 'session-123' }),
+        } as Response;
+      }
+      if (input === '/api/v1/chat/enhance' && init?.method === 'POST') {
+        return sseResponse([
+          {
+            type: 'start',
+            members: [{ id: '0', label: 'DeepSeek · deepseek-chat', provider_id: 'deepseek' }],
+            aggregator: 'OpenAI · gpt-4o',
+          },
+          { type: 'content', content: 'ok' },
+          { type: 'done', assistant_message_id: 'assistant-db-id' },
+        ]);
+      }
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    useChatStore.setState({ enhanceEnabled: true, enhanceDefaultLoaded: true });
+
+    await useChatStore.getState().sendMessage('解释 MoA', {
+      members: [{ provider_id: 'deepseek', model: 'deepseek-chat' }],
+      aggregator: { provider_id: 'openai', model: 'gpt-4o' },
+      per_model_timeout_ms: 45000,
+      max_parallel: 2,
+    });
+
+    expect(mockedApiFetch).toHaveBeenCalledWith(
+      '/api/v1/chat/enhance',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          message: '解释 MoA',
+          session_id: 'session-123',
+          enhance: {
+            members: [{ provider_id: 'deepseek', model: 'deepseek-chat' }],
+            aggregator: { provider_id: 'openai', model: 'gpt-4o' },
+            per_model_timeout_ms: 45000,
+            max_parallel: 2,
+          },
+        }),
+      }),
+    );
   });
 });

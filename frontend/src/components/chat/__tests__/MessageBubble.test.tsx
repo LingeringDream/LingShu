@@ -102,4 +102,45 @@ describe('MessageBubble', () => {
       'too_formal',
     );
   });
+
+  it('shows enhanced collaboration progress and expands a member draft', () => {
+    render(
+      <MessageBubble
+        message={makeMessage({
+          role: 'assistant',
+          content: '最终答案',
+          enhance: {
+            phase: 'done',
+            aggregatorLabel: 'OpenAI · gpt-4o',
+            members: [
+              {
+                id: '0',
+                label: 'DeepSeek · deepseek-chat',
+                provider: 'deepseek',
+                status: 'done',
+                draft: '候选答案',
+              },
+              {
+                id: '1',
+                label: 'Ollama · qwen',
+                provider: 'ollama',
+                status: 'failed',
+                error: '超时',
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('由 2 个模型增强·查看过程')).toBeInTheDocument();
+    expect(screen.getByText('✦增强')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('由 2 个模型增强·查看过程'));
+
+    expect(screen.getByText('正在综合各方观点')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('DeepSeek · deepseek-chat'));
+    expect(screen.getByText('候选答案')).toBeInTheDocument();
+    expect(screen.getByText('超时')).toBeInTheDocument();
+  });
 });
