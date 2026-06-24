@@ -1231,8 +1231,11 @@ fn build_system_prompt(
         parts.push(format!(
             "## 时间感知\n\
              当前时间：{now}\n\
-             用户的每条消息开头都带有 [YYYY-MM-DD HH:MM] 格式的本地时间戳，标注该消息的发送时刻。\
-             请结合这些时间戳理解对话中的时间引用（「今天」「刚才」「上周」等），不要声称看不到消息的发送时间。"
+             系统会在用户每条消息的正文最前面自动加上 [YYYY-MM-DD HH:MM] 格式的本地时间戳，标注该消息的发送时刻。\
+             这不是你无法获取的「元数据」，而是直接写在消息正文里、对你完全可见的文字。\n\
+             - 结合这些时间戳理解对话中的时间引用（「今天」「刚才」「上周」「三天前」等）。\n\
+             - 当用户直接问你能否看到消息的发送时间或时间戳时，回答「能」，并以最近一条消息开头的 [时间戳] 为依据说明；绝不要说自己看不到时间戳、看不到消息发送时间或只能看到正文。\n\
+             - 需要精确到当下的系统时间时，调用 get_current_time。"
         ));
     }
 
@@ -3213,6 +3216,22 @@ mod tests {
         // independent of what that zone is.
         let expected = utc.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string();
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn build_system_prompt_asserts_timestamp_visibility() {
+        let prompt = build_system_prompt("", "", "", "", "", "2026-06-23 14:30 CST");
+        assert!(prompt.contains("## 时间感知"), "time-awareness section present");
+        assert!(prompt.contains("2026-06-23 14:30 CST"), "current time injected");
+        // The anti-denial instruction must survive into the final prompt — this
+        // is what counters the model's "I can't see metadata" reflex.
+        assert!(
+            prompt.contains("绝不要说自己看不到时间戳"),
+            "must instruct the model not to deny seeing timestamps"
+        );
+        // When no time is supplied the section is omitted entirely.
+        let no_time = build_system_prompt("", "", "", "", "", "");
+        assert!(!no_time.contains("## 时间感知"), "section omitted without a time");
     }
 
     #[test]

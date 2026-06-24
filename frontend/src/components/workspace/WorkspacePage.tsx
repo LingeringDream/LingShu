@@ -184,6 +184,7 @@ function CalendarSection() {
         end_time: ev.end_time,
         location: ev.location,
         notes: ev.description,
+        recurrence: ev.recurrence,
       });
       setSyncResults((r) => ({ ...r, [ev.id]: '已同步到系统日历' }));
     } catch (e) {

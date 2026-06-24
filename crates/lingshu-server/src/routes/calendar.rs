@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query},
     routing, Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -339,15 +339,19 @@ async fn parse_and_create_event_with_recurrence(
     // Propagate a decrypt failure (stale ENCRYPTION_KEY) as a clear error.
     let llm = resolve_client_for_user(state, user_id, &settings).await?;
 
-    let now = Utc::now().to_rfc3339();
+    // Local time with offset (e.g. ...+08:00) so the model anchors "今天/今晚/
+    // 几小时后" to the user's wall clock and emits local-offset times. Using UTC
+    // here made it tag local clock times as +00:00 — "今天下午3点" came out as
+    // 15:00Z = 23:00 local, an 8h error for UTC+8.
+    let now = Local::now().to_rfc3339();
     let prompt = format!(
         r###"你是 灵枢（LingShu）的日历解析引擎。请从用户的自然语言输入中提取一个日程事件。
 
-今天是 {now}。所有用户的时间表述都是相对于此日期的。
+现在是 {now}（本地时间，已含时区偏移）。用户的所有时间表述都基于这个本地时区；你输出的 start_time / end_time 必须使用同一本地时区偏移（如 +08:00），绝不要改用 UTC（+00:00）。
 
 ## 解析规则
 - **title**：简短日程标题。如果用户说「和张三开会讨论需求」，标题应为「与张三讨论需求」而非「开会」。
-- **start_time / end_time**：ISO 8601 格式。如果用户只说开始时间没说时长，默认持续 1 小时。如果只说「下午」，默认 14:00。注意区分「明天下午」和「今天下午」。
+- **start_time / end_time**：ISO 8601 格式，**带本地时区偏移**（例如 2026-06-24T15:00:00+08:00，而非 ...Z 或 +00:00）。如果用户只说开始时间没说时长，默认持续 1 小时。如果只说「下午」，默认 14:00。注意区分「明天下午」和「今天下午」。
 - **description**：备注、会议链接、讨论要点等额外信息。没有则设为 null。
 - **location**：线下地点或线上会议链接。没有则设为 null。
 - **attendees**：参与人姓名数组。从「和张三李四一起」「叫上王五」等表述中提取。没有则为空数组 []。
