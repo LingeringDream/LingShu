@@ -565,12 +565,11 @@ async fn update_event(
     Json(req): Json<CreateEventRequest>,
 ) -> Result<Json<EventResponse>, AppError> {
     let user_id = auth::require_user(auth).await?;
-    let perms = check_calendar_permission(&state, user_id).await?;
-    if perms.l1_require_confirmation {
-        return Err(AppError::Forbidden(
-            "Calendar updates require an explicit confirmation flow before execution.".into(),
-        ));
-    }
+    // User-initiated edits from the workspace are explicit actions — gate on the
+    // L1 calendar permission only, mirroring delete_event. (Previously this
+    // returned 403 whenever l1_require_confirmation was on, which blocked the
+    // user from editing their own events at all.)
+    check_calendar_permission(&state, user_id).await?;
     validate_event_time(req.start_time, req.end_time)?;
     let attendees = serde_json::to_value(&req.attendees).unwrap_or_default();
     let recurrence = normalize_recurrence(req.recurrence)?;

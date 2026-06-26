@@ -1,14 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../../lib/api';
 import { useProjectStore, type Project } from '../../stores/projectStore';
 import { isTauri } from '../../lib/tauri';
-import { syncEventToAppleCalendar, deleteAppleCalendarEvent } from '../../lib/eventkit';
+import { syncEventToAppleCalendar, deleteAppleCalendarEvent, updateAppleCalendarEvent } from '../../lib/eventkit';
 import {
   formatRecurrenceLabel,
   isRecurringEvent,
   prepareCalendarEventsForDisplay,
   type CalendarRecurrenceFrequency,
   type CalendarRecurrenceRule,
+  type DisplayCalendarEvent,
 } from '../../lib/calendarPresentation';
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -22,6 +23,7 @@ interface CalendarEvent {
   end_time: string;
   status: string;
   calendar_name: string;
+  attendees?: string[];
   recurrence?: CalendarRecurrenceRule | null;
   parse_confidence?: number;
   apple_event_id?: string;
@@ -45,6 +47,53 @@ function fmtTime(iso: string): string {
   });
 }
 
+// UTC ISO ↔ datetime-local input value (YYYY-MM-DDTHH:mm), routed through the
+// browser's local timezone so an edit preserves the wall-clock time the user
+// sees (no UTC/local 8h skew on round-trip).
+function utcToLocalInput(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function localInputToUtc(local: string): string {
+  return new Date(local).toISOString();
+}
+
+function localDatePart(local: string): string {
+  return local.includes('T') ? local.slice(0, 10) : '';
+}
+
+function localTimePart(local: string): string {
+  return local.includes('T') ? local.slice(11, 16) : '';
+}
+
+function replaceLocalDate(local: string, date: string): string {
+  return `${date}T${localTimePart(local) || '00:00'}`;
+}
+
+function replaceLocalTime(local: string, time: string): string {
+  return `${localDatePart(local)}T${time}`;
+}
+
+function localInputFromDate(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function durationBetweenLocalInputs(start: string, end: string): number {
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  const durationMs = endMs - startMs;
+  return Number.isFinite(durationMs) && durationMs > 0 ? durationMs : 0;
+}
+
+function localInputPlusDuration(local: string, durationMs: number): string {
+  const startMs = new Date(local).getTime();
+  if (!Number.isFinite(startMs) || durationMs <= 0) return local;
+  return localInputFromDate(new Date(startMs + durationMs));
+}
+
 function getErrorMessage(e: unknown, fallback: string): string {
   return e instanceof Error ? e.message : fallback;
 }
@@ -64,6 +113,18 @@ function CalendarSection() {
   const [collapsed, setCollapsed] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [loadingEvents, setLoadingEvents] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editStart, setEditStart] = useState('');
+  const [editEnd, setEditEnd] = useState('');
+  const [editLocation, setEditLocation] = useState('');
+  const [editRecur, setEditRecur] = useState<CalendarRecurrenceFrequency>('none');
+  const editStartDateRef = useRef<HTMLInputElement>(null);
+  const editStartTimeRef = useRef<HTMLInputElement>(null);
+  const editEndDateRef = useRef<HTMLInputElement>(null);
+  const editEndTimeRef = useRef<HTMLInputElement>(null);
+  const editDurationMsRef = useRef(0);
+  const editEndManuallyChangedRef = useRef(false);
 
   const fetchEvents = useCallback(async () => {
     setLoadingEvents(true);
@@ -194,6 +255,93 @@ function CalendarSection() {
     }
   };
 
+  const startEdit = (ev: CalendarEvent & DisplayCalendarEvent) => {
+    setEditingId(ev.occurrenceId);
+    setEditTitle(ev.title);
+    setEditStart(utcToLocalInput(ev.startsAt.toISOString()));
+    setEditEnd(utcToLocalInput(ev.endsAt.toISOString()));
+    setEditLocation(ev.location ?? '');
+    setEditRecur((ev.recurrence?.frequency as CalendarRecurrenceFrequency) ?? 'none');
+    editDurationMsRef.current = durationBetweenLocalInputs(
+      utcToLocalInput(ev.startsAt.toISOString()),
+      utcToLocalInput(ev.endsAt.toISOString()),
+    );
+    editEndManuallyChangedRef.current = false;
+  };
+
+  const updateEditStart = (nextStart: string) => {
+    setEditStart(nextStart);
+    if (!editEndManuallyChangedRef.current) {
+      setEditEnd(localInputPlusDuration(nextStart, editDurationMsRef.current));
+    }
+  };
+
+  const updateEditEnd = (nextEnd: string) => {
+    editEndManuallyChangedRef.current = true;
+    const nextDurationMs = durationBetweenLocalInputs(editStart, nextEnd);
+    if (nextDurationMs > 0) editDurationMsRef.current = nextDurationMs;
+    setEditEnd(nextEnd);
+  };
+
+  const readCurrentEditTimes = () => {
+    const startDate = editStartDateRef.current?.value || localDatePart(editStart);
+    const startTime = editStartTimeRef.current?.value || localTimePart(editStart);
+    const endDate = editEndDateRef.current?.value || localDatePart(editEnd);
+    const endTime = editEndTimeRef.current?.value || localTimePart(editEnd);
+    const start = `${startDate}T${startTime}`;
+    const rawEnd = `${endDate}T${endTime}`;
+    const end = start !== editStart && rawEnd === editEnd && !editEndManuallyChangedRef.current
+      ? localInputPlusDuration(start, editDurationMsRef.current)
+      : rawEnd;
+    return { start, end };
+  };
+
+  const handleUpdate = async (ev: CalendarEvent) => {
+    if (!editTitle.trim()) return;
+    setError(null);
+    try {
+      const editTimes = readCurrentEditTimes();
+      if (new Date(editTimes.end) <= new Date(editTimes.start)) {
+        throw new Error('结束时间必须晚于开始时间');
+      }
+      const resp = await apiFetch(`/api/v1/calendar/events/${ev.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          description: ev.description ?? null,
+          location: editLocation.trim() || null,
+          start_time: localInputToUtc(editTimes.start),
+          end_time: localInputToUtc(editTimes.end),
+          attendees: ev.attendees ?? [],
+          calendar_name: ev.calendar_name,
+          recurrence: { frequency: editRecur, interval: 1 },
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error((err as { error?: { message?: string } }).error?.message ?? `HTTP ${resp.status}`);
+      }
+      const updated: CalendarEvent = await resp.json();
+      // Mirror the edit to the system calendar if this event was synced and is
+      // non-recurring (recurring events aren't synced — see the list UI).
+      const appleId = ev.external_event_id || ev.apple_event_id;
+      if (appleId && !isRecurringEvent(updated)) {
+        await updateAppleCalendarEvent(appleId, {
+          title: updated.title,
+          start_time: updated.start_time,
+          end_time: updated.end_time,
+          location: updated.location,
+          notes: updated.description,
+        });
+      }
+      setEditingId(null);
+      await fetchEvents();
+    } catch (e) {
+      setError(getErrorMessage(e, '保存失败'));
+    }
+  };
+
   const visibleEvents = prepareCalendarEventsForDisplay(events);
 
   return (
@@ -265,6 +413,7 @@ function CalendarSection() {
             ) : (
               visibleEvents.map((ev) => {
                 const recurring = isRecurringEvent(ev);
+                const isEditing = editingId === ev.occurrenceId;
                 return (
                 <div key={ev.occurrenceId} style={{
                   padding: '8px 12px', marginBottom: 6, fontSize: 13,
@@ -275,6 +424,52 @@ function CalendarSection() {
                       ? '#fff8e1'
                       : 'transparent',
                 }}>
+                  {isEditing ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <input
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        placeholder="标题"
+                        style={{ padding: 6, fontSize: 13, border: '1px solid var(--color-border, #ddd)', borderRadius: 4, fontFamily: 'inherit' }}
+                      />
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 12, color: 'var(--color-secondary-text, #888)' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          开始日期
+                          <input ref={editStartDateRef} type="date" value={localDatePart(editStart)} onInput={(e) => updateEditStart(replaceLocalDate(editStart, e.currentTarget.value))} onChange={(e) => updateEditStart(replaceLocalDate(editStart, e.target.value))} style={{ fontSize: 12, padding: 4, fontFamily: 'inherit' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          开始时间
+                          <input ref={editStartTimeRef} type="time" step={60} value={localTimePart(editStart)} onInput={(e) => updateEditStart(replaceLocalTime(editStart, e.currentTarget.value))} onChange={(e) => updateEditStart(replaceLocalTime(editStart, e.target.value))} style={{ fontSize: 12, padding: 4, fontFamily: 'inherit' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          结束日期
+                          <input ref={editEndDateRef} type="date" value={localDatePart(editEnd)} onInput={(e) => updateEditEnd(replaceLocalDate(editEnd, e.currentTarget.value))} onChange={(e) => updateEditEnd(replaceLocalDate(editEnd, e.target.value))} style={{ fontSize: 12, padding: 4, fontFamily: 'inherit' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          结束时间
+                          <input ref={editEndTimeRef} type="time" step={60} value={localTimePart(editEnd)} onInput={(e) => updateEditEnd(replaceLocalTime(editEnd, e.currentTarget.value))} onChange={(e) => updateEditEnd(replaceLocalTime(editEnd, e.target.value))} style={{ fontSize: 12, padding: 4, fontFamily: 'inherit' }} />
+                        </label>
+                      </div>
+                      <input
+                        value={editLocation}
+                        onChange={(e) => setEditLocation(e.target.value)}
+                        placeholder="地点（可选）"
+                        style={{ padding: 6, fontSize: 13, border: '1px solid var(--color-border, #ddd)', borderRadius: 4, fontFamily: 'inherit' }}
+                      />
+                      <select value={editRecur} onChange={(e) => setEditRecur(e.target.value as CalendarRecurrenceFrequency)} style={{ padding: 6, fontSize: 13, borderRadius: 4, fontFamily: 'inherit' }}>
+                        <option value="none">一次</option>
+                        <option value="daily">每天</option>
+                        <option value="weekly">每周</option>
+                        <option value="monthly">每月</option>
+                        <option value="yearly">每年</option>
+                      </select>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <button onClick={() => handleUpdate(ev)} style={{ padding: '4px 12px', fontSize: 12, background: 'var(--color-accent, #0a73ff)', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}>保存</button>
+                        <button onClick={() => setEditingId(null)} style={{ padding: '4px 12px', fontSize: 12, background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--color-secondary-text, #888)' }}>取消</button>
+                      </div>
+                    </div>
+                  ) : (
+                  <>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <strong>{ev.title}</strong>
                     <span style={{
@@ -296,6 +491,10 @@ function CalendarSection() {
                         style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid #4caf50', borderRadius: 3, background: 'transparent', color: '#4caf50' }}
                       >确认</button>
                     )}
+                    <button
+                      onClick={() => startEdit(ev)}
+                      style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid #ccc', borderRadius: 3, background: 'transparent', color: 'var(--color-secondary-text, #888)' }}
+                    >编辑</button>
                     <button
                       data-delete-btn
                       onClick={() => handleDeleteClick(ev)}
@@ -320,6 +519,8 @@ function CalendarSection() {
                       >{syncing.has(ev.id) ? '同步中...' : (syncResults[ev.id] || '同步到系统日历')}</button>
                     )}
                   </div>
+                  </>
+                  )}
                 </div>
                 );
               })
