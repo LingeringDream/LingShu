@@ -9,6 +9,7 @@ mod cooldown;
 mod crypto;
 mod db;
 mod error;
+mod evolution;
 mod llm;
 mod models;
 mod patch;
