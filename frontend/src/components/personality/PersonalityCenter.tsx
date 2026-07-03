@@ -21,6 +21,50 @@ interface Snapshot {
   created_at: string;
 }
 
+interface StyleFeedbackSummary {
+  window_days?: number;
+  reply_thumb_up?: number;
+  reply_thumb_down?: number;
+  too_long?: number;
+  too_short?: number;
+  too_formal?: number;
+  personality_slider_changed?: number;
+}
+
+interface EvolutionRun {
+  id: string;
+  user_id: string;
+  scope: string;
+  status: string;
+  evidence_summary: {
+    memory_count?: number;
+    style_feedback?: StyleFeedbackSummary;
+  };
+  proposed_changes: unknown[];
+  applied_changes: unknown[];
+  skipped_reason: string | null;
+  created_at: string;
+}
+
+const EVOLUTION_STATUS_LABELS: Record<string, string> = {
+  applied: '已应用',
+  skipped: '已跳过',
+  failed: '失败',
+  review_required: '需确认',
+};
+
+function feedbackSampleCount(style?: StyleFeedbackSummary): number {
+  if (!style) return 0;
+  return (
+    (style.reply_thumb_up ?? 0) +
+    (style.reply_thumb_down ?? 0) +
+    (style.too_long ?? 0) +
+    (style.too_short ?? 0) +
+    (style.too_formal ?? 0) +
+    (style.personality_slider_changed ?? 0)
+  );
+}
+
 const TRAIT_LABELS: Record<keyof PersonalityTraits, string> = {
   directness: '直接度',
   warmth: '亲和度',
@@ -141,20 +185,26 @@ export function PersonalityCenter() {
   const [traitValues, setTraitValues] = useState<PersonalityTraits>(DEFAULT_TRAITS);
   const [reason, setReason] = useState('manual-edit');
   const [saving, setSaving] = useState(false);
+  const [latestEvolution, setLatestEvolution] = useState<EvolutionRun | null>(null);
 
   const fetchSnapshots = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [snapRes, activeRes] = await Promise.all([
+      const [snapRes, activeRes, evolutionRes] = await Promise.all([
         apiFetch('/api/v1/personality/snapshots'),
         apiFetch('/api/v1/personality/snapshots/active'),
+        apiFetch('/api/v1/evolution/runs?scope=personality&limit=1'),
       ]);
       if (snapRes.ok) setSnapshots(await snapRes.json());
       if (activeRes.ok) {
         const a: Snapshot = await activeRes.json();
         setActive(a);
         setTraitValues(a.trait_values);
+      }
+      if (evolutionRes.ok) {
+        const runs: EvolutionRun[] = await evolutionRes.json();
+        setLatestEvolution(runs[0] ?? null);
       }
     } catch (e) {
       setError(getErrorMessage(e, 'Failed to load personality data'));
@@ -222,6 +272,39 @@ export function PersonalityCenter() {
 
       {/* Role-play prompt — at the top, above trait sliders */}
       <RolePromptSection />
+
+      {latestEvolution && (
+        <section style={{ marginBottom: 24 }}>
+          <h4 style={{ margin: '0 0 12px' }}>最近一次自动调整</h4>
+          <div
+            style={{
+              padding: '10px 12px',
+              border: '1px solid var(--color-border, #ddd)',
+              borderRadius: 6,
+              fontSize: 13,
+              background: 'var(--bg-secondary, #fafafa)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <strong>{EVOLUTION_STATUS_LABELS[latestEvolution.status] ?? latestEvolution.status}</strong>
+              <span style={{ color: 'var(--color-secondary-text, #888)' }}>
+                {new Date(latestEvolution.created_at).toLocaleString('zh-CN')}
+              </span>
+            </div>
+            {latestEvolution.skipped_reason && (
+              <div style={{ color: 'var(--color-secondary-text, #888)', marginBottom: 4 }}>
+                原因: {latestEvolution.skipped_reason}
+              </div>
+            )}
+            <div style={{ color: 'var(--color-secondary-text, #888)' }}>
+              记忆证据: {latestEvolution.evidence_summary.memory_count ?? 0}
+            </div>
+            <div style={{ color: 'var(--color-secondary-text, #888)' }}>
+              反馈样本: {feedbackSampleCount(latestEvolution.evidence_summary.style_feedback)}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Trait editor */}
       <section style={{ marginBottom: 24 }}>
