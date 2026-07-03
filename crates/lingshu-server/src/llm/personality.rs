@@ -94,21 +94,34 @@ pub async fn evolve_and_save_personality(
     model: &str,
     user_id: Uuid,
 ) -> anyhow::Result<PersonalityEvolutionOutcome> {
-    // 1. Load current traits (active snapshot or default)
     let current = load_active_traits(db, user_id).await;
-
-    // 2. Load evolution evidence
     let memories = load_evolution_memories(db, user_id).await?;
-    if memories.is_empty() {
+    let style_feedback = crate::evolution::load_style_feedback_summary(db, user_id, 30).await?;
+    let evidence_summary =
+        crate::evolution::personality_evidence_summary(memories.len(), &style_feedback);
+
+    if memories.is_empty() && !style_feedback.has_feedback() {
+        let _ = crate::evolution::record_evolution_run(
+            db,
+            user_id,
+            crate::models::evolution::EvolutionScope::Personality,
+            crate::models::evolution::EvolutionRunStatus::Skipped,
+            evidence_summary,
+            serde_json::Value::Array(Vec::new()),
+            serde_json::Value::Array(Vec::new()),
+            Some("no evidence"),
+        )
+        .await;
+
         return Ok(PersonalityEvolutionOutcome {
             created: false,
-            reason: "no memories".to_string(),
+            reason: "no evidence".to_string(),
             snapshot: None,
         });
     }
 
     // 3. Build prompt and call LLM
-    let prompt = build_personality_evolution_prompt(&current, &memories);
+    let prompt = build_personality_evolution_prompt(&current, &memories, &style_feedback);
     let messages = vec![ChatMessage::user(prompt)];
     let response = llm.chat(model, messages, None).await?;
 
@@ -127,6 +140,24 @@ pub async fn evolve_and_save_personality(
         } else {
             format!("max trait delta {max_delta:.3} below threshold {MIN_MEANINGFUL_DELTA}")
         };
+        let proposed_changes = crate::evolution::personality_changes_json(
+            &clamped,
+            confidence,
+            max_delta,
+            &output.change_reason,
+        );
+        let _ = crate::evolution::record_evolution_run(
+            db,
+            user_id,
+            crate::models::evolution::EvolutionScope::Personality,
+            crate::models::evolution::EvolutionRunStatus::Skipped,
+            evidence_summary,
+            proposed_changes,
+            serde_json::Value::Array(Vec::new()),
+            Some(&reason),
+        )
+        .await;
+
         return Ok(PersonalityEvolutionOutcome {
             created: false,
             reason,
@@ -162,6 +193,24 @@ pub async fn evolve_and_save_personality(
     .await?;
 
     tx.commit().await?;
+
+    let changes = crate::evolution::personality_changes_json(
+        &clamped,
+        confidence,
+        max_delta,
+        &output.change_reason,
+    );
+    let _ = crate::evolution::record_evolution_run(
+        db,
+        user_id,
+        crate::models::evolution::EvolutionScope::Personality,
+        crate::models::evolution::EvolutionRunStatus::Applied,
+        evidence_summary,
+        changes.clone(),
+        changes,
+        None,
+    )
+    .await;
 
     // Signal: memory_referenced for each source memory
     for memory_id in &valid_ids {
@@ -242,6 +291,7 @@ async fn load_evolution_memories(
 pub fn build_personality_evolution_prompt(
     current: &PersonalityTraits,
     memories: &[PersonalityMemoryContext],
+    style_feedback: &crate::evolution::StyleFeedbackSummary,
 ) -> String {
     let memory_lines: Vec<String> = memories
         .iter()
@@ -259,8 +309,23 @@ pub fn build_personality_evolution_prompt(
         memory_lines.join("\n")
     };
 
+    let style_section = format!(
+        r###"- reply_thumb_up: {reply_thumb_up}
+- reply_thumb_down: {reply_thumb_down}
+- too_long: {too_long}
+- too_short: {too_short}
+- too_formal: {too_formal}
+- personality_slider_changed: {personality_slider_changed}"###,
+        reply_thumb_up = style_feedback.reply_thumb_up,
+        reply_thumb_down = style_feedback.reply_thumb_down,
+        too_long = style_feedback.too_long,
+        too_short = style_feedback.too_short,
+        too_formal = style_feedback.too_formal,
+        personality_slider_changed = style_feedback.personality_slider_changed,
+    );
+
     format!(
-        r###"你是灵枢（LingShu）的人格演化引擎。请根据用户长期记忆判断 7 个人格 trait 是否需要小幅调整。
+        r###"你是灵枢（LingShu）的人格演化引擎。请根据用户长期记忆和近期反馈判断 7 个人格 trait 是否需要小幅调整。
 
 ## 当前人格参数
 - directness: {directness:.2}
@@ -274,19 +339,23 @@ pub fn build_personality_evolution_prompt(
 ## 用户长期记忆（按重要性排序）
 {memory_section}
 
+## 最近 {window_days} 天反馈
+{style_section}
+
 ## 调整规则
 - **directness**：用户偏好直接了当还是委婉含蓄？经常使用「建议」「或许」→ 降低；频繁表达明确意见 → 提高。
 - **warmth**：用户表现热情友善还是冷静疏离？频繁感谢/鼓励 → 提高；语气简短冷淡 → 降低。
 - **proactivity**：用户喜欢助手主动建议还是被动回应？经常问「还有什么…」→ 提高；只说具体需求 → 降低。
 - **risk_tolerance**：用户倾向冒险还是谨慎？常说「试试」「没关系」→ 提高；反复要求确认 → 降低。
-- **verbosity**：用户喜欢详细还是简洁？要求展开/解释 → 提高；说「简单说」「精简」→ 降低。
-- **formality**：用户偏好正式还是随性？使用敬语/正式表达 → 提高；用「行」「好的」「嗯」→ 降低。
+- **verbosity**：用户喜欢详细还是简洁？要求展开/解释或 too_short 较多 → 提高；说「简单说」「精简」或 too_long 较多 → 降低。
+- **formality**：用户偏好正式还是随性？使用敬语/正式表达 → 提高；用「行」「好的」「嗯」或 too_formal 较多 → 降低。
 - **humor**：用户喜欢幽默还是严肃？主动调侃/轻松氛围 → 提高；始终严肃 → 降低。
+- **近期反馈**：reply_thumb_down 和风格标签是强反馈，但需要结合长期记忆判断；personality_slider_changed 表示用户近期主动调整过人格设置，应提高保守程度。
 
 ## 重要约束
-- 没有足够证据时，保持当前值不变。
+- 没有足够证据时，保持当前值不变；长期记忆和近期反馈冲突时，优先做更小幅、更可解释的调整。
 - 每轮调整应保守，每个 trait 变化建议不超过 ±0.1。
-- 不要根据单一记忆过度调整。
+- 不要根据单一记忆或单一反馈事件过度调整。
 - 置信度（confidence）应如实反映证据的充分程度；证据薄弱时降低。
 
 ## 输出格式
@@ -315,6 +384,8 @@ JSON 对象："###,
         verbosity = current.verbosity,
         formality = current.formality,
         humor = current.humor,
+        window_days = style_feedback.window_days,
+        style_section = style_section,
     )
 }
 
@@ -405,11 +476,25 @@ mod tests {
         }
     }
 
+    fn sample_style_feedback() -> crate::evolution::StyleFeedbackSummary {
+        crate::evolution::StyleFeedbackSummary {
+            window_days: 30,
+            reply_thumb_down: 1,
+            too_long: 2,
+            personality_slider_changed: 1,
+            ..Default::default()
+        }
+    }
+
     // ── Prompt tests ────────────────────────────────────────────
 
     #[test]
     fn prompt_contains_all_7_current_traits() {
-        let prompt = build_personality_evolution_prompt(&PersonalityTraits::default(), &[]);
+        let style = crate::evolution::StyleFeedbackSummary {
+            window_days: 30,
+            ..Default::default()
+        };
+        let prompt = build_personality_evolution_prompt(&PersonalityTraits::default(), &[], &style);
         for name in &[
             "directness",
             "warmth",
@@ -427,6 +512,19 @@ mod tests {
     }
 
     #[test]
+    fn prompt_contains_style_feedback_summary() {
+        let prompt = build_personality_evolution_prompt(
+            &PersonalityTraits::default(),
+            &[],
+            &sample_style_feedback(),
+        );
+        assert!(prompt.contains("最近 30 天反馈"));
+        assert!(prompt.contains("reply_thumb_down: 1"));
+        assert!(prompt.contains("too_long: 2"));
+        assert!(prompt.contains("personality_slider_changed: 1"));
+    }
+
+    #[test]
     fn prompt_contains_memory_fields() {
         let mem = PersonalityMemoryContext {
             id: Uuid::new_v4(),
@@ -434,7 +532,12 @@ mod tests {
             content: "喜欢安静的环境".to_string(),
             importance: 0.85,
         };
-        let prompt = build_personality_evolution_prompt(&PersonalityTraits::default(), &[mem]);
+        let style = crate::evolution::StyleFeedbackSummary {
+            window_days: 30,
+            ..Default::default()
+        };
+        let prompt =
+            build_personality_evolution_prompt(&PersonalityTraits::default(), &[mem], &style);
         assert!(prompt.contains("喜欢安静的环境"));
         assert!(prompt.contains("0.85"));
         assert!(prompt.contains("preference"));
@@ -442,13 +545,21 @@ mod tests {
 
     #[test]
     fn prompt_no_memories_shows_placeholder() {
-        let prompt = build_personality_evolution_prompt(&PersonalityTraits::default(), &[]);
+        let style = crate::evolution::StyleFeedbackSummary {
+            window_days: 30,
+            ..Default::default()
+        };
+        let prompt = build_personality_evolution_prompt(&PersonalityTraits::default(), &[], &style);
         assert!(prompt.contains("无记忆"));
     }
 
     #[test]
     fn prompt_requires_json_object_output() {
-        let prompt = build_personality_evolution_prompt(&PersonalityTraits::default(), &[]);
+        let style = crate::evolution::StyleFeedbackSummary {
+            window_days: 30,
+            ..Default::default()
+        };
+        let prompt = build_personality_evolution_prompt(&PersonalityTraits::default(), &[], &style);
         assert!(prompt.contains("JSON 对象"));
         assert!(prompt.contains("trait_values"));
         assert!(prompt.contains("change_reason"));
