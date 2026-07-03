@@ -178,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::project_members::router())
         .merge(routes::task_dependencies::router())
         .merge(routes::personality::router())
+        .merge(routes::evolution::router())
         .merge(routes::thoughts::router())
         .merge(routes::integrations::router())
         .merge(routes::signals::router())

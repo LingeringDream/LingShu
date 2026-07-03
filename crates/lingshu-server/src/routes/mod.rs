@@ -3,6 +3,7 @@ pub mod auth;
 pub mod calendar;
 pub mod chat;
 pub mod conversations;
+pub mod evolution;
 pub mod integrations;
 pub mod memories;
 pub mod permissions;
@@ -83,6 +84,7 @@ use utoipa::OpenApi;
         personality::get_active_snapshot,
         personality::activate_snapshot,
         personality::evolve_personality,
+        evolution::list_evolution_runs,
         thoughts::list_thoughts,
         thoughts::get_thought,
         thoughts::update_thought,
@@ -142,6 +144,7 @@ use utoipa::OpenApi;
         personality::CreateSnapshotRequest,
         personality::SnapshotResponse,
         personality::EvolvePersonalityResponse,
+        evolution::EvolutionRunResponse,
         thoughts::UpdateThoughtRequest,
         thoughts::ThoughtResponse,
         thoughts::GenerateThoughtsResponse,
