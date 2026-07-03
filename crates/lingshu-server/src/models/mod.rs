@@ -1,6 +1,7 @@
 pub mod audit_log;
 pub mod calendar;
 pub mod conversation;
+pub mod evolution;
 pub mod integration;
 pub mod memory;
 pub mod message;
