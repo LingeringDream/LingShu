@@ -191,10 +191,9 @@ export function PersonalityCenter() {
     setLoading(true);
     setError(null);
     try {
-      const [snapRes, activeRes, evolutionRes] = await Promise.all([
+      const [snapRes, activeRes] = await Promise.all([
         apiFetch('/api/v1/personality/snapshots'),
         apiFetch('/api/v1/personality/snapshots/active'),
-        apiFetch('/api/v1/evolution/runs?scope=personality&limit=1'),
       ]);
       if (snapRes.ok) setSnapshots(await snapRes.json());
       if (activeRes.ok) {
@@ -202,14 +201,22 @@ export function PersonalityCenter() {
         setActive(a);
         setTraitValues(a.trait_values);
       }
-      if (evolutionRes.ok) {
-        const runs: EvolutionRun[] = await evolutionRes.json();
-        setLatestEvolution(runs[0] ?? null);
-      }
     } catch (e) {
       setError(getErrorMessage(e, 'Failed to load personality data'));
     } finally {
       setLoading(false);
+    }
+
+    try {
+      const evolutionRes = await apiFetch('/api/v1/evolution/runs?scope=personality&limit=1');
+      if (evolutionRes.ok) {
+        const runs: EvolutionRun[] = await evolutionRes.json();
+        setLatestEvolution(runs[0] ?? null);
+      } else {
+        setLatestEvolution(null);
+      }
+    } catch {
+      setLatestEvolution(null);
     }
   }, []);
 
@@ -297,10 +304,10 @@ export function PersonalityCenter() {
               </div>
             )}
             <div style={{ color: 'var(--color-secondary-text, #888)' }}>
-              记忆证据: {latestEvolution.evidence_summary.memory_count ?? 0}
+              记忆证据: {latestEvolution.evidence_summary?.memory_count ?? 0}
             </div>
             <div style={{ color: 'var(--color-secondary-text, #888)' }}>
-              反馈样本: {feedbackSampleCount(latestEvolution.evidence_summary.style_feedback)}
+              反馈样本: {feedbackSampleCount(latestEvolution.evidence_summary?.style_feedback)}
             </div>
           </div>
         </section>

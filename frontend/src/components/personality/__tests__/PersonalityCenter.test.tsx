@@ -1,5 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PersonalityCenter } from '../PersonalityCenter';
 import { apiFetch } from '../../../lib/api';
@@ -19,6 +19,10 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 }
 
 describe('PersonalityCenter', () => {
+  beforeEach(() => {
+    mockedApiFetch.mockReset();
+  });
+
   it('shows the latest personality evolution run', async () => {
     mockedApiFetch.mockImplementation(async (input) => {
       if (input === '/api/v1/personality/snapshots') {
@@ -116,6 +120,26 @@ describe('PersonalityCenter', () => {
     await waitFor(() => {
       expect(screen.getByText(/人格中心/)).toBeInTheDocument();
     });
+    expect(screen.queryByText('最近一次自动调整')).not.toBeInTheDocument();
+  });
+
+  it('does not block the page when evolution history request rejects', async () => {
+    mockedApiFetch.mockImplementation(async (input) => {
+      if (input === '/api/v1/personality/snapshots') return jsonResponse([]);
+      if (input === '/api/v1/personality/snapshots/active') return jsonResponse({}, false, 404);
+      if (input === '/api/v1/evolution/runs?scope=personality&limit=1') {
+        throw new Error('Evolution history unavailable');
+      }
+      if (input === '/api/v1/settings/role-prompt') return jsonResponse({ role_prompt: '' });
+      throw new Error(`Unexpected request: ${input}`);
+    });
+
+    render(<PersonalityCenter />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/人格中心/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Evolution history unavailable')).not.toBeInTheDocument();
     expect(screen.queryByText('最近一次自动调整')).not.toBeInTheDocument();
   });
 });
