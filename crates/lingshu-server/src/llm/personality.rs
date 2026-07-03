@@ -345,7 +345,7 @@ pub fn build_personality_evolution_prompt(
 ## 调整规则
 - **directness**：用户偏好直接了当还是委婉含蓄？经常使用「建议」「或许」→ 降低；频繁表达明确意见 → 提高。
 - **warmth**：用户表现热情友善还是冷静疏离？频繁感谢/鼓励 → 提高；语气简短冷淡 → 降低。
-- **proactivity**：用户喜欢助手主动建议还是被动回应？经常问「还有什么…」→ 提高；只说具体需求 → 降低。
+- **proactivity**：用户喜欢助手主动建议还是被动回应？经常问「还有什么…」→ 提高；只说具体需求或多次忽略/拒绝主动建议 → 降低。
 - **risk_tolerance**：用户倾向冒险还是谨慎？常说「试试」「没关系」→ 提高；反复要求确认 → 降低。
 - **verbosity**：用户喜欢详细还是简洁？要求展开/解释或 too_short 较多 → 提高；说「简单说」「精简」或 too_long 较多 → 降低。
 - **formality**：用户偏好正式还是随性？使用敬语/正式表达 → 提高；用「行」「好的」「嗯」或 too_formal 较多 → 降低。
@@ -355,6 +355,7 @@ pub fn build_personality_evolution_prompt(
 ## 重要约束
 - 没有足够证据时，保持当前值不变；长期记忆和近期反馈冲突时，优先做更小幅、更可解释的调整。
 - 每轮调整应保守，每个 trait 变化建议不超过 ±0.1。
+- 手动 slider 反馈权重大于自动推断，但仍要保守，避免一次手动调整导致过度演化。
 - 不要根据单一记忆或单一反馈事件过度调整。
 - 置信度（confidence）应如实反映证据的充分程度；证据薄弱时降低。
 
@@ -522,6 +523,18 @@ mod tests {
         assert!(prompt.contains("reply_thumb_down: 1"));
         assert!(prompt.contains("too_long: 2"));
         assert!(prompt.contains("personality_slider_changed: 1"));
+    }
+
+    #[test]
+    fn prompt_contains_reviewed_feedback_constraints() {
+        let prompt = build_personality_evolution_prompt(
+            &PersonalityTraits::default(),
+            &[],
+            &sample_style_feedback(),
+        );
+        assert!(prompt.contains("多次忽略/拒绝主动建议"));
+        assert!(prompt.contains("手动 slider 反馈权重大于自动推断"));
+        assert!(prompt.contains("仍要保守"));
     }
 
     #[test]
