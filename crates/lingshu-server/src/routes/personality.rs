@@ -214,14 +214,20 @@ async fn evolve_personality(
         )));
     }
 
-    let outcome = crate::llm::personality::evolve_and_save_personality(
+    let outcome = match crate::llm::personality::evolve_and_save_personality(
         &state.db,
         &state.llm,
         &settings.model,
         user_id,
     )
     .await
-    .map_err(AppError::Internal)?;
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            crate::evolution::record_personality_failure(&state.db, user_id, &error).await;
+            return Err(AppError::Internal(error));
+        }
+    };
 
     Ok(Json(EvolvePersonalityResponse {
         created: outcome.created,

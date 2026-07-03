@@ -1784,6 +1784,7 @@ fn spawn_post_stream_tasks(
                     tracing::debug!(%user_id, reason = %outcome.reason, "Personality evolution skipped");
                 }
                 Err(e) => {
+                    crate::evolution::record_personality_failure(&db, user_id, &e).await;
                     tracing::warn!(%user_id, %e, "Personality evolution failed");
                 }
             }
