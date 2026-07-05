@@ -1,14 +1,16 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PersonalityCenter } from '../PersonalityCenter';
-import { apiFetch } from '../../../lib/api';
+import { apiFetch, postSignal } from '../../../lib/api';
 
 vi.mock('../../../lib/api', () => ({
   apiFetch: vi.fn(),
+  postSignal: vi.fn(),
 }));
 
 const mockedApiFetch = vi.mocked(apiFetch);
+const mockedPostSignal = vi.mocked(postSignal);
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -21,6 +23,8 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 describe('PersonalityCenter', () => {
   beforeEach(() => {
     mockedApiFetch.mockReset();
+    mockedPostSignal.mockReset();
+    mockedPostSignal.mockResolvedValue(undefined);
   });
 
   it('shows the latest personality evolution run', async () => {
@@ -141,5 +145,53 @@ describe('PersonalityCenter', () => {
     });
     expect(screen.queryByText('Evolution history unavailable')).not.toBeInTheDocument();
     expect(screen.queryByText('最近一次自动调整')).not.toBeInTheDocument();
+  });
+
+  it('records slider feedback signals for manually changed traits after saving', async () => {
+    const baseSnapshot = {
+      id: 'snapshot-1',
+      user_id: 'user-1',
+      trait_values: {
+        directness: 0.5,
+        warmth: 0.5,
+        proactivity: 0.5,
+        risk_tolerance: 0.5,
+        verbosity: 0.5,
+        formality: 0.5,
+        humor: 0.5,
+      },
+      change_reason: 'manual-edit',
+      source_memory_ids: [],
+      is_active: true,
+      created_at: '2026-07-03T00:00:00Z',
+    };
+
+    mockedApiFetch.mockImplementation(async (input, init) => {
+      if (input === '/api/v1/personality/snapshots' && init?.method === 'POST') {
+        return jsonResponse({ ...baseSnapshot, id: 'snapshot-2' }, true, 201);
+      }
+      if (input === '/api/v1/personality/snapshots') return jsonResponse([baseSnapshot]);
+      if (input === '/api/v1/personality/snapshots/active') return jsonResponse(baseSnapshot);
+      if (input === '/api/v1/evolution/runs?scope=personality&limit=1') return jsonResponse([]);
+      if (input === '/api/v1/settings/role-prompt') return jsonResponse({ role_prompt: '' });
+      throw new Error(`Unexpected request: ${input}`);
+    });
+
+    render(<PersonalityCenter />);
+
+    const sliders = await screen.findAllByRole('slider');
+    fireEvent.change(sliders[0], { target: { value: '0.8' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存新快照' }));
+
+    await waitFor(() => {
+      expect(mockedPostSignal).toHaveBeenCalledWith({
+        event_type: 'personality_slider_changed',
+        metadata: {
+          trait: 'directness',
+          from: 0.5,
+          to: 0.8,
+        },
+      });
+    });
   });
 });

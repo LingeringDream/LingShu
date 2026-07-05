@@ -209,9 +209,11 @@ async fn evolve_personality(
     let settings = llm_settings_for_user(&state, user_id).await;
 
     if settings.model.is_empty() {
-        return Err(AppError::Internal(anyhow::anyhow!(
+        let error = anyhow::anyhow!(
             "Model not configured. Set it via PATCH /api/v1/settings/llm or LLM_DEFAULT_MODEL in .env."
-        )));
+        );
+        crate::evolution::record_personality_failure(&state.db, user_id, &error).await?;
+        return Err(AppError::Internal(error));
     }
 
     let outcome = match crate::llm::personality::evolve_and_save_personality(
@@ -224,7 +226,7 @@ async fn evolve_personality(
     {
         Ok(outcome) => outcome,
         Err(error) => {
-            crate::evolution::record_personality_failure(&state.db, user_id, &error).await;
+            crate::evolution::record_personality_failure(&state.db, user_id, &error).await?;
             return Err(AppError::Internal(error));
         }
     };

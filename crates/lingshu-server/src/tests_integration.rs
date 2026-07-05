@@ -141,6 +141,7 @@ async fn create_user(pool: &PgPool) -> Uuid {
 async fn cleanup_user(pool: &PgPool, user_id: Uuid) {
     let tables = [
         "signal_events",
+        "evolution_runs",
         "thought_queue",
         "personality_snapshots",
         "integrations",

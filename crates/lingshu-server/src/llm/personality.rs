@@ -101,7 +101,7 @@ pub async fn evolve_and_save_personality(
         crate::evolution::personality_evidence_summary(memories.len(), &style_feedback);
 
     if memories.is_empty() && !style_feedback.has_feedback() {
-        let _ = crate::evolution::record_evolution_run(
+        crate::evolution::record_evolution_run(
             db,
             user_id,
             crate::models::evolution::EvolutionScope::Personality,
@@ -111,7 +111,7 @@ pub async fn evolve_and_save_personality(
             serde_json::Value::Array(Vec::new()),
             Some("no evidence"),
         )
-        .await;
+        .await?;
 
         return Ok(PersonalityEvolutionOutcome {
             created: false,
@@ -146,7 +146,7 @@ pub async fn evolve_and_save_personality(
             max_delta,
             &output.change_reason,
         );
-        let _ = crate::evolution::record_evolution_run(
+        crate::evolution::record_evolution_run(
             db,
             user_id,
             crate::models::evolution::EvolutionScope::Personality,
@@ -156,7 +156,7 @@ pub async fn evolve_and_save_personality(
             serde_json::Value::Array(Vec::new()),
             Some(&reason),
         )
-        .await;
+        .await?;
 
         return Ok(PersonalityEvolutionOutcome {
             created: false,
@@ -173,6 +173,13 @@ pub async fn evolve_and_save_personality(
     let trait_json =
         serde_json::to_value(&clamped).map_err(|e| anyhow::anyhow!("serialize traits: {e}"))?;
     let reason = format!("auto-evolution: {}", output.change_reason);
+
+    let changes = crate::evolution::personality_changes_json(
+        &clamped,
+        confidence,
+        max_delta,
+        &output.change_reason,
+    );
 
     let mut tx = db.begin().await?;
     sqlx::query("UPDATE personality_snapshots SET is_active = false WHERE user_id = $1")
@@ -192,16 +199,8 @@ pub async fn evolve_and_save_personality(
     .fetch_one(&mut *tx)
     .await?;
 
-    tx.commit().await?;
-
-    let changes = crate::evolution::personality_changes_json(
-        &clamped,
-        confidence,
-        max_delta,
-        &output.change_reason,
-    );
-    let _ = crate::evolution::record_evolution_run(
-        db,
+    crate::evolution::record_evolution_run_tx(
+        &mut tx,
         user_id,
         crate::models::evolution::EvolutionScope::Personality,
         crate::models::evolution::EvolutionRunStatus::Applied,
@@ -210,7 +209,9 @@ pub async fn evolve_and_save_personality(
         changes,
         None,
     )
-    .await;
+    .await?;
+
+    tx.commit().await?;
 
     // Signal: memory_referenced for each source memory
     for memory_id in &valid_ids {

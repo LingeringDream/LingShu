@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::models::evolution::{EvolutionRun, EvolutionRunStatus, EvolutionScope};
@@ -122,6 +122,55 @@ pub async fn record_evolution_run(
     applied_changes: serde_json::Value,
     skipped_reason: Option<&str>,
 ) -> anyhow::Result<EvolutionRun> {
+    insert_evolution_run(
+        db,
+        user_id,
+        scope,
+        status,
+        evidence_summary,
+        proposed_changes,
+        applied_changes,
+        skipped_reason,
+    )
+    .await
+}
+
+pub async fn record_evolution_run_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    scope: EvolutionScope,
+    status: EvolutionRunStatus,
+    evidence_summary: serde_json::Value,
+    proposed_changes: serde_json::Value,
+    applied_changes: serde_json::Value,
+    skipped_reason: Option<&str>,
+) -> anyhow::Result<EvolutionRun> {
+    insert_evolution_run(
+        &mut **tx,
+        user_id,
+        scope,
+        status,
+        evidence_summary,
+        proposed_changes,
+        applied_changes,
+        skipped_reason,
+    )
+    .await
+}
+
+async fn insert_evolution_run<'e, E>(
+    executor: E,
+    user_id: Uuid,
+    scope: EvolutionScope,
+    status: EvolutionRunStatus,
+    evidence_summary: serde_json::Value,
+    proposed_changes: serde_json::Value,
+    applied_changes: serde_json::Value,
+    skipped_reason: Option<&str>,
+) -> anyhow::Result<EvolutionRun>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
     let run: EvolutionRun = sqlx::query_as(
         "INSERT INTO evolution_runs \
          (user_id, scope, status, evidence_summary, proposed_changes, applied_changes, skipped_reason) \
@@ -134,18 +183,22 @@ pub async fn record_evolution_run(
     .bind(&proposed_changes)
     .bind(&applied_changes)
     .bind(skipped_reason)
-    .fetch_one(db)
+    .fetch_one(executor)
     .await?;
 
     Ok(run)
 }
 
-pub async fn record_personality_failure(db: &PgPool, user_id: Uuid, error: &anyhow::Error) {
+pub async fn record_personality_failure(
+    db: &PgPool,
+    user_id: Uuid,
+    error: &anyhow::Error,
+) -> anyhow::Result<EvolutionRun> {
     let evidence = serde_json::json!({
         "error": error.to_string(),
     });
 
-    if let Err(record_error) = record_evolution_run(
+    record_evolution_run(
         db,
         user_id,
         EvolutionScope::Personality,
@@ -156,13 +209,6 @@ pub async fn record_personality_failure(db: &PgPool, user_id: Uuid, error: &anyh
         Some("error"),
     )
     .await
-    {
-        tracing::warn!(
-            %user_id,
-            error = %record_error,
-            "Failed to record personality evolution failure"
-        );
-    }
 }
 
 #[cfg(test)]

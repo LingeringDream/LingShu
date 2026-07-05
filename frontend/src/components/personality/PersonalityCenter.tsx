@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { apiFetch } from '../../lib/api';
+import { apiFetch, postSignal } from '../../lib/api';
 
 interface PersonalityTraits {
   directness: number;
@@ -74,6 +74,8 @@ const TRAIT_LABELS: Record<keyof PersonalityTraits, string> = {
   formality: '正式度',
   humor: '幽默度',
 };
+
+const TRAIT_KEYS = Object.keys(TRAIT_LABELS) as (keyof PersonalityTraits)[];
 
 const DEFAULT_TRAITS: PersonalityTraits = {
   directness: 0.5,
@@ -186,6 +188,7 @@ export function PersonalityCenter() {
   const [reason, setReason] = useState('manual-edit');
   const [saving, setSaving] = useState(false);
   const [latestEvolution, setLatestEvolution] = useState<EvolutionRun | null>(null);
+  const traitKeys = TRAIT_KEYS;
 
   const fetchSnapshots = useCallback(async () => {
     setLoading(true);
@@ -227,6 +230,7 @@ export function PersonalityCenter() {
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    const previousTraits = active?.trait_values ?? null;
     try {
       const res = await apiFetch('/api/v1/personality/snapshots', {
         method: 'POST',
@@ -238,6 +242,22 @@ export function PersonalityCenter() {
         }),
       });
       if (!res.ok) throw new Error('Failed to create snapshot');
+      if (previousTraits) {
+        await Promise.all(
+          traitKeys
+            .filter((key) => previousTraits[key] !== traitValues[key])
+            .map((key) =>
+              postSignal({
+                event_type: 'personality_slider_changed',
+                metadata: {
+                  trait: key,
+                  from: previousTraits[key],
+                  to: traitValues[key],
+                },
+              }),
+            ),
+        );
+      }
       await fetchSnapshots();
     } catch (e) {
       setError(getErrorMessage(e, 'Save failed'));
@@ -262,8 +282,6 @@ export function PersonalityCenter() {
   const setTrait = (key: keyof PersonalityTraits, value: number) => {
     setTraitValues((prev) => ({ ...prev, [key]: Math.round(value * 10) / 10 }));
   };
-
-  const traitKeys = Object.keys(TRAIT_LABELS) as (keyof PersonalityTraits)[];
 
   if (loading) return <p style={{ padding: 16 }}>加载人格数据中...</p>;
 
