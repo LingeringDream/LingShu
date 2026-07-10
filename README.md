@@ -23,6 +23,7 @@ macOS 桌面宠物式 AI 个人助理：常驻桌面的悬浮形象，具备长�
 | 集成令牌加密 | AES-256-GCM 静态加密 | ✅ 已实现 |
 | 信号埋点 | append-only 事件日志，已接入 memory、personality、chat 等核心路径 | ✅ 已实现 |
 | Chat 工具调用 | Native tool-use 循环，支持 Ollama / OpenAI 兼容 / DeepSeek 等多模型 | ✅ 已实现 |
+| 联网搜索 | 对话内搜索公开网页，返回标题、摘要和来源链接；由独立 L1 权限控制 | ✅ 已实现 |
 | 角色提示词 | 用户自定义系统角色提示词，集成进对话工作区 | ✅ 已实现 |
 | Markdown 渲染 | MessageBubble 支持 Markdown 格式化展示 | ✅ 已实现 |
 | LLM 设置持久化 | LLM 配置（模型、max_tokens、context_messages 等）存 PostgreSQL，重启保留 | ✅ 已实现 |
@@ -43,6 +44,7 @@ macOS 桌面宠物式 AI 个人助理：常驻桌面的悬浮形象，具备长�
 - ✅ Tauri 2 桌面壳（main + pet 窗口）+ EventKit 桥接（macOS 14+ `NSCalendarsFullAccessUsageDescription`）
 - ✅ Apple Calendar：自然语言解析 + CRUD + L1 确认 + EventKit 写入/删除 + external_event_id 回写
 - ✅ Chat：工具调用（tool-use loop）、角色提示词、Markdown 渲染、流式 SSE 响应
+- ✅ 联网搜索：独立 L1 权限开关、网页结果解析、来源链接保留、超时与响应大小限制
 - ✅ LLM 设置持久化至 PostgreSQL（模型、max_tokens、context_messages 等，重启保留）
 - ✅ 前端 Vitest 单测套件（chatStore / memoryStore / projectStore / MessageBubble / api / tauri / eventkit）
 

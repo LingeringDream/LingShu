@@ -23,6 +23,7 @@ A macOS desktop-companion AI assistant — a floating desktop pet with long-term
 | Integration Token Encryption | AES-256-GCM at-rest encryption | ✅ Implemented |
 | Signal Telemetry | Append-only event log, wired into memory, personality, and chat paths | ✅ Implemented |
 | Chat Tool Calling | Native tool-use loop, supports Ollama / OpenAI-compatible / DeepSeek models | ✅ Implemented |
+| Web Search | Search public webpages in chat with titles, snippets, and source URLs; controlled by a separate L1 permission | ✅ Implemented |
 | Role Prompts | User-customizable system role prompts, integrated into chat workspace | ✅ Implemented |
 | Markdown Rendering | MessageBubble supports formatted Markdown display | ✅ Implemented |
 | LLM Settings Persistence | LLM config (model, max_tokens, context_messages, etc.) stored in PostgreSQL, survives restarts | ✅ Implemented |
@@ -43,6 +44,7 @@ A macOS desktop-companion AI assistant — a floating desktop pet with long-term
 - ✅ Tauri 2 desktop shell (main + pet windows) + EventKit bridge (macOS 14+ `NSCalendarsFullAccessUsageDescription`)
 - ✅ Apple Calendar: NL parse + CRUD + L1 confirmation + EventKit write-back/delete + external_event_id sync
 - ✅ Chat: tool-use loop, role prompts, Markdown rendering, streaming SSE responses
+- ✅ Web search: separate L1 permission, result parsing, source preservation, timeout and response-size limits
 - ✅ LLM settings persisted to PostgreSQL (model, max_tokens, context_messages, etc. — survives restarts)
 - ✅ Frontend Vitest unit suite (chatStore / memoryStore / projectStore / MessageBubble / api / tauri / eventkit)
 

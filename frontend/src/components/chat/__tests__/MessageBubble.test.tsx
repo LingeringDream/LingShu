@@ -103,7 +103,7 @@ describe('MessageBubble', () => {
     );
   });
 
-  it('shows enhanced collaboration progress and expands a member draft', () => {
+  it('shows enhancement metadata below the assistant message', () => {
     render(
       <MessageBubble
         message={makeMessage({
@@ -133,14 +133,11 @@ describe('MessageBubble', () => {
       />,
     );
 
-    expect(screen.getByText('由 2 个模型增强·查看过程')).toBeInTheDocument();
-    expect(screen.getByText('✦增强')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText('由 2 个模型增强·查看过程'));
-
-    expect(screen.getByText('正在综合各方观点')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('DeepSeek · deepseek-chat'));
-    expect(screen.getByText('候选答案')).toBeInTheDocument();
-    expect(screen.getByText('超时')).toBeInTheDocument();
+    expect(screen.getByText('最终答案')).toBeInTheDocument();
+    expect(screen.getByText('增强输出')).toBeInTheDocument();
+    expect(screen.getByText('参与：DeepSeek · deepseek-chat、Ollama · qwen（失败）')).toBeInTheDocument();
+    expect(screen.getByText('整合：OpenAI · gpt-4o')).toBeInTheDocument();
+    expect(screen.queryByText('候选答案')).not.toBeInTheDocument();
+    expect(screen.queryByText('超时')).not.toBeInTheDocument();
   });
 });

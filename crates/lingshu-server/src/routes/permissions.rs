@@ -20,6 +20,10 @@ pub fn router() -> Router<AppState> {
 pub struct PermissionSettings {
     /// L0: Chat + pet + memory display (always on)
     pub l0_enabled: bool,
+    /// L1: Read-only internet search. Kept separate from L2 automation because
+    /// searching does not open apps or mutate local/external state.
+    #[serde(default)]
+    pub l1_web_search: bool,
     /// L1: Calendar read/write
     pub l1_calendar: bool,
     /// L1 confirmation: require user approval for each calendar write
@@ -43,6 +47,7 @@ impl Default for PermissionSettings {
     fn default() -> Self {
         Self {
             l0_enabled: true,
+            l1_web_search: false,
             l1_calendar: false,
             l1_require_confirmation: true,
             l2_automation: false,
@@ -209,6 +214,7 @@ pub async fn permissions_for_user(state: &AppState, user_id: Uuid) -> Permission
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct PermissionPatch {
+    pub l1_web_search: Option<bool>,
     pub l1_calendar: Option<bool>,
     pub l1_require_confirmation: Option<bool>,
     pub l2_automation: Option<bool>,
@@ -279,6 +285,9 @@ async fn update_permissions(
     let mut all_settings = state.permissions.write().await;
     let settings = all_settings.entry(user_id).or_default();
 
+    if let Some(v) = patch.l1_web_search {
+        settings.l1_web_search = v;
+    }
     if let Some(v) = patch.l1_calendar {
         settings.l1_calendar = v;
     }
@@ -317,6 +326,7 @@ mod tests {
     fn default_permissions_have_l0_only() {
         let p = PermissionSettings::default();
         assert!(p.l0_enabled);
+        assert!(!p.l1_web_search);
         assert!(!p.l1_calendar);
         assert!(p.l1_require_confirmation);
         assert!(!p.l2_automation);
@@ -329,6 +339,7 @@ mod tests {
     fn permissions_json_round_trip() {
         let orig = PermissionSettings {
             l0_enabled: true,
+            l1_web_search: true,
             l1_calendar: true,
             l1_require_confirmation: false,
             l2_automation: true,
@@ -340,6 +351,7 @@ mod tests {
         let json = serde_json::to_value(&orig).unwrap();
         let restored: PermissionSettings = serde_json::from_value(json).unwrap();
         assert_eq!(restored.l0_enabled, orig.l0_enabled);
+        assert_eq!(restored.l1_web_search, orig.l1_web_search);
         assert_eq!(restored.l1_calendar, orig.l1_calendar);
         assert_eq!(
             restored.l1_require_confirmation,
@@ -366,6 +378,7 @@ mod tests {
             "l4_autonomous": false
         });
         let p: PermissionSettings = serde_json::from_value(json).unwrap();
+        assert!(!p.l1_web_search);
         assert!(p.l2_whitelist.is_empty());
     }
 
@@ -374,6 +387,7 @@ mod tests {
         let mut settings = PermissionSettings::default();
         // Apply a patch with only l1_calendar
         let patch = PermissionPatch {
+            l1_web_search: None,
             l1_calendar: Some(true),
             l1_require_confirmation: None,
             l2_automation: None,
@@ -398,6 +412,7 @@ mod tests {
     fn permission_patch_all_fields() {
         let mut settings = PermissionSettings::default();
         let patch = PermissionPatch {
+            l1_web_search: Some(true),
             l1_calendar: Some(true),
             l1_require_confirmation: Some(false),
             l2_automation: Some(true),
@@ -407,6 +422,9 @@ mod tests {
             l2_whitelist: Some(vec!["Calculator".into()]),
         };
         // Apply all fields
+        if let Some(v) = patch.l1_web_search {
+            settings.l1_web_search = v;
+        }
         if let Some(v) = patch.l1_calendar {
             settings.l1_calendar = v;
         }
@@ -429,6 +447,7 @@ mod tests {
             settings.l2_whitelist = v;
         }
 
+        assert!(settings.l1_web_search);
         assert!(settings.l1_calendar);
         assert!(!settings.l1_require_confirmation);
         assert!(settings.l2_automation);

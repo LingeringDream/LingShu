@@ -25,6 +25,7 @@ interface ProviderModel {
 interface SavedProvider {
   provider_id: string;
   display_name: string;
+  is_active?: boolean;
   models: ProviderModel[];
 }
 
@@ -37,6 +38,7 @@ interface EnhanceModelOption {
   providerId: string;
   model: string;
   label: string;
+  isActiveProvider: boolean;
 }
 
 const defaultEnhanceSettings: EnhanceSettings = {
@@ -47,10 +49,49 @@ const defaultEnhanceSettings: EnhanceSettings = {
   max_parallel: 4,
 };
 
+function modelOptionToConfig(option: EnhanceModelOption): EnhanceMemberConfig {
+  return { provider_id: option.providerId, model: option.model };
+}
+
+function configKey(config: EnhanceMemberConfig): string {
+  return `${config.provider_id}::${config.model}`;
+}
+
+function fillDefaultEnhanceSelection(
+  settings: EnhanceSettings,
+  options: EnhanceModelOption[],
+): EnhanceSettings {
+  if (options.length === 0) return settings;
+
+  const optionKeys = new Set(options.map((option) => option.key));
+  const members = settings.members.filter((member) => optionKeys.has(configKey(member)));
+  const aggregator = settings.aggregator && optionKeys.has(configKey(settings.aggregator))
+    ? settings.aggregator
+    : null;
+
+  if (members.length > 0 && aggregator) {
+    return { ...settings, members, aggregator };
+  }
+
+  const activeOptions = options.filter((option) => option.isActiveProvider);
+  const defaultMemberOptions = activeOptions.length > 0 ? activeOptions : options;
+  const defaultMembers = members.length > 0 ? members : defaultMemberOptions.map(modelOptionToConfig);
+  const defaultMemberKeys = new Set(defaultMembers.map(configKey));
+  const defaultAggregator = options.find((option) => defaultMemberKeys.has(option.key) && option.isActiveProvider)
+    ?? options.find((option) => defaultMemberKeys.has(option.key))
+    ?? activeOptions[0]
+    ?? options[0];
+
+  return {
+    ...settings,
+    members: defaultMembers,
+    aggregator: aggregator ?? modelOptionToConfig(defaultAggregator),
+  };
+}
+
 export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [value, setValue] = useState('');
   const [enhanceSettings, setEnhanceSettings] = useState<EnhanceSettings | null>(null);
-  const [enhanceOptions, setEnhanceOptions] = useState<EnhanceModelOption[]>([]);
   const [enhanceConfigLoaded, setEnhanceConfigLoaded] = useState(false);
   const [enhanceConfigLoading, setEnhanceConfigLoading] = useState(false);
   const [enhanceConfigError, setEnhanceConfigError] = useState<string | null>(null);
@@ -74,7 +115,6 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
 
       if (settingsResp.status === 404) {
         setEnhanceSettings(defaultEnhanceSettings);
-        setEnhanceOptions([]);
         setEnhanceConfigError('当前后端不支持增强配置');
         setEnhanceConfigLoaded(true);
         return;
@@ -91,15 +131,14 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           providerId: provider.provider_id,
           model: model.id,
           label: `${provider.display_name} · ${model.display_name || model.name || model.id}`,
+          isActiveProvider: Boolean(provider.is_active),
         })),
       );
 
-      setEnhanceSettings(settings);
-      setEnhanceOptions(options);
+      setEnhanceSettings(fillDefaultEnhanceSelection(settings, options));
       setEnhanceConfigLoaded(true);
     } catch (e) {
       setEnhanceSettings(defaultEnhanceSettings);
-      setEnhanceOptions([]);
       setEnhanceConfigError(e instanceof Error ? e.message : '加载失败');
       setEnhanceConfigLoaded(true);
     } finally {
@@ -112,36 +151,6 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       void loadEnhanceConfig();
     }
   }, [enhanceConfigLoaded, enhanceEnabled, loadEnhanceConfig]);
-
-  const selectedMemberKeys = new Set(
-    enhanceSettings?.members.map((member) => `${member.provider_id}::${member.model}`) ?? [],
-  );
-  const aggregatorKey = enhanceSettings?.aggregator
-    ? `${enhanceSettings.aggregator.provider_id}::${enhanceSettings.aggregator.model}`
-    : '';
-
-  const optionToConfig = (key: string): EnhanceMemberConfig | null => {
-    const option = enhanceOptions.find((item) => item.key === key);
-    return option ? { provider_id: option.providerId, model: option.model } : null;
-  };
-
-  const toggleEnhanceMember = (option: EnhanceModelOption) => {
-    setEnhanceSettings((current) => {
-      const settings = current ?? defaultEnhanceSettings;
-      const exists = settings.members.some((member) => `${member.provider_id}::${member.model}` === option.key);
-      const members = exists
-        ? settings.members.filter((member) => `${member.provider_id}::${member.model}` !== option.key)
-        : [...settings.members, { provider_id: option.providerId, model: option.model }];
-      return { ...settings, members };
-    });
-  };
-
-  const setEnhanceAggregator = (key: string) => {
-    setEnhanceSettings((current) => ({
-      ...(current ?? defaultEnhanceSettings),
-      aggregator: optionToConfig(key),
-    }));
-  };
 
   const selectedEnhanceOverride = (): EnhanceRequestOverride | undefined => {
     if (!enhanceEnabled || !enhanceSettings) return undefined;
@@ -196,68 +205,6 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       display: 'flex',
       flexDirection: 'column',
       }}>
-      {enhanceEnabled && (
-        <div style={enhancePanelStyle}>
-          <div style={enhancePanelHeaderStyle}>
-            <span style={enhancePanelTitleStyle}>
-              <StarClusterIcon size={13} />
-              参与模型
-            </span>
-            <span style={enhancePanelMetaStyle}>
-              {enhanceSettings?.members.length ?? 0} 个
-            </span>
-          </div>
-
-          {enhanceConfigLoading && (
-            <span style={enhanceHintStyle}>加载中...</span>
-          )}
-          {enhanceConfigError && (
-            <span style={{ ...enhanceHintStyle, color: 'var(--error)' }}>{enhanceConfigError}</span>
-          )}
-          {!enhanceConfigLoading && !enhanceConfigError && enhanceOptions.length === 0 && (
-            <span style={enhanceHintStyle}>未配置可选模型</span>
-          )}
-          {!enhanceConfigLoading && !enhanceConfigError && enhanceOptions.length > 0 && (
-            <>
-              <div style={enhanceOptionGridStyle}>
-                {enhanceOptions.map((option) => (
-                  <label
-                    key={option.key}
-                    style={{
-                      ...enhanceOptionStyle,
-                      borderColor: selectedMemberKeys.has(option.key) ? 'var(--accent)' : 'var(--border)',
-                      background: selectedMemberKeys.has(option.key) ? 'var(--accent-soft)' : 'var(--bg-tertiary)',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedMemberKeys.has(option.key)}
-                      onChange={() => toggleEnhanceMember(option)}
-                    />
-                    <span style={enhanceOptionLabelStyle}>{option.label}</span>
-                  </label>
-                ))}
-              </div>
-              <label style={enhanceAggregatorRowStyle}>
-                <span style={enhanceSmallLabelStyle}>整合</span>
-                <select
-                  aria-label="增强整合模型"
-                  value={aggregatorKey}
-                  onChange={(e) => setEnhanceAggregator(e.target.value)}
-                  style={enhanceSelectStyle}
-                >
-                  <option value="">未选择</option>
-                  {enhanceOptions.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </>
-          )}
-        </div>
-      )}
       <div style={{
         padding: '16px 18px',
         display: 'flex',
@@ -268,7 +215,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           onClick={handleToggleEnhance}
           disabled={disabled}
           aria-pressed={enhanceEnabled}
-          title={enhanceEnabled ? '关闭增强输出' : '开启增强输出'}
+          title={enhanceConfigError ?? (enhanceEnabled ? '关闭增强输出' : '开启增强输出')}
           style={{
             width: 42,
             height: 42,
@@ -283,7 +230,12 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             opacity: disabled ? 0.55 : 1,
           }}
         >
-          <StarClusterIcon size={18} title={enhanceEnabled ? '增强输出已开启' : '增强输出已关闭'} />
+          <StarClusterIcon
+            size={18}
+            title={enhanceConfigLoading
+              ? '增强配置加载中'
+              : enhanceEnabled ? '增强输出已开启' : '增强输出已关闭'}
+          />
         </button>
         <textarea
           value={value}
@@ -326,86 +278,3 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
     </div>
   );
 }
-
-const enhancePanelStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 10,
-  padding: '12px 18px 0',
-};
-
-const enhancePanelHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: 12,
-};
-
-const enhancePanelTitleStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  fontSize: 12,
-  fontWeight: 650,
-  color: 'var(--text-primary)',
-};
-
-const enhancePanelMetaStyle: React.CSSProperties = {
-  fontSize: 12,
-  color: 'var(--text-secondary)',
-};
-
-const enhanceHintStyle: React.CSSProperties = {
-  fontSize: 12,
-  color: 'var(--text-secondary)',
-};
-
-const enhanceOptionGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-  gap: 8,
-};
-
-const enhanceOptionStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  minWidth: 0,
-  minHeight: 34,
-  border: '1px solid var(--border)',
-  borderRadius: 6,
-  padding: '6px 8px',
-  color: 'var(--text-primary)',
-  fontSize: 12,
-};
-
-const enhanceOptionLabelStyle: React.CSSProperties = {
-  minWidth: 0,
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-};
-
-const enhanceAggregatorRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '42px minmax(0, 1fr)',
-  alignItems: 'center',
-  gap: 8,
-};
-
-const enhanceSmallLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  color: 'var(--text-secondary)',
-};
-
-const enhanceSelectStyle: React.CSSProperties = {
-  minWidth: 0,
-  width: '100%',
-  background: 'var(--bg-tertiary)',
-  border: '1px solid var(--border)',
-  borderRadius: 6,
-  padding: '8px 10px',
-  color: 'var(--text-primary)',
-  fontSize: 12,
-  outline: 'none',
-};

@@ -652,6 +652,7 @@ mod tests {
                 cors: crate::config::CorsConfig::default(),
             },
             start_time: std::time::Instant::now(),
+            http: reqwest::Client::new(),
             llm: crate::llm::client::LlmClient::new(
                 reqwest::Client::new(),
                 "http://localhost:11434",

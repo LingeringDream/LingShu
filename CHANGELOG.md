@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-10
+
+### Web Search
+
+- `feat(search)`: add a read-only `web_search` chat tool backed by public web results, with titles, snippets, and source URLs preserved for cited answers.
+- `feat(permissions)`: add a persisted, default-off `L1 · 联网搜索` permission and settings toggle.
+- `security(search)`: enforce query/response limits, HTTPS/HTTP result filtering, a short request timeout, and server-side-only outbound requests.
+- `fix(search)`: recognize DuckDuckGo HTTP 202/challenge pages, fall back across independent search sources, reject unrelated fallback results, and record the successful provider in audit details.
+- `fix(chat)`: allow at most one outbound web search per user turn and terminate failures with server-authored text, preventing retry storms and fabricated training-cutoff explanations.
+- `test`: cover HTML parsing, redirect URL decoding, source formatting, permission persistence, UI toggling, and an ignored live-network smoke test.
+
 ## 2026-06-15
 
 ### Version 1.1.0

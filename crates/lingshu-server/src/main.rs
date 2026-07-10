@@ -17,6 +17,7 @@ mod state;
 mod telemetry;
 #[cfg(test)]
 mod tests_integration;
+mod web_search;
 mod ws;
 
 use axum::http::{HeaderValue, Method};

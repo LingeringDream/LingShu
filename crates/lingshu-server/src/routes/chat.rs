@@ -144,9 +144,10 @@ fn build_aggregation_prompt(
     s.push_str("1. 取各家所长,补全任一回答遗漏的要点;\n");
     s.push_str("2. 发现事实或逻辑冲突时,自行判断并只保留正确的一方,不要罗列分歧;\n");
     s.push_str("3. 不要提及\"草稿\"\"其他助手\"\"综合\"等过程性词语,直接以你自己的口吻作答;\n");
-    s.push_str("4. 若所有回答质量都不佳,请基于你自己的判断重写一份更好的回答。\n");
+    s.push_str("4. 只输出一次最终答案,不要输出\"我来搜索\"\"我会处理\"\"请稍等\"等过程性确认;\n");
+    s.push_str("5. 若所有回答质量都不佳,请基于你自己的判断重写一份更好的回答。\n");
     if !personality_snippet.is_empty() {
-        s.push_str("5. 保持你一贯的语气与风格。\n");
+        s.push_str("6. 保持你一贯的语气与风格。\n");
     }
     s.push_str("\n现在请直接输出最终回答:\n");
     s
@@ -1154,12 +1155,14 @@ fn capability_section(perms: &crate::routes::permissions::PermissionSettings) ->
             "未开启（需用户授权后可用）"
         }
     };
+    let web = state(perms.l1_web_search);
     let l1 = state(perms.l1_calendar);
     let l2 = state(perms.l2_automation);
     let l3 = state(perms.l3_accessibility);
     format!(
         r#"## 能力范围（你现在就能做的事，通过调用工具实现）
 - 对话交流：回答提问、讨论想法、给出建议
+- 联网搜索：搜索公开网页，获取最新信息并附上来源链接 —— web_search
 - 文件阅读：读取用户主目录下的文本文件（.md .txt .pdf .json .csv 等）、列出目录 —— read_file / list_directory
 - 日历管理：创建、查询、删除日程（事件默认「待确认」）—— create_calendar_event / list_calendar_events / delete_calendar_event
 - 屏幕识别：读取当前最前台窗口的屏幕文字（「屏幕识别」与「屏幕阅读」同义）—— read_screen
@@ -1168,6 +1171,7 @@ fn capability_section(perms: &crate::routes::permissions::PermissionSettings) ->
 - 时间查询 —— get_current_time
 
 ## 权限边界（按等级，附当前真实状态）
+- L1 联网搜索：只读搜索公开网页 —— 当前{web}
 - L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前{l1}
 - L2 本机操作：打开 App、网址、文件 —— 当前{l2}
 - L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前{l3}
@@ -1201,6 +1205,7 @@ fn build_system_prompt(
 
 ## 工具使用 — 极其重要，必须遵守
 你有可以调用的工具（tools/function calling）。工具的使用对你的用户完全透明——调用工具后系统会返回真实的执行结果。
+每个用户回合只输出一条最终回复；如果需要工具，先调用工具，等工具结果返回后再回答。不要先输出「好的，我来搜索」「我将为你处理」这类过程性确认，也不要把过程拆成多条消息。
 
 **强制规则：**
 1. 当用户请求创建/安排/添加日程时，你**必须调用 create_calendar_event 工具**。不要先问「需要我帮你创建吗？」——直接调用。
@@ -1211,6 +1216,7 @@ fn build_system_prompt(
 6. 「创建」与「删除」的确认方式不同——这是你既有自主性、又有边界的体现：
    - create_calendar_event 创建的是「待确认」草稿，由用户在卡片中裁决，因此**可直接调用、不必先口头询问**（即便人格偏谨慎也是如此，你的谨慎体现在措辞上，如说明「这是待确认草稿」）。
    - delete_calendar_event 等会移除/覆盖数据的不可逆操作，**必须按规则 3 先确认再执行**，即便人格偏主动/高风险容忍也不能跳过确认。
+7. 当用户明确要求「联网搜索 / 上网查 / 搜一下」，或问题依赖新闻、价格、版本、政策等可能变化的信息时，必须调用 web_search。回答只能依据工具返回的搜索结果，并为相关结论附上来源 URL；搜索失败时如实说明，禁止编造来源。搜索失败与模型训练数据截止日期无关，绝不要用「训练数据截止」解释工具失败，也不要反复重试同一次搜索。
 
 ## 对话风格指引
 - 用户说「帮我记一下」「记住」→ 确认已记录，不重复整段内容
@@ -2344,7 +2350,14 @@ async fn preflight_calendar_intent(
         // The LLM will use these results — we just provide the data
         let list_text: String = events
             .iter()
-            .map(|e| format!("[{}] {}（{}）", e.id, e.title, fmt_event_local(e.start_time)))
+            .map(|e| {
+                format!(
+                    "[{}] {}（{}）",
+                    e.id,
+                    e.title,
+                    fmt_event_local(e.start_time)
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -2542,6 +2555,26 @@ fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
             }),
         ),
         ToolDefinition::new(
+            "web_search",
+            "搜索公开互联网，返回网页标题、摘要和来源 URL。当用户明确要求联网搜索、上网查、搜一下，或者问题涉及新闻、价格、版本、政策、人物职务等会随时间变化的信息时调用。回答必须引用工具返回的来源 URL；不要编造未出现在结果中的事实或链接。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "简洁、具体的搜索词；不要包含密码、令牌或其他敏感信息。"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回结果数，1 到 8，默认 5。",
+                        "minimum": 1,
+                        "maximum": 8
+                    }
+                },
+                "required": ["query"]
+            }),
+        ),
+        ToolDefinition::new(
             "open_app",
             "打开 macOS 上的一个应用程序。当用户说「打开/启动/帮我开...（某 App）」时调用。是否真正执行由系统的 L2 白名单决定：不在白名单内会被安全拒绝，你只需如实转达结果。",
             serde_json::json!({
@@ -2600,6 +2633,9 @@ struct ToolEffects {
     /// so the desktop client must capture the frontmost window's text in the
     /// authorized main-app process and resend the turn with `screen_context`.
     screen_read_request: bool,
+    /// Safe server-authored text that ends the tool loop immediately. Search
+    /// failures use this so the model cannot retry or invent a cutoff story.
+    terminal_response: Option<String>,
 }
 
 /// Extract a string argument from a tool call, trimmed; "" if missing.
@@ -2612,6 +2648,32 @@ fn tool_arg(tool_call: &crate::llm::client::ToolCall, key: &str) -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+fn tool_definitions_for_iteration(
+    tools: &[crate::llm::client::ToolDefinition],
+    web_search_used: bool,
+) -> Vec<crate::llm::client::ToolDefinition> {
+    tools
+        .iter()
+        .filter(|tool| !(web_search_used && tool.function.name == "web_search"))
+        .cloned()
+        .collect()
+}
+
+fn claim_web_search_budget(tool_name: &str, web_search_used: &mut bool) -> bool {
+    if tool_name != "web_search" {
+        return true;
+    }
+    if *web_search_used {
+        return false;
+    }
+    *web_search_used = true;
+    true
+}
+
+fn web_search_failure_response() -> String {
+    "联网搜索暂时不可用：主搜索与备用搜索均未能返回有效结果。请稍后重试。".to_string()
 }
 
 /// Enforce L2 permission + whitelist for an automation target, write an audit
@@ -2687,7 +2749,9 @@ async fn enforce_automation(
 /// event times by the local UTC offset (8h for UTC+8). Converting to local here
 /// keeps all model-facing times in one consistent frame.
 fn fmt_event_local(dt: DateTime<Utc>) -> String {
-    dt.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()
+    dt.with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
 }
 
 /// Execute a single tool call and return a human-readable result string
@@ -2960,6 +3024,85 @@ async fn execute_tool_call(
                 ToolEffects::default(),
             ))
         }
+        "web_search" => {
+            let query = tool_arg(tool_call, "query");
+            if query.is_empty() {
+                return Ok(("错误：未提供联网搜索词。".into(), ToolEffects::default()));
+            }
+
+            let perms = crate::routes::permissions::permissions_for_user(state, user_id).await;
+            if !perms.l1_web_search {
+                crate::routes::audit::record(
+                    &state.db,
+                    user_id,
+                    "web_search_denied",
+                    "network",
+                    None,
+                    serde_json::json!({ "result": "denied", "reason": "permission_disabled" }),
+                )
+                .await;
+                let message = "无法联网搜索：L1 联网搜索权限未开启。请在设置 → 权限分级中开启“L1 · 联网搜索”后重试。".to_string();
+                return Ok((
+                    message.clone(),
+                    ToolEffects {
+                        terminal_response: Some(message),
+                        ..Default::default()
+                    },
+                ));
+            }
+
+            let limit = tool_call
+                .function
+                .arguments
+                .get("limit")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(5)
+                .clamp(1, 8) as usize;
+            match crate::web_search::search(&state.http, &query, limit).await {
+                Ok(outcome) => {
+                    crate::routes::audit::record(
+                        &state.db,
+                        user_id,
+                        "web_search",
+                        "network",
+                        None,
+                        serde_json::json!({
+                            "result": "allowed",
+                            "result_count": outcome.results.len(),
+                            "provider": outcome.provider,
+                        }),
+                    )
+                    .await;
+                    Ok((
+                        crate::web_search::format_for_model(&query, &outcome),
+                        ToolEffects::default(),
+                    ))
+                }
+                Err(error) => {
+                    tracing::warn!(%user_id, %error, "Web search failed");
+                    crate::routes::audit::record(
+                        &state.db,
+                        user_id,
+                        "web_search_failed",
+                        "network",
+                        None,
+                        serde_json::json!({
+                            "result": "failed",
+                            "reason": "providers_unavailable",
+                        }),
+                    )
+                    .await;
+                    let message = web_search_failure_response();
+                    Ok((
+                        message.clone(),
+                        ToolEffects {
+                            terminal_response: Some(message),
+                            ..Default::default()
+                        },
+                    ))
+                }
+            }
+        }
         "delete_calendar_event" => {
             let event_id_str = tool_call
                 .function
@@ -3073,6 +3216,7 @@ async fn run_tool_loop(
     let mut messages = messages;
     let mut effects = ToolEffects::default();
     let mut iterations = 0;
+    let mut web_search_used = false;
 
     tracing::debug!(%user_id, tool_count = tools.len(), "Tool loop starting");
 
@@ -3084,12 +3228,13 @@ async fn run_tool_loop(
         }
 
         tracing::debug!(%user_id, iterations, msg_count = messages.len(), "Calling chat_with_tools");
+        let iteration_tools = tool_definitions_for_iteration(tools, web_search_used);
         let response = match llm
             .chat_with_tools(
                 model,
                 messages.clone(),
                 Some(options.clone()),
-                tools.to_vec(),
+                iteration_tools,
             )
             .await
         {
@@ -3127,12 +3272,21 @@ async fn run_tool_loop(
         // Execute each tool, pairing the result with its call id.
         let mut tool_results: Vec<(String, String)> = Vec::new();
         for tc in &tool_calls {
-            let (result, eff) = match execute_tool_call(state, user_id, tc).await {
-                Ok((text, eff)) => (text, eff),
-                Err(e) => {
-                    tracing::warn!(%user_id, tool = %tc.function.name, %e, "Tool execution failed");
-                    (format!("工具执行失败：{e}"), ToolEffects::default())
+            let (result, eff) = if claim_web_search_budget(&tc.function.name, &mut web_search_used)
+            {
+                match execute_tool_call(state, user_id, tc).await {
+                    Ok((text, eff)) => (text, eff),
+                    Err(e) => {
+                        tracing::warn!(%user_id, tool = %tc.function.name, %e, "Tool execution failed");
+                        (format!("工具执行失败：{e}"), ToolEffects::default())
+                    }
                 }
+            } else {
+                (
+                    "本回合已执行过一次联网搜索。请使用已经返回的搜索结果回答，不要再次搜索。"
+                        .to_string(),
+                    ToolEffects::default(),
+                )
             };
             effects
                 .apple_calendar_deletes
@@ -3140,7 +3294,17 @@ async fn run_tool_loop(
             effects.automation_actions.extend(eff.automation_actions);
             effects.permission_requests.extend(eff.permission_requests);
             effects.screen_read_request |= eff.screen_read_request;
+            if effects.terminal_response.is_none() {
+                effects.terminal_response = eff.terminal_response;
+            }
             tool_results.push((tc.id.clone(), result));
+        }
+
+        // Search permission/service failures use fixed server-authored text.
+        // Sending them back through the model caused repeated tool calls and a
+        // fabricated "training data cutoff" explanation in the desktop app.
+        if let Some(message) = effects.terminal_response.clone() {
+            return (messages, Some(message), effects);
         }
 
         // A read_screen call hands off to the desktop client to capture screen
@@ -3181,6 +3345,7 @@ mod tests {
             "create_calendar_event",
             "list_calendar_events",
             "delete_calendar_event",
+            "web_search",
             "open_app",
             "open_url",
             "open_file",
@@ -3202,27 +3367,41 @@ mod tests {
         let out = fmt_event_local(utc);
 
         // No UTC leakage and no seconds — the two things that confused the model.
-        assert!(!out.contains("UTC"), "must not leak the UTC Display suffix: {out}");
+        assert!(
+            !out.contains("UTC"),
+            "must not leak the UTC Display suffix: {out}"
+        );
         assert!(
             out.matches(':').count() == 1,
             "minute precision only (no seconds): {out}"
         );
         // Shape: YYYY-MM-DD HH:MM
-        let (date, time) = out.split_once(' ').expect("date and time separated by space");
+        let (date, time) = out
+            .split_once(' ')
+            .expect("date and time separated by space");
         assert_eq!(date.len(), 10, "YYYY-MM-DD: {out}");
         assert_eq!(time.len(), 5, "HH:MM: {out}");
 
         // It must equal the same instant converted to the machine's local zone,
         // independent of what that zone is.
-        let expected = utc.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string();
+        let expected = utc
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string();
         assert_eq!(out, expected);
     }
 
     #[test]
     fn build_system_prompt_asserts_timestamp_visibility() {
         let prompt = build_system_prompt("", "", "", "", "", "2026-06-23 14:30 CST");
-        assert!(prompt.contains("## 时间感知"), "time-awareness section present");
-        assert!(prompt.contains("2026-06-23 14:30 CST"), "current time injected");
+        assert!(
+            prompt.contains("## 时间感知"),
+            "time-awareness section present"
+        );
+        assert!(
+            prompt.contains("2026-06-23 14:30 CST"),
+            "current time injected"
+        );
         // The anti-denial instruction must survive into the final prompt — this
         // is what counters the model's "I can't see metadata" reflex.
         assert!(
@@ -3231,7 +3410,10 @@ mod tests {
         );
         // When no time is supplied the section is omitted entirely.
         let no_time = build_system_prompt("", "", "", "", "", "");
-        assert!(!no_time.contains("## 时间感知"), "section omitted without a time");
+        assert!(
+            !no_time.contains("## 时间感知"),
+            "section omitted without a time"
+        );
     }
 
     #[test]
@@ -3240,12 +3422,21 @@ mod tests {
         let recorded = Utc.with_ymd_and_hms(2026, 6, 20, 1, 30, 0).unwrap();
         let line = memory_context_line("goal", "下周要交方案", recorded);
 
-        assert!(line.starts_with("- [目标·记于"), "label + recorded marker: {line}");
+        assert!(
+            line.starts_with("- [目标·记于"),
+            "label + recorded marker: {line}"
+        );
         assert!(line.contains("下周要交方案"), "content preserved: {line}");
         assert!(!line.contains("UTC"), "no raw UTC suffix: {line}");
         // Date is the local calendar date of the same instant, day precision.
-        let expected_date = recorded.with_timezone(&Local).format("%Y-%m-%d").to_string();
-        assert!(line.contains(&expected_date), "local date {expected_date} in: {line}");
+        let expected_date = recorded
+            .with_timezone(&Local)
+            .format("%Y-%m-%d")
+            .to_string();
+        assert!(
+            line.contains(&expected_date),
+            "local date {expected_date} in: {line}"
+        );
         // Unknown types fall back to the generic label.
         assert!(memory_context_line("weird", "x", recorded).contains("[信息·记于"));
     }
@@ -3262,6 +3453,33 @@ mod tests {
         };
         assert_eq!(tool_arg(&tc, "name"), "Calculator");
         assert_eq!(tool_arg(&tc, "missing"), "");
+    }
+
+    #[test]
+    fn web_search_budget_allows_only_one_call_per_turn() {
+        let mut used = false;
+        assert!(claim_web_search_budget("web_search", &mut used));
+        assert!(!claim_web_search_budget("web_search", &mut used));
+        assert!(claim_web_search_budget("get_current_time", &mut used));
+    }
+
+    #[test]
+    fn later_tool_iterations_remove_web_search_definition() {
+        let tools = chat_tools();
+        assert!(tool_definitions_for_iteration(&tools, false)
+            .iter()
+            .any(|tool| tool.function.name == "web_search"));
+        assert!(!tool_definitions_for_iteration(&tools, true)
+            .iter()
+            .any(|tool| tool.function.name == "web_search"));
+    }
+
+    #[test]
+    fn search_failure_response_has_no_cutoff_story_or_unverified_link() {
+        let message = web_search_failure_response();
+        assert!(!message.contains("训练"));
+        assert!(!message.contains("http"));
+        assert!(!message.contains("LMSYS"));
     }
 
     #[test]
@@ -3332,6 +3550,8 @@ mod tests {
         assert!(prompt.contains("先给出方案 A。"));
         assert!(prompt.contains("OpenAI · gpt-4o"));
         assert!(prompt.contains("补充风险 B。"));
+        assert!(prompt.contains("只输出一次最终答案"));
+        assert!(prompt.contains("不要输出\"我来搜索\""));
         assert!(prompt.contains("直接输出最终回答"));
     }
 
@@ -3371,8 +3591,14 @@ mod tests {
         assert_eq!(merged.members[0].provider_id, selected_member.provider_id);
         assert_eq!(merged.members[0].model, selected_member.model);
         assert_eq!(
-            merged.aggregator.as_ref().map(|m| (m.provider_id.as_str(), m.model.as_str())),
-            Some((selected_aggregator.provider_id.as_str(), selected_aggregator.model.as_str()))
+            merged
+                .aggregator
+                .as_ref()
+                .map(|m| (m.provider_id.as_str(), m.model.as_str())),
+            Some((
+                selected_aggregator.provider_id.as_str(),
+                selected_aggregator.model.as_str()
+            ))
         );
         assert_eq!(merged.per_model_timeout_ms, 1_000);
         assert_eq!(merged.max_parallel, 1);
@@ -3386,6 +3612,7 @@ mod tests {
         assert!(prompt.contains("灵枢"));
         assert!(prompt.contains("LingShu"));
         assert!(prompt.contains("权限边界"));
+        assert!(prompt.contains("每个用户回合只输出一条最终回复"));
     }
 
     #[test]
@@ -3412,6 +3639,7 @@ mod tests {
     fn capability_section_reflects_real_grant_state() {
         use crate::routes::permissions::PermissionSettings;
         let granted = PermissionSettings {
+            l1_web_search: true,
             l1_calendar: true,
             l3_accessibility: true,
             ..Default::default()
@@ -3420,11 +3648,13 @@ mod tests {
         assert!(caps.contains(
             "L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前已开启"
         ));
+        assert!(caps.contains("L1 联网搜索：只读搜索公开网页 —— 当前已开启"));
         assert!(caps.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前已开启"));
 
         // Default permissions have everything off — the section must say so
         // rather than claiming the capability is available (the original bug).
         let denied = capability_section(&PermissionSettings::default());
+        assert!(denied.contains("L1 联网搜索：只读搜索公开网页 —— 当前未开启（需用户授权后可用）"));
         assert!(denied.contains("L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前未开启（需用户授权后可用）"));
         assert!(denied.contains(
             "L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前未开启（需用户授权后可用）"

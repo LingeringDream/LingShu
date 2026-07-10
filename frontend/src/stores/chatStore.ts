@@ -264,6 +264,46 @@ function regenerationStatus(styleTag: FeedbackStyleTag): string {
   }
 }
 
+function shouldBypassEnhancementForToolTurn(content: string): boolean {
+  const text = content.trim().toLowerCase();
+  if (!text) return false;
+
+  return [
+    '重试',
+    '再试一次',
+    '重新来',
+    '重新搜',
+    '重新搜索',
+    'retry',
+    '搜索',
+    '搜一下',
+    '上网',
+    '联网',
+    '查一下',
+    '帮我查',
+    '最新',
+    '新闻',
+    '价格',
+    '政策',
+    '版本',
+    '日程',
+    '提醒',
+    '安排',
+    '创建',
+    '删除',
+    '取消',
+    '打开',
+    '启动',
+    '屏幕识别',
+    '屏幕阅读',
+    '读取屏幕',
+    '看屏幕',
+    'read screen',
+    'open ',
+    'search',
+  ].some((keyword) => text.includes(keyword));
+}
+
 export const useChatStore = create<ChatState>()(
   persist(
     (set, get) => ({
@@ -297,7 +337,7 @@ export const useChatStore = create<ChatState>()(
       },
 
       sendMessage: async (content: string, enhanceOverride?: EnhanceRequestOverride) => {
-        const enhanceActive = get().enhanceEnabled;
+        const enhanceActive = get().enhanceEnabled && !shouldBypassEnhancementForToolTurn(content);
         const userMessage: Message = {
           id: crypto.randomUUID(),
           role: 'user',

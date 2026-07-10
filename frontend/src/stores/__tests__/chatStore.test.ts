@@ -248,6 +248,7 @@ describe('chatStore', () => {
       }),
     );
     const assistant = useChatStore.getState().messages.find((message) => message.role === 'assistant');
+    expect(useChatStore.getState().messages).toHaveLength(2);
     expect(assistant).toMatchObject({
       content: '最终答案',
       dbId: 'assistant-db-id',
@@ -314,5 +315,48 @@ describe('chatStore', () => {
         }),
       }),
     );
+  });
+
+  it('routes retry-like tool turns through normal chat even when enhancement is enabled', async () => {
+    mockedApiFetch.mockImplementation(async (input, init) => {
+      if (input === '/api/v1/conversations' && init?.method === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ id: 'session-123' }),
+        } as Response;
+      }
+      if (input === '/api/v1/chat' && init?.method === 'POST') {
+        return sseResponse([
+          { content: '这是重新搜索后的结果。', done: false },
+          { done: true, assistant_message_id: 'assistant-db-id' },
+        ]);
+      }
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    useChatStore.setState({ enhanceEnabled: true, enhanceDefaultLoaded: true });
+
+    await useChatStore.getState().sendMessage('重试');
+
+    expect(mockedApiFetch).not.toHaveBeenCalledWith(
+      '/api/v1/chat/enhance',
+      expect.anything(),
+    );
+    expect(mockedApiFetch).toHaveBeenCalledWith(
+      '/api/v1/chat',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ message: '重试', session_id: 'session-123' }),
+      }),
+    );
+    const state = useChatStore.getState();
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages[0]).toMatchObject({ role: 'user', content: '重试' });
+    expect(state.messages[1]).toMatchObject({
+      role: 'assistant',
+      content: '这是重新搜索后的结果。',
+      dbId: 'assistant-db-id',
+    });
+    expect(state.messages[1].enhance).toBeUndefined();
   });
 });
