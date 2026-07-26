@@ -38,6 +38,21 @@ function utcFromLocalInput(value: string): string {
   return new Date(value).toISOString();
 }
 
+/// The workspace only lists events whose next occurrence is still ahead
+/// (`prepareCalendarEventsForDisplay` drops confirmed events once they start),
+/// so fixtures must be anchored to the clock rather than hardcoded — a literal
+/// date silently stops rendering the moment it passes, and the test then fails
+/// on a missing 编辑 button instead of on whatever it meant to assert.
+function upcomingEventTimes(durationMinutes: number): { start: string; end: string } {
+  const start = new Date();
+  start.setDate(start.getDate() + 7);
+  start.setHours(10, 0, 0, 0);
+  return {
+    start: start.toISOString(),
+    end: new Date(start.getTime() + durationMinutes * 60_000).toISOString(),
+  };
+}
+
 describe('WorkspacePage', () => {
   beforeEach(() => {
     mockedApiFetch.mockReset();
@@ -118,13 +133,14 @@ describe('WorkspacePage', () => {
   });
 
   it('lets users edit a precise start time while preserving the event duration', async () => {
+    const times = upcomingEventTimes(45);
     const event = {
       id: 'math-review',
       title: '数学复盘',
       description: null,
       location: '书房',
-      start_time: '2026-06-27T02:00:00.000Z',
-      end_time: '2026-06-27T02:45:00.000Z',
+      start_time: times.start,
+      end_time: times.end,
       status: 'confirmed',
       calendar_name: 'default',
       attendees: [],
@@ -176,13 +192,14 @@ describe('WorkspacePage', () => {
   });
 
   it('reads the visible time input values on save even if native input state is stale', async () => {
+    const times = upcomingEventTimes(45);
     const event = {
       id: 'native-time',
       title: '原生时间输入',
       description: null,
       location: '书房',
-      start_time: '2026-06-27T02:00:00.000Z',
-      end_time: '2026-06-27T02:45:00.000Z',
+      start_time: times.start,
+      end_time: times.end,
       status: 'confirmed',
       calendar_name: 'default',
       attendees: [],
