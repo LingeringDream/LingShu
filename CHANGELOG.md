@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-26
+
+### Version 1.4.1
+
+- `fix(chat)`: recover DeepSeek DSML tool calls emitted as plain response content so approved tools execute instead of leaking raw protocol markup into chat.
+- `security(chat)`: accept only complete DSML envelopes whose tools were offered in the current iteration; reject malformed calls, unknown tools, duplicate parameters, and mixed ordinary text.
+- `test(chat)`: cover full-width, ASCII, HTML-escaped, multi-call, and rejection-path DSML responses.
+
 ## 2026-07-10
 
 ### Web Search
