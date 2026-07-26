@@ -3058,7 +3058,7 @@ async fn execute_tool_call(
                 .and_then(|value| value.as_u64())
                 .unwrap_or(5)
                 .clamp(1, 8) as usize;
-            match crate::web_search::search(&state.http, &query, limit).await {
+            match crate::web_search::search(&state.http, &state.redis, &query, limit).await {
                 Ok(outcome) => {
                     crate::routes::audit::record(
                         &state.db,
@@ -3069,7 +3069,7 @@ async fn execute_tool_call(
                         serde_json::json!({
                             "result": "allowed",
                             "result_count": outcome.results.len(),
-                            "provider": outcome.provider,
+                            "providers": outcome.providers,
                         }),
                     )
                     .await;
