@@ -18,12 +18,17 @@ export const CHAT_SESSION_SYNC_DEBOUNCE_MS = 80;
 
 const CHAT_SYNC_SOURCE_ID = Math.random().toString(36).slice(2);
 
+function nextMessagesRevision(current: number): number {
+  return Math.max(current + 1, Date.now());
+}
+
 interface ChatSessionSnapshot {
   sourceId?: string;
   messages: Message[];
   isLoading?: boolean;
   streamingId?: string | null;
   sessionId: string | null;
+  messagesRevision?: number;
   enhanceEnabled?: boolean;
   enhanceDefaultLoaded?: boolean;
 }
@@ -42,6 +47,9 @@ export interface EnhanceRequestOverride {
 
 interface ChatState {
   messages: Message[];
+  /** Increments when a whole message set is intentionally replaced (load,
+   *  withdraw, clear) so another window cannot merge removed messages back. */
+  messagesRevision: number;
   isLoading: boolean;
   streamingId: string | null;
   /** Active conversation id — created lazily on first message so the backend
@@ -53,7 +61,18 @@ interface ChatState {
   loadEnhanceDefault: () => Promise<void>;
   sendMessage: (content: string, enhanceOverride?: EnhanceRequestOverride) => Promise<void>;
   regenerateAssistantMessage: (messageId: string, styleTag: FeedbackStyleTag) => Promise<void>;
+  loadSession: (sessionId: string) => Promise<boolean>;
+  editUserMessage: (messageId: string, content: string) => Promise<void>;
+  withdrawUserMessage: (messageId: string) => Promise<void>;
   clearMessages: () => void;
+}
+
+interface StoredChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  model_id?: string | null;
+  created_at: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -156,6 +175,9 @@ function normalizeChatSessionSnapshot(value: unknown): ChatSessionSnapshot | nul
     isLoading: typeof state.isLoading === 'boolean' ? state.isLoading : undefined,
     streamingId: typeof state.streamingId === 'string' ? state.streamingId : null,
     sessionId: typeof state.sessionId === 'string' ? state.sessionId : null,
+    messagesRevision: typeof state.messagesRevision === 'number' && Number.isFinite(state.messagesRevision)
+      ? state.messagesRevision
+      : 0,
     enhanceEnabled: typeof state.enhanceEnabled === 'boolean' ? state.enhanceEnabled : undefined,
     enhanceDefaultLoaded: typeof state.enhanceDefaultLoaded === 'boolean' ? state.enhanceDefaultLoaded : undefined,
   };
@@ -308,6 +330,7 @@ export const useChatStore = create<ChatState>()(
   persist(
     (set, get) => ({
       messages: [],
+      messagesRevision: 0,
       isLoading: false,
       streamingId: null,
       sessionId: null,
@@ -475,10 +498,16 @@ export const useChatStore = create<ChatState>()(
                   const dbId = typeof data.assistant_message_id === 'string'
                     ? data.assistant_message_id
                     : undefined;
+                  const userDbId = typeof data.user_message_id === 'string'
+                    ? data.user_message_id
+                    : undefined;
                   set((state) => ({
                     isLoading: false,
                     streamingId: null,
                     messages: state.messages.map((message) => {
+                      if (message.id === userMessage.id && userDbId) {
+                        return { ...message, dbId: userDbId };
+                      }
                       if (message.id !== assistantId) return message;
                       const current = message.enhance ?? { phase: 'done', members: [] };
                       return {
@@ -623,6 +652,14 @@ export const useChatStore = create<ChatState>()(
                         }
                       }
                       if (data.done) {
+                        const userDbId: string | undefined = data.user_message_id;
+                        if (userDbId) {
+                          set((state) => ({
+                            messages: state.messages.map((m) =>
+                              m.id === userMessage.id ? { ...m, dbId: userDbId } : m,
+                            ),
+                          }));
+                        }
                         // Screen-read handoff: do NOT finalize — let the caller
                         // capture screen text and run a second pass.
                         if (data.screen_read_request) {
@@ -893,14 +930,90 @@ export const useChatStore = create<ChatState>()(
         }
       },
 
+      loadSession: async (sessionId: string) => {
+        if (get().isLoading) return false;
+        set({ isLoading: true, streamingId: null });
+        try {
+          const response = await apiFetch(`/api/v1/chat/sessions/${sessionId}/messages`);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const rows: StoredChatMessage[] = await response.json();
+          const messages: Message[] = rows
+            .filter((row) => row.role === 'user' || row.role === 'assistant')
+            .map((row) => ({
+              id: row.id,
+              dbId: row.id,
+              role: row.role,
+              content: row.content,
+              timestamp: normalizeTimestamp(row.created_at),
+            }));
+          set((state) => ({
+            messages,
+            messagesRevision: nextMessagesRevision(state.messagesRevision),
+            sessionId,
+            isLoading: false,
+            streamingId: null,
+          }));
+          return true;
+        } catch {
+          set({ isLoading: false, streamingId: null });
+          return false;
+        }
+      },
+
+      editUserMessage: async (messageId: string, content: string) => {
+        if (get().isLoading) return;
+        const trimmed = content.trim();
+        const target = get().messages.find((message) => message.id === messageId);
+        if (!target || target.role !== 'user' || !target.dbId || !trimmed) return;
+
+        const response = await apiFetch(`/api/v1/chat/messages/${target.dbId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: trimmed }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        set((state) => ({
+          messages: state.messages.map((message) =>
+            message.id === messageId
+              ? { ...message, content: trimmed, revision: (message.revision ?? 0) + 1 }
+              : message,
+          ),
+        }));
+      },
+
+      withdrawUserMessage: async (messageId: string) => {
+        if (get().isLoading) return;
+        const target = get().messages.find((message) => message.id === messageId);
+        if (!target || target.role !== 'user' || !target.dbId) return;
+
+        const response = await apiFetch(`/api/v1/chat/messages/${target.dbId}`, {
+          method: 'DELETE',
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        set((state) => ({
+          messages: state.messages.filter((message) => message.id !== messageId),
+          messagesRevision: nextMessagesRevision(state.messagesRevision),
+        }));
+      },
+
       // Start a fresh conversation: drop the session so the next message creates
       // a new one rather than appending to the previous thread.
-      clearMessages: () => set({ messages: [], sessionId: null, enhanceDefaultLoaded: false }),
+      clearMessages: () => set((state) => ({
+        messages: [],
+        messagesRevision: nextMessagesRevision(state.messagesRevision),
+        sessionId: null,
+        isLoading: false,
+        streamingId: null,
+        enhanceDefaultLoaded: false,
+      })),
     }),
     {
       name: CHAT_SESSION_STORAGE_KEY,
       partialize: (state) => ({
         messages: state.messages,
+        messagesRevision: state.messagesRevision,
         sessionId: state.sessionId,
         enhanceEnabled: state.enhanceEnabled,
         enhanceDefaultLoaded: state.enhanceDefaultLoaded,
@@ -920,6 +1033,7 @@ function createChatSessionSnapshot(state = useChatStore.getState()): ChatSession
     isLoading: state.isLoading,
     streamingId: state.streamingId,
     sessionId: state.sessionId,
+    messagesRevision: state.messagesRevision,
     enhanceEnabled: state.enhanceEnabled,
     enhanceDefaultLoaded: state.enhanceDefaultLoaded,
   };
@@ -930,23 +1044,33 @@ function applyChatSessionSnapshot(value: unknown) {
   if (!snapshot || snapshot.sourceId === CHAT_SYNC_SOURCE_ID) return;
 
   const current = useChatStore.getState();
-  const shouldMerge = snapshot.messages.length > 0
+  const snapshotRevision = snapshot.messagesRevision ?? 0;
+  const snapshotIsNewerReplacement = snapshotRevision > current.messagesRevision;
+  const snapshotIsStaleReplacement = snapshotRevision < current.messagesRevision;
+  const shouldMerge = !snapshotIsNewerReplacement
+    && !snapshotIsStaleReplacement
+    && snapshot.messages.length > 0
     && current.messages.length > 0
     && canMergeChatSessionSnapshot(current.sessionId, snapshot.sessionId);
   const wouldRegressCompletedStream = shouldMerge && snapshotWouldRegressCompletedStream(current, snapshot);
   applyingRemoteSnapshot = true;
   try {
     useChatStore.setState({
-      messages: shouldMerge
-        ? mergeChatSessionMessages(current.messages, snapshot.messages)
-        : snapshot.messages,
+      messages: snapshotIsStaleReplacement
+        ? current.messages
+        : shouldMerge
+          ? mergeChatSessionMessages(current.messages, snapshot.messages)
+          : snapshot.messages,
+      messagesRevision: Math.max(current.messagesRevision, snapshotRevision),
       isLoading: wouldRegressCompletedStream
         ? current.isLoading
         : snapshot.isLoading ?? current.isLoading,
       streamingId: wouldRegressCompletedStream
         ? current.streamingId
         : snapshot.streamingId ?? null,
-      sessionId: snapshot.sessionId ?? (snapshot.messages.length > 0 ? current.sessionId : null),
+      sessionId: snapshotIsStaleReplacement
+        ? current.sessionId
+        : snapshot.sessionId ?? (snapshot.messages.length > 0 ? current.sessionId : null),
       enhanceEnabled: snapshot.enhanceEnabled ?? current.enhanceEnabled,
       enhanceDefaultLoaded: snapshot.enhanceDefaultLoaded ?? current.enhanceDefaultLoaded,
     });

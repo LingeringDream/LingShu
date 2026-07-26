@@ -76,6 +76,8 @@ enum EnhanceChunk {
     Done {
         #[serde(skip_serializing_if = "Option::is_none")]
         assistant_message_id: Option<uuid::Uuid>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user_message_id: Option<uuid::Uuid>,
     },
     /// A non-fatal error to surface in the chat bubble.
     Error { message: String },
@@ -159,6 +161,7 @@ fn enhance_error_sse(message: String) -> ChatSse {
         EnhanceChunk::Error { message },
         EnhanceChunk::Done {
             assistant_message_id: None,
+            user_message_id: None,
         },
     ];
     let stream = futures::stream::iter(chunks.into_iter().map(|c| {
@@ -282,21 +285,32 @@ pub async fn enhance_chat(
         user_message
     )));
 
-    // Persist the user message (mirrors `chat`).
-    if let Some(sid) = session_id {
-        let _ = sqlx::query(
-            "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)",
+    // Persist the user message and return its id so the frontend can edit or
+    // withdraw the exact row later.
+    let user_message_id = if let Some(sid) = session_id {
+        let message_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO messages (conversation_id, role, content) \
+             VALUES ($1, 'user', $2) RETURNING id",
         )
         .bind(sid)
         .bind(&user_message)
+        .fetch_one(&state.db)
+        .await?;
+        sqlx::query(
+            "UPDATE conversations SET updated_at = NOW(), \
+             title = CASE WHEN title IS NULL OR BTRIM(title) = '' THEN $2 ELSE title END \
+             WHERE id = $1 AND user_id = $3 AND deleted_at IS NULL",
+        )
+        .bind(sid)
+        .bind(compact_conversation_title(&user_message))
+        .bind(user_id)
         .execute(&state.db)
-        .await;
-        let _ = sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1")
-            .bind(sid)
-            .execute(&state.db)
-            .await;
+        .await?;
         crate::routes::sessions::invalidate_session_cache(&state, user_id).await;
-    }
+        Some(message_id)
+    } else {
+        None
+    };
 
     let member_infos: Vec<EnhanceMemberInfo> = members
         .iter()
@@ -424,6 +438,7 @@ pub async fn enhance_chat(
 
         let _ = tx.unbounded_send(EnhanceChunk::Done {
             assistant_message_id,
+            user_message_id,
         });
     });
 
@@ -451,6 +466,27 @@ pub struct ChatRequest {
     /// a `read_screen` tool call; see the screen-read flow in this module.
     #[serde(default)]
     pub screen_context: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ChatChunkEnvelope<'a> {
+    #[serde(flatten)]
+    chunk: &'a ChatChunk,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_message_id: Option<Uuid>,
+}
+
+fn serialize_chat_chunk(chunk: &ChatChunk, user_message_id: Option<Uuid>) -> String {
+    serde_json::to_string(&ChatChunkEnvelope {
+        chunk,
+        user_message_id,
+    })
+    .unwrap_or_default()
+}
+
+fn compact_conversation_title(message: &str) -> String {
+    let compact = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    compact.chars().take(60).collect()
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema)]
@@ -577,25 +613,40 @@ pub async fn chat(
         user_message
     )));
 
-    // Persist user message to DB before streaming (only when session_id is set)
-    if let Some(sid) = session_id {
-        sqlx::query(
-            "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)",
+    // Persist the first pass of the user turn before streaming. A screen-read
+    // continuation reuses the same turn and must not insert a duplicate row.
+    let is_screen_continuation = req
+        .screen_context
+        .as_ref()
+        .is_some_and(|content| !content.trim().is_empty());
+    let user_message_id = if let (Some(sid), false) = (session_id, is_screen_continuation) {
+        let message_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO messages (conversation_id, role, content) \
+             VALUES ($1, 'user', $2) RETURNING id",
         )
         .bind(sid)
         .bind(&user_message)
-        .execute(&state.db)
+        .fetch_one(&state.db)
         .await?;
 
         // Bump updated_at so the session list order reflects latest activity
-        sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1")
-            .bind(sid)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE conversations SET updated_at = NOW(), \
+             title = CASE WHEN title IS NULL OR BTRIM(title) = '' THEN $2 ELSE title END \
+             WHERE id = $1 AND user_id = $3 AND deleted_at IS NULL",
+        )
+        .bind(sid)
+        .bind(compact_conversation_title(&user_message))
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
 
         // Invalidate cached session list
         crate::routes::sessions::invalidate_session_cache(&state, user_id).await;
-    }
+        Some(message_id)
+    } else {
+        None
+    };
 
     // Signal: detect explicit memory-storage request
     if crate::telemetry::detect_explicit_memory_request(&user_message) {
@@ -874,8 +925,8 @@ pub async fn chat(
                             };
                             pet_tx.send(PetNotification::mood(done_mood)).ok();
                         }
-                        return Ok(Event::default().data(
-                            serde_json::to_string(&ChatChunk {
+                        return Ok(Event::default().data(serialize_chat_chunk(
+                            &ChatChunk {
                                 content: chunk.content,
                                 done: true,
                                 assistant_message_id,
@@ -885,9 +936,9 @@ pub async fn chat(
                                 // Propagate the screen-read handoff signal from
                                 // the (single) tool-loop chunk to the client.
                                 screen_read_request: chunk.screen_read_request,
-                            })
-                            .unwrap_or_default(),
-                        ));
+                            },
+                            user_message_id,
+                        )));
                     }
 
                     event
@@ -910,8 +961,8 @@ pub async fn chat(
                             false,
                         );
                     }
-                    Ok(Event::default().data(
-                        serde_json::to_string(&ChatChunk {
+                    Ok(Event::default().data(serialize_chat_chunk(
+                        &ChatChunk {
                             content: format!("[stream error: {e}]"),
                             done: true,
                             assistant_message_id: None,
@@ -919,9 +970,9 @@ pub async fn chat(
                             automation_actions: None,
                             permission_requests: None,
                             screen_read_request: None,
-                        })
-                        .unwrap_or_default(),
-                    ))
+                        },
+                        user_message_id,
+                    )))
                 }
             }
         }
@@ -3334,6 +3385,33 @@ async fn run_tool_loop(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn final_chat_chunk_can_include_user_message_id() {
+        let user_message_id = Uuid::new_v4();
+        let json = serialize_chat_chunk(
+            &ChatChunk {
+                content: String::new(),
+                done: true,
+                assistant_message_id: None,
+                apple_calendar_deletes: None,
+                automation_actions: None,
+                permission_requests: None,
+                screen_read_request: None,
+            },
+            Some(user_message_id),
+        );
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["user_message_id"], user_message_id.to_string());
+        assert_eq!(value["done"], true);
+    }
+
+    #[test]
+    fn conversation_title_is_compact_and_unicode_safe() {
+        let title = compact_conversation_title("  第一行\n\n第二行   第三行  ");
+        assert_eq!(title, "第一行 第二行 第三行");
+        assert!(compact_conversation_title(&"灵".repeat(80)).chars().count() <= 60);
+    }
 
     #[test]
     fn chat_tools_includes_calendar_and_automation_tools() {

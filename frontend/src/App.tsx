@@ -18,7 +18,7 @@ import {
 } from './components/avatar/avatarControls';
 import { ensureLocalSession, apiFetch } from './lib/api';
 import { isTauri, MAIN_NAVIGATE_EVENT } from './lib/tauri';
-import { installChatSessionSync } from './stores/chatStore';
+import { installChatSessionSync, useChatStore } from './stores/chatStore';
 import { useProjectStore } from './stores/projectStore';
 import {
   collectDueCalendarReminders,
@@ -268,6 +268,11 @@ export default function App() {
     };
   }, [scanCalendarReminders, sessionState]);
 
+  const openRecentConversation = useCallback(async (conversationId: string) => {
+    const loaded = await useChatStore.getState().loadSession(conversationId);
+    if (loaded) setActiveSection('chat');
+  }, []);
+
   // Deep-link from the pet window: when the user expands a reply (or opens the
   // console), jump straight to the requested section (e.g. 'chat') instead of
   // landing on whatever tab the main window last showed.
@@ -460,11 +465,17 @@ export default function App() {
           ) : (
             <div className="conversation-list">
               {recentConversations.map((item) => (
-                <div key={item.id} className="conversation-row">
+                <button
+                  key={item.id}
+                  type="button"
+                  className="conversation-row"
+                  onClick={() => void openRecentConversation(item.id)}
+                  title={`打开对话：${item.title}`}
+                >
                   <span className="conversation-avatar" />
                   <span>{item.title}</span>
                   <time>{item.time}</time>
-                </div>
+                </button>
               ))}
             </div>
           )}

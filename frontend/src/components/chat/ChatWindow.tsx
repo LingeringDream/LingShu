@@ -2,7 +2,6 @@ import { useRef, useEffect, useCallback } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
-import { apiFetch } from '../../lib/api';
 import { getChatScrollBehavior } from './chatScroll';
 
 export function ChatWindow() {
@@ -11,20 +10,16 @@ export function ChatWindow() {
     isLoading,
     sendMessage,
     regenerateAssistantMessage,
-    sessionId,
+    editUserMessage,
+    withdrawUserMessage,
     clearMessages,
   } = useChatStore();
 
-  const handleClear = useCallback(async () => {
-    // Delete the conversation on the backend (soft-delete)
-    if (sessionId) {
-      try {
-        await apiFetch(`/api/v1/conversations/${sessionId}`, { method: 'DELETE' });
-      } catch { /* best-effort */ }
-    }
-    // Clear local messages and reset session
+  const handleClear = useCallback(() => {
+    // Keep the persisted conversation available in Recent Conversations and
+    // start a fresh local thread for the next message.
     clearMessages();
-  }, [sessionId, clearMessages]);
+  }, [clearMessages]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -66,7 +61,8 @@ export function ChatWindow() {
         {messages.length > 0 && (
           <button
             onClick={handleClear}
-            title="清空对话"
+            disabled={isLoading}
+            title="清空当前窗口并保留到最近对话"
             style={{
               background: 'transparent',
               border: '1px solid var(--border)',
@@ -74,7 +70,8 @@ export function ChatWindow() {
               padding: '2px 10px',
               fontSize: 12,
               color: 'var(--text-secondary)',
-              cursor: 'pointer',
+              cursor: isLoading ? 'not-allowed' : 'pointer',
+              opacity: isLoading ? 0.5 : 1,
             }}
           >
             清空
@@ -108,6 +105,9 @@ export function ChatWindow() {
             key={msg.id}
             message={msg}
             onStyleRegenerate={regenerateAssistantMessage}
+            onEditUserMessage={editUserMessage}
+            onWithdrawUserMessage={withdrawUserMessage}
+            actionsDisabled={isLoading}
           />
         ))}
         <div ref={messagesEndRef} />

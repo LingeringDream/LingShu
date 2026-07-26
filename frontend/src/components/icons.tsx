@@ -112,6 +112,15 @@ export function CloseIcon(props: IconProps) {
   );
 }
 
+export function UndoIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h9a7 7 0 0 1 7 7v4" />
+    </IconBase>
+  );
+}
+
 export function UnlockIcon(props: IconProps) {
   return (
     <IconBase {...props}>

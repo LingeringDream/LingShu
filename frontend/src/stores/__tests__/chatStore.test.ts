@@ -32,6 +32,7 @@ describe('chatStore', () => {
     // Reset the store state between tests
     useChatStore.setState({
       messages: [],
+      messagesRevision: 0,
       isLoading: false,
       streamingId: null,
       sessionId: null,
@@ -66,6 +67,7 @@ describe('chatStore', () => {
     const state = useChatStore.getState();
     expect(state.messages).toEqual([]);
     expect(state.sessionId).toBeNull();
+    expect(state.messagesRevision).toBeGreaterThan(0);
   });
 
   it('applies chat session snapshots from another window', () => {
@@ -231,7 +233,11 @@ describe('chatStore', () => {
           { type: 'aggregate' },
           { type: 'content', content: '最终' },
           { type: 'content', content: '答案' },
-          { type: 'done', assistant_message_id: 'assistant-db-id' },
+          {
+            type: 'done',
+            assistant_message_id: 'assistant-db-id',
+            user_message_id: 'user-db-id',
+          },
         ]);
       }
       throw new Error(`Unexpected request: ${input}`);
@@ -248,7 +254,9 @@ describe('chatStore', () => {
       }),
     );
     const assistant = useChatStore.getState().messages.find((message) => message.role === 'assistant');
+    const user = useChatStore.getState().messages.find((message) => message.role === 'user');
     expect(useChatStore.getState().messages).toHaveLength(2);
+    expect(user?.dbId).toBe('user-db-id');
     expect(assistant).toMatchObject({
       content: '最终答案',
       dbId: 'assistant-db-id',
@@ -329,7 +337,11 @@ describe('chatStore', () => {
       if (input === '/api/v1/chat' && init?.method === 'POST') {
         return sseResponse([
           { content: '这是重新搜索后的结果。', done: false },
-          { done: true, assistant_message_id: 'assistant-db-id' },
+          {
+            done: true,
+            assistant_message_id: 'assistant-db-id',
+            user_message_id: 'user-db-id',
+          },
         ]);
       }
       throw new Error(`Unexpected request: ${input}`);
@@ -351,12 +363,137 @@ describe('chatStore', () => {
     );
     const state = useChatStore.getState();
     expect(state.messages).toHaveLength(2);
-    expect(state.messages[0]).toMatchObject({ role: 'user', content: '重试' });
+    expect(state.messages[0]).toMatchObject({ role: 'user', content: '重试', dbId: 'user-db-id' });
     expect(state.messages[1]).toMatchObject({
       role: 'assistant',
       content: '这是重新搜索后的结果。',
       dbId: 'assistant-db-id',
     });
     expect(state.messages[1].enhance).toBeUndefined();
+  });
+
+  it('loads a recent conversation with persisted message ids', async () => {
+    mockedApiFetch.mockResolvedValueOnce(new Response(JSON.stringify([
+      {
+        id: 'user-db-id',
+        role: 'user',
+        content: '之前的问题',
+        model_id: null,
+        created_at: '2026-07-10T10:00:00Z',
+      },
+      {
+        id: 'assistant-db-id',
+        role: 'assistant',
+        content: '之前的回答',
+        model_id: 'deepseek-v4-pro',
+        created_at: '2026-07-10T10:00:01Z',
+      },
+    ]), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    const loaded = await useChatStore.getState().loadSession('session-123');
+
+    expect(loaded).toBe(true);
+    expect(mockedApiFetch).toHaveBeenCalledWith('/api/v1/chat/sessions/session-123/messages');
+    expect(useChatStore.getState()).toMatchObject({
+      sessionId: 'session-123',
+      isLoading: false,
+    });
+    expect(useChatStore.getState().messagesRevision).toBeGreaterThan(0);
+    expect(useChatStore.getState().messages).toEqual([
+      expect.objectContaining({ id: 'user-db-id', dbId: 'user-db-id', content: '之前的问题' }),
+      expect.objectContaining({ id: 'assistant-db-id', dbId: 'assistant-db-id', content: '之前的回答' }),
+    ]);
+  });
+
+  it('edits a persisted user message in place', async () => {
+    useChatStore.setState({
+      messages: [{
+        id: 'user-local-id',
+        dbId: 'user-db-id',
+        role: 'user',
+        content: '原消息',
+        timestamp: new Date(),
+      }],
+    });
+    mockedApiFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      id: 'user-db-id',
+      role: 'user',
+      content: '修改后的消息',
+      created_at: '2026-07-10T10:00:00Z',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await useChatStore.getState().editUserMessage('user-local-id', '  修改后的消息  ');
+
+    expect(mockedApiFetch).toHaveBeenCalledWith(
+      '/api/v1/chat/messages/user-db-id',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ content: '修改后的消息' }),
+      }),
+    );
+    expect(useChatStore.getState().messages[0]).toMatchObject({
+      content: '修改后的消息',
+      revision: 1,
+    });
+  });
+
+  it('withdraws a persisted user message without deleting the conversation', async () => {
+    useChatStore.setState({
+      messages: [
+        {
+          id: 'user-local-id',
+          dbId: 'user-db-id',
+          role: 'user',
+          content: '需要撤回',
+          timestamp: new Date(),
+        },
+        {
+          id: 'assistant-local-id',
+          dbId: 'assistant-db-id',
+          role: 'assistant',
+          content: '对应回答仍保留',
+          timestamp: new Date(),
+        },
+      ],
+      sessionId: 'session-123',
+    });
+    mockedApiFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await useChatStore.getState().withdrawUserMessage('user-local-id');
+
+    expect(mockedApiFetch).toHaveBeenCalledWith(
+      '/api/v1/chat/messages/user-db-id',
+      { method: 'DELETE' },
+    );
+    expect(useChatStore.getState().messages).toEqual([
+      expect.objectContaining({ id: 'assistant-local-id' }),
+    ]);
+    expect(useChatStore.getState().sessionId).toBe('session-123');
+    expect(useChatStore.getState().messagesRevision).toBeGreaterThan(0);
+  });
+
+  it('does not merge a withdrawn message back from an older window snapshot', () => {
+    useChatStore.setState({
+      messages: [{ id: 'a1', role: 'assistant', content: '保留回答', timestamp: new Date() }],
+      messagesRevision: 2,
+      sessionId: 'session-123',
+    });
+    const unsubscribe = installChatSessionSync();
+
+    window.dispatchEvent(new CustomEvent(CHAT_SESSION_SYNC_EVENT, {
+      detail: {
+        sourceId: 'stale-window',
+        messages: [
+          { id: 'u1', role: 'user', content: '已撤回', timestamp: new Date().toISOString() },
+          { id: 'a1', role: 'assistant', content: '保留回答', timestamp: new Date().toISOString() },
+        ],
+        messagesRevision: 1,
+        sessionId: 'session-123',
+      },
+    }));
+
+    expect(useChatStore.getState().messages).toHaveLength(1);
+    expect(useChatStore.getState().messages[0].id).toBe('a1');
+    unsubscribe();
   });
 });

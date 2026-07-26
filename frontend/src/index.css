@@ -612,12 +612,30 @@ button {
 }
 
 .conversation-row {
+  width: 100%;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: #344054;
   font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.conversation-row:hover,
+.conversation-row:focus-visible {
+  background: var(--accent-light);
+}
+
+.conversation-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .conversation-avatar {

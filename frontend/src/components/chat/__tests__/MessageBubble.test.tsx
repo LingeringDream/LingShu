@@ -54,6 +54,47 @@ describe('MessageBubble', () => {
     expect(span.style.whiteSpace).toBe('pre-wrap');
   });
 
+  it('edits a persisted user message from the bubble actions', async () => {
+    const onEditUserMessage = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MessageBubble
+        message={makeMessage({ dbId: 'user-db-id', content: '原消息' })}
+        onEditUserMessage={onEditUserMessage}
+        onWithdrawUserMessage={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('修改消息'));
+    fireEvent.change(screen.getByLabelText('修改消息内容'), {
+      target: { value: '修改后的消息' },
+    });
+    fireEvent.click(screen.getByTitle('保存修改'));
+
+    await waitFor(() => {
+      expect(onEditUserMessage).toHaveBeenCalledWith('test-1', '修改后的消息');
+    });
+  });
+
+  it('requires inline confirmation before withdrawing a user message', async () => {
+    const onWithdrawUserMessage = vi.fn().mockResolvedValue(undefined);
+    render(
+      <MessageBubble
+        message={makeMessage({ dbId: 'user-db-id' })}
+        onEditUserMessage={vi.fn().mockResolvedValue(undefined)}
+        onWithdrawUserMessage={onWithdrawUserMessage}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('撤回消息'));
+    expect(screen.getByText('确认撤回这条消息？')).toBeInTheDocument();
+    expect(onWithdrawUserMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('确认撤回'));
+    await waitFor(() => {
+      expect(onWithdrawUserMessage).toHaveBeenCalledWith('test-1');
+    });
+  });
+
   it('marks the selected style feedback chip as active', async () => {
     render(
       <MessageBubble

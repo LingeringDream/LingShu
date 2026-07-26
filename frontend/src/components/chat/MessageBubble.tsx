@@ -10,6 +10,8 @@ import {
   ScissorsIcon,
   PenIcon,
   CheckIcon,
+  CloseIcon,
+  UndoIcon,
   UnlockIcon,
   StarClusterIcon,
 } from '../icons';
@@ -53,15 +55,68 @@ export interface Message {
 interface MessageBubbleProps {
   message: Message;
   onStyleRegenerate?: (messageId: string, styleTag: FeedbackStyleTag) => void | Promise<void>;
+  onEditUserMessage?: (messageId: string, content: string) => Promise<void>;
+  onWithdrawUserMessage?: (messageId: string) => Promise<void>;
+  actionsDisabled?: boolean;
 }
 
 // ── MessageBubble ──────────────────────────────────────────────────
 
-export function MessageBubble({ message, onStyleRegenerate }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  onStyleRegenerate,
+  onEditUserMessage,
+  onWithdrawUserMessage,
+  actionsDisabled = false,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [feedbackSent, setFeedbackSent] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(message.content);
+  const [confirmingWithdraw, setConfirmingWithdraw] = useState(false);
+  const [userActionPending, setUserActionPending] = useState(false);
+  const [userActionError, setUserActionError] = useState<string | null>(null);
   const canSendFeedback = !isUser && message.dbId !== undefined;
+  const canModifyUserMessage = isUser
+    && message.dbId !== undefined
+    && onEditUserMessage !== undefined
+    && onWithdrawUserMessage !== undefined;
   const hasEnhance = !isUser && message.enhance !== undefined;
+
+  const startEditing = () => {
+    setEditValue(message.content);
+    setUserActionError(null);
+    setConfirmingWithdraw(false);
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    const content = editValue.trim();
+    if (!content || !onEditUserMessage) return;
+    setUserActionPending(true);
+    setUserActionError(null);
+    try {
+      await onEditUserMessage(message.id, content);
+      setEditing(false);
+    } catch {
+      setUserActionError('修改失败，请重试');
+    } finally {
+      setUserActionPending(false);
+    }
+  };
+
+  const confirmWithdraw = async () => {
+    if (!onWithdrawUserMessage) return;
+    setUserActionPending(true);
+    setUserActionError(null);
+    try {
+      await onWithdrawUserMessage(message.id);
+    } catch {
+      setUserActionError('撤回失败，请重试');
+      setUserActionPending(false);
+      setConfirmingWithdraw(false);
+    }
+  };
 
   const feedbackKey = (eventType: string, metadata?: Record<string, unknown>) => {
     if (eventType === 'reply_style_tag' && typeof metadata?.tag === 'string') {
@@ -112,7 +167,17 @@ export function MessageBubble({ message, onStyleRegenerate }: MessageBubbleProps
         lineHeight: '1.5',
         wordBreak: 'break-word',
       }}>
-        {isUser ? (
+        {isUser ? editing ? (
+          <textarea
+            aria-label="修改消息内容"
+            value={editValue}
+            onChange={(event) => setEditValue(event.target.value)}
+            rows={Math.min(6, Math.max(2, editValue.split('\n').length))}
+            autoFocus
+            disabled={userActionPending}
+            style={editTextareaStyle}
+          />
+        ) : (
           <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
         ) : (
           <>
@@ -120,6 +185,84 @@ export function MessageBubble({ message, onStyleRegenerate }: MessageBubbleProps
           </>
         )}
       </div>
+
+      {canModifyUserMessage && (
+        <div style={userActionRowStyle}>
+          {editing ? (
+            <>
+              <button
+                type="button"
+                aria-label="取消修改"
+                title="取消修改"
+                onClick={() => setEditing(false)}
+                disabled={userActionPending}
+                style={messageIconButtonStyle}
+              >
+                <CloseIcon size={14} />
+              </button>
+              <button
+                type="button"
+                aria-label="保存修改"
+                title="保存修改"
+                onClick={() => void saveEdit()}
+                disabled={userActionPending || !editValue.trim()}
+                style={messageIconButtonStyle}
+              >
+                <CheckIcon size={14} />
+              </button>
+            </>
+          ) : confirmingWithdraw ? (
+            <>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>确认撤回这条消息？</span>
+              <button
+                type="button"
+                onClick={() => setConfirmingWithdraw(false)}
+                disabled={userActionPending}
+                style={messageTextButtonStyle}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmWithdraw()}
+                disabled={userActionPending}
+                style={{ ...messageTextButtonStyle, color: 'var(--danger)' }}
+              >
+                确认撤回
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                aria-label="修改消息"
+                title="修改消息"
+                onClick={startEditing}
+                disabled={actionsDisabled}
+                style={messageIconButtonStyle}
+              >
+                <PenIcon size={14} />
+              </button>
+              <button
+                type="button"
+                aria-label="撤回消息"
+                title="撤回消息"
+                onClick={() => {
+                  setUserActionError(null);
+                  setConfirmingWithdraw(true);
+                }}
+                disabled={actionsDisabled}
+                style={messageIconButtonStyle}
+              >
+                <UndoIcon size={14} />
+              </button>
+            </>
+          )}
+          {userActionError && (
+            <span role="alert" style={{ fontSize: 12, color: 'var(--danger)' }}>{userActionError}</span>
+          )}
+        </div>
+      )}
 
       {hasEnhance && message.enhance && (
         <EnhanceMeta enhance={message.enhance} />
@@ -245,6 +388,50 @@ const enhanceMetaTitleStyle: React.CSSProperties = {
 const enhanceMetaTextStyle: React.CSSProperties = {
   minWidth: 0,
   overflowWrap: 'anywhere',
+};
+
+const editTextareaStyle: React.CSSProperties = {
+  display: 'block',
+  width: 'min(440px, 58vw)',
+  minWidth: 180,
+  maxWidth: '100%',
+  padding: 0,
+  border: 0,
+  outline: 0,
+  resize: 'vertical',
+  background: 'transparent',
+  color: '#fff',
+  font: 'inherit',
+  lineHeight: 1.5,
+};
+
+const userActionRowStyle: React.CSSProperties = {
+  minHeight: 26,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'flex-end',
+  gap: 6,
+};
+
+const messageIconButtonStyle: React.CSSProperties = {
+  width: 26,
+  height: 26,
+  display: 'grid',
+  placeItems: 'center',
+  border: '1px solid var(--border)',
+  borderRadius: '50%',
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  cursor: 'pointer',
+};
+
+const messageTextButtonStyle: React.CSSProperties = {
+  border: 0,
+  padding: '3px 5px',
+  background: 'transparent',
+  color: 'var(--text-secondary)',
+  fontSize: 12,
+  cursor: 'pointer',
 };
 
 // ── Permission Grant Button ──────────────────────────────────────────
