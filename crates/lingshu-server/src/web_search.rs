@@ -253,7 +253,10 @@ fn fuse(
         .map(str::to_string)
         .collect();
 
-    (providers, merged.into_iter().map(|item| item.result).collect())
+    (
+        providers,
+        merged.into_iter().map(|item| item.result).collect(),
+    )
 }
 
 fn relevance_ratio(terms: &[String], result: &SearchResult) -> f64 {
@@ -910,7 +913,11 @@ mod tests {
             ),
         ];
         let (providers, results) = fuse("", &ranked, 5);
-        assert_eq!(results.len(), 2, "the duplicate must be merged, not listed twice");
+        assert_eq!(
+            results.len(),
+            2,
+            "the duplicate must be merged, not listed twice"
+        );
         assert_eq!(results[0].url, "https://example.com/shared");
         assert_eq!(providers, vec!["brave", "ddg_lite"]);
     }
@@ -1015,11 +1022,17 @@ mod tests {
                     let throttled =
                         message.contains("限流或要求人机验证") || message.contains("验证页面");
                     eprintln!("{name}: unavailable ({error})");
-                    assert!(throttled, "{name} failed for a non-transient reason: {error}");
+                    assert!(
+                        throttled,
+                        "{name} failed for a non-transient reason: {error}"
+                    );
                 }
             }
         }
-        assert!(healthy > 0, "every provider was throttled; nothing verified");
+        assert!(
+            healthy > 0,
+            "every provider was throttled; nothing verified"
+        );
     }
 
     #[tokio::test]
