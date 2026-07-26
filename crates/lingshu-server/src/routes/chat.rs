@@ -17,7 +17,8 @@ use uuid::Uuid;
 use crate::auth;
 use crate::error::AppError;
 use crate::llm::client::{
-    AutomationAction, ChatChunk, ChatMessage, ChatOptions, PermissionRequest,
+    AutomationAction, ChatChunk, ChatMessage, ChatOptions, PermissionRequest, ToolCall,
+    ToolCallFunction,
 };
 use crate::llm::forgetting::{self, ForgettingPolicy};
 use crate::llm::prompts::{personality_prompt, PersonalityValues};
@@ -2518,6 +2519,197 @@ fn contains_any(text: &str, keywords: &[&str]) -> bool {
 /// Multi-step operations (list → delete) need at least 3 iterations.
 const MAX_TOOL_LOOPS: usize = 5;
 
+/// DeepSeek-family models occasionally serialise a tool call into `content`
+/// using their DSML envelope instead of returning the OpenAI-compatible
+/// `message.tool_calls` array. Keep the fallback deliberately narrow:
+///
+/// - the complete response must be one DSML tool-calls envelope;
+/// - every tool must be present in the definitions sent for this iteration;
+/// - only simple, quoted attributes and parameter elements are accepted.
+///
+/// Parsed calls still flow through `execute_tool_call`, so the existing
+/// permission, path, audit, and destructive-action checks remain authoritative.
+const DSML_NAMESPACE: &str = "｜DSML｜";
+const DSML_MAX_CONTENT_BYTES: usize = 64 * 1024;
+const DSML_MAX_TOOL_CALLS: usize = 16;
+const DSML_MAX_PARAMETERS: usize = 32;
+const MALFORMED_DSML_MESSAGE: &str =
+    "模型返回的工具调用格式异常，本次未执行任何操作。请重试，或切换到工具调用更稳定的模型。";
+
+fn normalise_dsml_content(content: &str) -> String {
+    let trimmed = content.trim();
+    let decoded = if trimmed.starts_with("&lt;") {
+        // Some OpenAI-compatible gateways HTML-escape the model's DSML
+        // envelope. Decode only the small entity set required by the markup.
+        trimmed
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&amp;", "&")
+    } else {
+        trimmed.to_string()
+    };
+
+    // Accept both DeepSeek's full-width separator and the ASCII spelling used
+    // by a few compatibility gateways.
+    decoded.replace("|DSML|", DSML_NAMESPACE)
+}
+
+fn looks_like_dsml_tool_calls(content: &str) -> bool {
+    let normalised = normalise_dsml_content(content);
+    normalised.starts_with("<｜DSML｜tool_calls")
+}
+
+fn parse_dsml_attributes(input: &str) -> Option<std::collections::BTreeMap<String, String>> {
+    let mut remaining = input.trim();
+    let mut attributes = std::collections::BTreeMap::new();
+
+    while !remaining.is_empty() {
+        let equals = remaining.find('=')?;
+        let key = remaining[..equals].trim();
+        if key.is_empty()
+            || !key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return None;
+        }
+
+        remaining = remaining[equals + 1..].trim_start();
+        let quoted = remaining.strip_prefix('"')?;
+        let quote_end = quoted.find('"')?;
+        let value = &quoted[..quote_end];
+        if attributes
+            .insert(key.to_string(), value.to_string())
+            .is_some()
+        {
+            return None;
+        }
+        remaining = quoted[quote_end + 1..].trim_start();
+    }
+
+    Some(attributes)
+}
+
+fn take_dsml_open_tag<'a>(
+    input: &'a str,
+    kind: &str,
+) -> Option<(std::collections::BTreeMap<String, String>, &'a str)> {
+    let prefix = format!("<{DSML_NAMESPACE}{kind}");
+    let after_prefix = input.strip_prefix(&prefix)?;
+    if !after_prefix.starts_with('>')
+        && !after_prefix.chars().next().is_some_and(char::is_whitespace)
+    {
+        return None;
+    }
+
+    let tag_end = after_prefix.find('>')?;
+    let attributes = parse_dsml_attributes(&after_prefix[..tag_end])?;
+    Some((attributes, &after_prefix[tag_end + 1..]))
+}
+
+fn valid_dsml_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn parse_dsml_tool_calls(content: &str, allowed_tools: &[String]) -> Option<Vec<ToolCall>> {
+    if content.len() > DSML_MAX_CONTENT_BYTES {
+        return None;
+    }
+
+    let normalised = normalise_dsml_content(content);
+    let body = normalised
+        .strip_prefix("<｜DSML｜tool_calls>")?
+        .strip_suffix("</｜DSML｜tool_calls>")?
+        .trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let invoke_close = "</｜DSML｜invoke>";
+    let parameter_close = "</｜DSML｜parameter>";
+    let mut remaining = body;
+    let mut calls = Vec::new();
+
+    while !remaining.trim_start().is_empty() {
+        if calls.len() >= DSML_MAX_TOOL_CALLS {
+            return None;
+        }
+        remaining = remaining.trim_start();
+
+        let (invoke_attributes, after_invoke_open) = take_dsml_open_tag(remaining, "invoke")?;
+        if invoke_attributes.len() != 1 {
+            return None;
+        }
+        let tool_name = invoke_attributes.get("name")?;
+        if !valid_dsml_identifier(tool_name)
+            || !allowed_tools.iter().any(|allowed| allowed == tool_name)
+        {
+            return None;
+        }
+
+        let invoke_end = after_invoke_open.find(invoke_close)?;
+        let mut parameter_body = &after_invoke_open[..invoke_end];
+        let mut arguments = serde_json::Map::new();
+
+        while !parameter_body.trim_start().is_empty() {
+            if arguments.len() >= DSML_MAX_PARAMETERS {
+                return None;
+            }
+            parameter_body = parameter_body.trim_start();
+
+            let (parameter_attributes, after_parameter_open) =
+                take_dsml_open_tag(parameter_body, "parameter")?;
+            if !parameter_attributes.contains_key("name")
+                || parameter_attributes
+                    .keys()
+                    .any(|key| key != "name" && key != "string")
+            {
+                return None;
+            }
+            if let Some(string_attr) = parameter_attributes.get("string") {
+                if string_attr != "true" && string_attr != "false" {
+                    return None;
+                }
+            }
+
+            let parameter_name = parameter_attributes.get("name")?;
+            if !valid_dsml_identifier(parameter_name) {
+                return None;
+            }
+            let parameter_end = after_parameter_open.find(parameter_close)?;
+            let raw_value = after_parameter_open[..parameter_end].trim();
+            let value = if parameter_attributes.get("string").map(String::as_str) == Some("true") {
+                serde_json::Value::String(raw_value.to_string())
+            } else {
+                serde_json::from_str(raw_value)
+                    .unwrap_or_else(|_| serde_json::Value::String(raw_value.to_string()))
+            };
+            if arguments.insert(parameter_name.clone(), value).is_some() {
+                return None;
+            }
+
+            parameter_body = &after_parameter_open[parameter_end + parameter_close.len()..];
+        }
+
+        calls.push(ToolCall {
+            id: String::new(),
+            tool_type: "function".to_string(),
+            function: ToolCallFunction {
+                name: tool_name.clone(),
+                arguments: serde_json::Value::Object(arguments),
+            },
+        });
+        remaining = &after_invoke_open[invoke_end + invoke_close.len()..];
+    }
+
+    (!calls.is_empty()).then_some(calls)
+}
+
 /// Build the tool definitions that are available to the LLM during chat.
 fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
     use crate::llm::client::ToolDefinition;
@@ -3280,7 +3472,11 @@ async fn run_tool_loop(
 
         tracing::debug!(%user_id, iterations, msg_count = messages.len(), "Calling chat_with_tools");
         let iteration_tools = tool_definitions_for_iteration(tools, web_search_used);
-        let response = match llm
+        let allowed_tool_names: Vec<String> = iteration_tools
+            .iter()
+            .map(|tool| tool.function.name.clone())
+            .collect();
+        let mut response = match llm
             .chat_with_tools(
                 model,
                 messages.clone(),
@@ -3298,6 +3494,29 @@ async fn run_tool_loop(
                 return (messages, None, effects);
             }
         };
+
+        if response.tool_calls.is_empty() && looks_like_dsml_tool_calls(&response.content) {
+            match parse_dsml_tool_calls(&response.content, &allowed_tool_names) {
+                Some(tool_calls) => {
+                    tracing::warn!(
+                        %user_id,
+                        iterations,
+                        tool_calls = tool_calls.len(),
+                        "Recovered model tool calls from DSML content fallback"
+                    );
+                    response.content.clear();
+                    response.tool_calls = tool_calls;
+                }
+                None => {
+                    tracing::warn!(
+                        %user_id,
+                        iterations,
+                        "Rejected malformed or unapproved DSML tool call content"
+                    );
+                    return (messages, Some(MALFORMED_DSML_MESSAGE.to_string()), effects);
+                }
+            }
+        }
 
         if response.tool_calls.is_empty() {
             // No more tool calls — model produced a text response.
@@ -3531,6 +3750,91 @@ mod tests {
         };
         assert_eq!(tool_arg(&tc, "name"), "Calculator");
         assert_eq!(tool_arg(&tc, "missing"), "");
+    }
+
+    #[test]
+    fn dsml_fallback_parses_deepseek_read_file_call() {
+        let content = r#"<｜DSML｜tool_calls>
+<｜DSML｜invoke name="read_file">
+<｜DSML｜parameter name="path" string="true">/Users/ymqz/Documents/Obsidian Vault/Projects/Learn-to-Steer/04 决策记录与待办.md</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>"#;
+        let allowed = vec!["read_file".to_string()];
+
+        let calls = parse_dsml_tool_calls(content, &allowed).expect("valid DSML tool call");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "read_file");
+        assert_eq!(
+            calls[0].function.arguments["path"],
+            "/Users/ymqz/Documents/Obsidian Vault/Projects/Learn-to-Steer/04 决策记录与待办.md"
+        );
+        assert!(calls[0].id.is_empty(), "tool loop assigns a stable id");
+    }
+
+    #[test]
+    fn dsml_fallback_accepts_ascii_and_html_escaped_envelopes() {
+        let content = r#"&lt;|DSML|tool_calls&gt;
+&lt;|DSML|invoke name=&quot;get_current_time&quot;&gt;
+&lt;/|DSML|invoke&gt;
+&lt;/|DSML|tool_calls&gt;"#;
+        let allowed = vec!["get_current_time".to_string()];
+
+        let calls = parse_dsml_tool_calls(content, &allowed).expect("escaped DSML tool call");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "get_current_time");
+        assert_eq!(calls[0].function.arguments, serde_json::json!({}));
+    }
+
+    #[test]
+    fn dsml_fallback_parses_multiple_calls_and_json_values() {
+        let content = r#"<｜DSML｜tool_calls>
+<｜DSML｜invoke name="web_search">
+  <｜DSML｜parameter name="query" string="true">Rust axum SSE</｜DSML｜parameter>
+</｜DSML｜invoke>
+<｜DSML｜invoke name="list_calendar_events">
+  <｜DSML｜parameter name="limit" string="false">5</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>"#;
+        let allowed = vec!["web_search".to_string(), "list_calendar_events".to_string()];
+
+        let calls = parse_dsml_tool_calls(content, &allowed).expect("multiple DSML calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].function.arguments["query"], "Rust axum SSE");
+        assert_eq!(calls[1].function.arguments["limit"], 5);
+    }
+
+    #[test]
+    fn dsml_fallback_rejects_mixed_text_unknown_tools_and_duplicate_parameters() {
+        let allowed = vec!["read_file".to_string()];
+        let mixed = r#"我先读取文件。
+<｜DSML｜tool_calls><｜DSML｜invoke name="read_file"></｜DSML｜invoke></｜DSML｜tool_calls>"#;
+        assert!(parse_dsml_tool_calls(mixed, &allowed).is_none());
+        assert!(
+            !looks_like_dsml_tool_calls(mixed),
+            "ordinary text containing DSML must not be auto-executed"
+        );
+
+        let unknown = r#"<｜DSML｜tool_calls><｜DSML｜invoke name="delete_everything"></｜DSML｜invoke></｜DSML｜tool_calls>"#;
+        assert!(looks_like_dsml_tool_calls(unknown));
+        assert!(parse_dsml_tool_calls(unknown, &allowed).is_none());
+
+        let duplicate = r#"<｜DSML｜tool_calls><｜DSML｜invoke name="read_file">
+<｜DSML｜parameter name="path" string="true">/Users/a.md</｜DSML｜parameter>
+<｜DSML｜parameter name="path" string="true">/Users/b.md</｜DSML｜parameter>
+</｜DSML｜invoke></｜DSML｜tool_calls>"#;
+        assert!(parse_dsml_tool_calls(duplicate, &allowed).is_none());
+    }
+
+    #[test]
+    fn dsml_fallback_rejects_tool_not_offered_in_this_iteration() {
+        let content = r#"<｜DSML｜tool_calls><｜DSML｜invoke name="web_search">
+<｜DSML｜parameter name="query" string="true">second search</｜DSML｜parameter>
+</｜DSML｜invoke></｜DSML｜tool_calls>"#;
+
+        assert!(
+            parse_dsml_tool_calls(content, &["get_current_time".to_string()]).is_none(),
+            "removed tools must not be revived through the fallback"
+        );
     }
 
     #[test]
