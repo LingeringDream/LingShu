@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { apiFetch } from '../../lib/api';
+import { PersonaIcon, ChevronIcon, CheckIcon } from '../icons';
 
 interface RolePromptResponse {
   role_prompt: string;
@@ -84,11 +85,12 @@ export function RolePromptSettings({ collapsed: initialCollapsed = true }: RoleP
         onClick={() => setCollapsed(!collapsed)}
       >
         <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-secondary)' }}>
-          🎭 角色扮演提示词
+          <PersonaIcon size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />角色扮演提示词
         </span>
-        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-          {collapsed ? '▶' : '▼'}
-        </span>
+        <ChevronIcon
+          size={14}
+          style={{ color: 'var(--text-secondary)', transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform 0.15s' }}
+        />
       </div>
 
       {!collapsed && (
@@ -130,7 +132,11 @@ export function RolePromptSettings({ collapsed: initialCollapsed = true }: RoleP
               transition: 'background 0.2s',
             }}
           >
-            {saving ? '保存中...' : saved ? '✓ 已保存' : '保存'}
+            {saving ? '保存中...' : saved ? (
+              <>
+                <CheckIcon size={12} style={{ verticalAlign: '-1px', marginRight: 4 }} />已保存
+              </>
+            ) : '保存'}
           </button>
         </div>
       )}

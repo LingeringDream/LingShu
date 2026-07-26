@@ -25,7 +25,7 @@ services:
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
     command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "lingshu-dev-redis", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -60,7 +60,7 @@ services:
       - cargo_cache:/usr/local/cargo/registry
     environment:
       DATABASE_URL: postgres://lingshu:lingshu@postgres:5432/lingshu
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:lingshu-dev-redis@redis:6379
       QDRANT_URL: http://qdrant:6333
       OLLAMA_URL: http://host.docker.internal:11434
       SERVER_HOST: "0.0.0.0"

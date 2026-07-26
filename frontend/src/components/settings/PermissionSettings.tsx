@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { apiFetch } from '../../lib/api';
+import { ChevronIcon } from '../icons';
 
 interface Permissions {
   l0_enabled: boolean;
+  l1_web_search: boolean;
   l1_calendar: boolean;
   l1_require_confirmation: boolean;
   l2_automation: boolean;
@@ -14,6 +16,7 @@ interface Permissions {
 
 const TIER_INFO: { key: keyof Permissions; label: string; desc: string; editable: boolean }[] = [
   { key: 'l0_enabled', label: 'L0 · 聊天与宠物', desc: '桌面宠物、对话、记忆展示', editable: false },
+  { key: 'l1_web_search', label: 'L1 · 联网搜索', desc: '将搜索词发送至公开搜索服务，并在回答中附上来源', editable: true },
   { key: 'l1_calendar', label: 'L1 · 日历', desc: '创建/修改 Apple Calendar 日程', editable: true },
   { key: 'l1_require_confirmation', label: 'L1 · 日程需确认', desc: '每个日程创建前展示确认卡片', editable: true },
   { key: 'l2_automation', label: 'L2 · 自动化', desc: '让助手打开 App / URL / 文件（白名单内）', editable: true },
@@ -93,7 +96,10 @@ export function PermissionSettings() {
         <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-secondary)' }}>
           权限分级
         </span>
-        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{expanded ? '▼' : '▶'}</span>
+        <ChevronIcon
+          size={14}
+          style={{ color: 'var(--text-secondary)', transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}
+        />
       </div>
 
       {expanded && (

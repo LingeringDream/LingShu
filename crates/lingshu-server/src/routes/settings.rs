@@ -7,6 +7,12 @@ use crate::error::AppError;
 use crate::state::AppState;
 use uuid::Uuid;
 
+use crate::crypto::TokenCipher;
+use crate::models::provider::LlmProviderRow;
+
+const PROVIDER_KEY_DECRYPTION_MESSAGE: &str =
+    "已保存的 API Key 无法用当前 ENCRYPTION_KEY 解密,请在「服务商设置」重新输入并保存。";
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -16,6 +22,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/settings/role-prompt",
             get(get_role_prompt).patch(update_role_prompt),
+        )
+        .route(
+            "/api/v1/settings/enhance",
+            get(get_enhance_settings).patch(update_enhance_settings),
         )
 }
 
@@ -70,6 +80,140 @@ impl Default for LlmSettings {
     }
 }
 
+impl LlmSettings {
+    /// Return a copy with the API key masked for safe external consumption.
+    pub fn masked(&self) -> Self {
+        let mut s = self.clone();
+        if !s.api_key.is_empty() {
+            s.api_key = mask_api_key(&s.api_key);
+        }
+        s
+    }
+
+    /// Whether this provider speaks an OpenAI-compatible HTTP API. Ollama is the
+    /// only built-in provider with a native (non-OpenAI) protocol; every other
+    /// provider — including `custom` and any unknown id — is OpenAI-compatible.
+    pub fn uses_openai_compatible_api(&self) -> bool {
+        !provider_uses_ollama_protocol(&self.provider)
+    }
+
+    /// Resolve the LLM client for this user by layering the per-user provider's
+    /// base URL + API key over the server-default client.
+    ///
+    /// Every OpenAI-compatible provider (OpenAI, DeepSeek, Qwen, SiliconFlow,
+    /// OpenRouter, custom, …) must apply these overrides — not just the built-in
+    /// `openai` provider. Otherwise switching to any other cloud provider would
+    /// silently fall back to the default Ollama backend and the model switch
+    /// would not take effect. Ollama uses the server-default client (its native
+    /// `/api/chat` path).
+    pub fn resolve_client(
+        &self,
+        default: &crate::llm::client::LlmClient,
+    ) -> crate::llm::client::LlmClient {
+        if self.uses_openai_compatible_api() && !self.api_base_url.is_empty() {
+            default.with_overrides(
+                (!self.api_key.is_empty()).then(|| self.api_key.clone()),
+                Some(self.api_base_url.clone()),
+            )
+        } else {
+            default.clone()
+        }
+    }
+}
+
+/// Whether `provider` uses Ollama's native protocol (`/api/chat`). Unknown
+/// provider ids are treated as OpenAI-compatible.
+pub(crate) fn provider_uses_ollama_protocol(provider: &str) -> bool {
+    crate::models::provider::find_built_in(provider)
+        .map(|p| p.protocol == "ollama")
+        .unwrap_or(false)
+}
+
+/// Resolve the LLM client for a request, layering the active provider's stored
+/// API key (decrypted on demand) on top of the routing decision in
+/// [`LlmSettings::resolve_client`].
+///
+/// The provider's key lives encrypted in `llm_providers`; we decrypt it per
+/// request rather than copying plaintext into `users.llm_settings`. Without
+/// this, switching to an authenticated cloud provider would route to the right
+/// base URL but send no `Authorization` header.
+pub async fn resolve_client_for_user(
+    state: &AppState,
+    user_id: Uuid,
+    settings: &LlmSettings,
+) -> Result<crate::llm::client::LlmClient, AppError> {
+    // Ollama (or any provider missing a base URL) needs no key injection.
+    if !settings.uses_openai_compatible_api() || settings.api_base_url.is_empty() {
+        return Ok(settings.resolve_client(&state.llm));
+    }
+
+    // Prefer an explicit key from settings; otherwise decrypt the active
+    // provider's stored key. `Ok(None)` lets `with_overrides` fall back to the
+    // server-default key (e.g. from env), keeping single-key setups working;
+    // a stored-but-undecryptable key returns `Err` so the caller can surface a
+    // clear message instead of silently sending an unauthenticated request.
+    let api_key = if settings.api_key.is_empty() {
+        active_provider_api_key(state, user_id).await?
+    } else {
+        Some(settings.api_key.clone())
+    };
+
+    Ok(state
+        .llm
+        .with_overrides(api_key, Some(settings.api_base_url.clone())))
+}
+
+/// Decrypt the active provider's stored API key.
+///
+/// Returns `Ok(None)` when there is no active provider or it has no stored key
+/// (the caller falls back to the server default). Returns `Err` when a key IS
+/// stored but cannot be decrypted — see [`decrypt_provider_key`].
+async fn active_provider_api_key(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<Option<String>, AppError> {
+    let Some(provider) = load_active_provider_from_db(state, user_id).await else {
+        return Ok(None);
+    };
+    decrypt_provider_key(
+        provider.api_key_encrypted.as_deref(),
+        state.token_cipher.as_deref(),
+    )
+}
+
+/// Classify a provider's stored API-key blob against the active cipher:
+/// - `Ok(None)` — nothing stored, nothing to do.
+/// - `Ok(Some(key))` — decrypted successfully.
+/// - `Err(..)` — a key is stored but unreadable: the `ENCRYPTION_KEY` in effect
+///   differs from the one it was saved under (e.g. saved in the packaged app,
+///   now running native dev), or no cipher is configured at all. Surfacing this
+///   prevents the silent "send no Authorization header → upstream 401" failure.
+fn decrypt_provider_key(
+    encrypted: Option<&[u8]>,
+    cipher: Option<&TokenCipher>,
+) -> Result<Option<String>, AppError> {
+    let Some(blob) = encrypted else {
+        return Ok(None);
+    };
+    let Some(cipher) = cipher else {
+        return Err(AppError::Validation(PROVIDER_KEY_DECRYPTION_MESSAGE.into()));
+    };
+    cipher
+        .decrypt(blob)
+        .map(Some)
+        .map_err(|_| AppError::Validation(PROVIDER_KEY_DECRYPTION_MESSAGE.into()))
+}
+
+/// Mask an API key: show first 4 and last 4 characters, replace middle with `***`.
+fn mask_api_key(key: &str) -> String {
+    if key.len() <= 8 {
+        return "***".to_string();
+    }
+    let prefix = &key[..4];
+    let suffix = &key[key.len() - 4..];
+    format!("{prefix}***{suffix}")
+}
+
 pub async fn llm_settings_for_user(state: &AppState, user_id: Uuid) -> LlmSettings {
     // 1. In-memory (fast path)
     {
@@ -78,23 +222,30 @@ pub async fn llm_settings_for_user(state: &AppState, user_id: Uuid) -> LlmSettin
             return s.clone();
         }
     }
-    // 2. Redis cache
+
+    // 2. Redis cache. Older builds could leave this out of sync with the
+    // active provider row, so reconcile it once before warming in-memory cache.
     let key = crate::cache::llm_settings_cache_key(user_id);
     if let Some(cached) = crate::cache::get_json::<LlmSettings>(&state.redis, &key).await {
+        let cached = reconcile_llm_settings_with_active_provider(state, user_id, cached).await;
         let mut map = state.llm_settings.write().await;
         map.insert(user_id, cached.clone());
         return cached;
     }
+
     // 3. PostgreSQL — durable source of truth, survives restarts even with no Redis.
     if let Some(stored) = load_llm_settings_from_db(state, user_id).await {
+        let stored = reconcile_llm_settings_with_active_provider(state, user_id, stored).await;
         // Warm both caches so subsequent reads skip the DB.
         crate::cache::set_json(&state.redis, &key, &stored, None).await;
         let mut map = state.llm_settings.write().await;
         map.insert(user_id, stored.clone());
         return stored;
     }
+
     // 4. Fallback: config defaults
-    state.default_llm_settings()
+    let defaults = state.default_llm_settings();
+    reconcile_llm_settings_with_active_provider(state, user_id, defaults).await
 }
 
 /// Load persisted LLM settings from `users.llm_settings`. The column defaults to
@@ -109,6 +260,115 @@ async fn load_llm_settings_from_db(state: &AppState, user_id: Uuid) -> Option<Ll
             .ok()
             .flatten();
     raw.and_then(|v| serde_json::from_value::<LlmSettings>(v).ok())
+}
+
+async fn load_active_provider_from_db(state: &AppState, user_id: Uuid) -> Option<LlmProviderRow> {
+    sqlx::query_as::<_, LlmProviderRow>(
+        r#"SELECT id, user_id, provider_id, display_name, api_key_encrypted, api_base_url, models, is_active, created_at, updated_at
+           FROM llm_providers
+           WHERE user_id = $1 AND is_active = true AND deleted_at IS NULL
+           ORDER BY updated_at DESC
+           LIMIT 1"#,
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn reconcile_llm_settings_with_active_provider(
+    state: &AppState,
+    user_id: Uuid,
+    settings: LlmSettings,
+) -> LlmSettings {
+    let Some(active_provider) = load_active_provider_from_db(state, user_id).await else {
+        return settings;
+    };
+    if active_provider.provider_id == settings.provider {
+        return settings;
+    }
+
+    let repaired =
+        llm_settings_from_provider_row_preserving_generation(&active_provider, &settings);
+    if persist_llm_settings_for_user(state, user_id, &repaired)
+        .await
+        .is_ok()
+    {
+        repaired
+    } else {
+        settings
+    }
+}
+
+pub(crate) async fn persist_llm_settings_for_user(
+    state: &AppState,
+    user_id: Uuid,
+    settings: &LlmSettings,
+) -> Result<(), AppError> {
+    let value = serde_json::to_value(settings)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize LLM settings: {e}")))?;
+    sqlx::query("UPDATE users SET llm_settings = $1, updated_at = NOW() WHERE id = $2")
+        .bind(value)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+
+    {
+        let mut map = state.llm_settings.write().await;
+        map.insert(user_id, settings.clone());
+    }
+    crate::cache::set_json(
+        &state.redis,
+        &crate::cache::llm_settings_cache_key(user_id),
+        settings,
+        None,
+    )
+    .await;
+
+    Ok(())
+}
+
+pub(crate) fn llm_settings_from_provider_row(row: &LlmProviderRow) -> LlmSettings {
+    llm_settings_from_provider_row_with_generation(row, 0.7, 4096, 20)
+}
+
+fn llm_settings_from_provider_row_preserving_generation(
+    row: &LlmProviderRow,
+    previous: &LlmSettings,
+) -> LlmSettings {
+    llm_settings_from_provider_row_with_generation(
+        row,
+        previous.temperature,
+        previous.max_tokens,
+        previous.context_messages,
+    )
+}
+
+fn llm_settings_from_provider_row_with_generation(
+    row: &LlmProviderRow,
+    temperature: f32,
+    max_tokens: u32,
+    context_messages: u32,
+) -> LlmSettings {
+    let model = row
+        .models
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|m| m.get("id").or(m.get("name")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    LlmSettings {
+        provider: row.provider_id.clone(),
+        api_key: String::new(),
+        api_base_url: row.api_base_url.clone().unwrap_or_default(),
+        model,
+        temperature,
+        max_tokens,
+        context_messages,
+    }
 }
 
 /// Partial update — all fields optional. Only provided fields are applied.
@@ -135,7 +395,8 @@ async fn get_llm_settings(
     auth: Option<AuthUser>,
 ) -> Result<Json<LlmSettings>, AppError> {
     let user_id = auth::require_user(auth).await?;
-    Ok(Json(llm_settings_for_user(&state, user_id).await))
+    let settings = llm_settings_for_user(&state, user_id).await;
+    Ok(Json(settings.masked()))
 }
 
 #[utoipa::path(
@@ -158,10 +419,8 @@ async fn update_llm_settings(
 
     if let Some(provider) = patch.provider {
         let p = provider.trim().to_lowercase();
-        if p != "ollama" && p != "openai" {
-            return Err(AppError::Validation(
-                "provider must be 'ollama' or 'openai'".into(),
-            ));
+        if p.is_empty() {
+            return Err(AppError::Validation("provider must not be empty".into()));
         }
         settings.provider = p;
     }
@@ -203,25 +462,7 @@ async fn update_llm_settings(
     let result = settings.clone();
     drop(all_settings);
 
-    // Durable persistence — survives restarts even when Redis is unavailable.
-    // This is the whole point: without it, settings live only in memory/Redis
-    // and every backend restart forces the user to re-enter their model config.
-    let value = serde_json::to_value(&result)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize LLM settings: {e}")))?;
-    sqlx::query("UPDATE users SET llm_settings = $1, updated_at = NOW() WHERE id = $2")
-        .bind(value)
-        .bind(user_id)
-        .execute(&state.db)
-        .await?;
-
-    // Write-through to Redis (no TTL — config persists until explicitly changed)
-    crate::cache::set_json(
-        &state.redis,
-        &crate::cache::llm_settings_cache_key(user_id),
-        &result,
-        None,
-    )
-    .await;
+    persist_llm_settings_for_user(&state, user_id, &result).await?;
 
     Ok(Json(result))
 }
@@ -311,11 +552,253 @@ async fn update_role_prompt(
     }))
 }
 
+// ── Multi-Model Enhancement (MoA) Settings ──────────────────────────
+
+/// One participant in multi-model enhancement: a provider + the model to use.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EnhanceMemberConfig {
+    /// Provider id (matches `llm_providers.provider_id`), e.g. "deepseek".
+    pub provider_id: String,
+    /// Model name to call on that provider, e.g. "deepseek-chat".
+    pub model: String,
+}
+
+/// Per-user multi-model enhancement configuration, persisted in
+/// `users.enhance_settings`. When enhancement is requested for a turn, the turn
+/// is answered by all `members` in parallel and their drafts synthesised by
+/// `aggregator` into one final reply.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EnhanceSettings {
+    /// Whether enhancement is on by default for new chat turns.
+    #[serde(default)]
+    pub enabled_default: bool,
+    /// Models that each independently draft an answer.
+    #[serde(default)]
+    pub members: Vec<EnhanceMemberConfig>,
+    /// The model that synthesises the drafts into the final reply. Absent =
+    /// enhancement cannot run (caller falls back to a normal single-model turn).
+    #[serde(default)]
+    pub aggregator: Option<EnhanceMemberConfig>,
+    /// Per-member draft timeout in milliseconds. A member exceeding this is
+    /// dropped; the turn proceeds as long as at least one draft succeeds.
+    #[serde(default = "default_per_model_timeout_ms")]
+    pub per_model_timeout_ms: u64,
+    /// Maximum number of member drafts to run concurrently.
+    #[serde(default = "default_max_parallel")]
+    pub max_parallel: u32,
+}
+
+fn default_per_model_timeout_ms() -> u64 {
+    30_000
+}
+
+fn default_max_parallel() -> u32 {
+    4
+}
+
+impl Default for EnhanceSettings {
+    fn default() -> Self {
+        Self {
+            enabled_default: false,
+            members: Vec::new(),
+            aggregator: None,
+            per_model_timeout_ms: default_per_model_timeout_ms(),
+            max_parallel: default_max_parallel(),
+        }
+    }
+}
+
+impl EnhanceSettings {
+    /// Whether enhancement can actually run: needs ≥1 member and an aggregator.
+    pub fn is_runnable(&self) -> bool {
+        !self.members.is_empty() && self.aggregator.is_some()
+    }
+}
+
+/// Load per-user enhancement settings from `users.enhance_settings`. An absent
+/// or undeserializable value yields `EnhanceSettings::default()` (disabled).
+pub async fn enhance_settings_for_user(state: &AppState, user_id: Uuid) -> EnhanceSettings {
+    let raw: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT enhance_settings FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    raw.and_then(|v| serde_json::from_value::<EnhanceSettings>(v).ok())
+        .unwrap_or_default()
+}
+
+async fn persist_enhance_settings_for_user(
+    state: &AppState,
+    user_id: Uuid,
+    settings: &EnhanceSettings,
+) -> Result<(), AppError> {
+    let value = serde_json::to_value(settings)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize enhance settings: {e}")))?;
+    sqlx::query("UPDATE users SET enhance_settings = $1, updated_at = NOW() WHERE id = $2")
+        .bind(value)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+    Ok(())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/settings/enhance",
+    responses((status = 200, body = EnhanceSettings), (status = 401))
+)]
+async fn get_enhance_settings(
+    State(state): State<AppState>,
+    auth: Option<AuthUser>,
+) -> Result<Json<EnhanceSettings>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    Ok(Json(enhance_settings_for_user(&state, user_id).await))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/settings/enhance",
+    request_body = EnhanceSettings,
+    responses((status = 200, body = EnhanceSettings), (status = 401))
+)]
+async fn update_enhance_settings(
+    State(state): State<AppState>,
+    auth: Option<AuthUser>,
+    Json(settings): Json<EnhanceSettings>,
+) -> Result<Json<EnhanceSettings>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    persist_enhance_settings_for_user(&state, user_id, &settings).await?;
+    Ok(Json(settings))
+}
+
+// ── Enhancement client resolution ───────────────────────────────────
+
+/// A resolved member client for one enhancement participant.
+pub struct EnhanceClient {
+    /// Human-readable label for the UI, e.g. "DeepSeek · deepseek-chat".
+    pub label: String,
+    /// Provider id, echoed to the frontend so it can show a logo/badge.
+    pub provider_id: String,
+    /// The client configured for this member's provider (base URL + key).
+    pub client: crate::llm::client::LlmClient,
+    /// The model name to call on that client.
+    pub model: String,
+}
+
+/// Load one saved provider row by its `provider_id` for this user.
+async fn load_provider_by_id(
+    state: &AppState,
+    user_id: Uuid,
+    provider_id: &str,
+) -> Option<LlmProviderRow> {
+    sqlx::query_as::<_, LlmProviderRow>(
+        r#"SELECT id, user_id, provider_id, display_name, api_key_encrypted, api_base_url, models, is_active, created_at, updated_at
+           FROM llm_providers
+           WHERE user_id = $1 AND provider_id = $2 AND deleted_at IS NULL
+           ORDER BY updated_at DESC
+           LIMIT 1"#,
+    )
+    .bind(user_id)
+    .bind(provider_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Resolve an `LlmClient` for each enhancement member, layering the member
+/// provider's base URL + (decrypted) API key over the server-default client.
+/// Mirrors `resolve_client_for_user` but per-member, and never fails: a member
+/// whose provider can't be resolved falls back to the default client so one bad
+/// member can't abort the whole turn.
+pub async fn resolve_clients_for_enhance(
+    state: &AppState,
+    user_id: Uuid,
+    members: &[EnhanceMemberConfig],
+) -> Vec<EnhanceClient> {
+    let mut out = Vec::with_capacity(members.len());
+    for m in members {
+        let row = load_provider_by_id(state, user_id, &m.provider_id).await;
+        let (base_url, api_key, display) = match &row {
+            Some(r) => {
+                let key = decrypt_provider_key(
+                    r.api_key_encrypted.as_deref(),
+                    state.token_cipher.as_deref(),
+                )
+                .ok()
+                .flatten();
+                (r.api_base_url.clone(), key, r.display_name.clone())
+            }
+            None => (None, None, m.provider_id.clone()),
+        };
+        let use_default = provider_uses_ollama_protocol(&m.provider_id)
+            || base_url.as_deref().unwrap_or("").is_empty();
+        let client = if use_default {
+            state.llm.clone()
+        } else {
+            state.llm.with_overrides(api_key, base_url)
+        };
+        out.push(EnhanceClient {
+            label: format!("{display} · {}", m.model),
+            provider_id: m.provider_id.clone(),
+            client,
+            model: m.model.clone(),
+        });
+    }
+    out
+}
+
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── decrypt_provider_key ──────────────────────────────────────
+
+    #[test]
+    fn decrypt_provider_key_no_blob_is_ok_none() {
+        let cipher = TokenCipher::from_key_str("k").unwrap();
+        assert!(decrypt_provider_key(None, Some(&cipher)).unwrap().is_none());
+        assert!(decrypt_provider_key(None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn decrypt_provider_key_succeeds_with_matching_cipher() {
+        let cipher = TokenCipher::from_key_str("right-key").unwrap();
+        let blob = cipher.encrypt("sk-secret").unwrap();
+        let got = decrypt_provider_key(Some(&blob), Some(&cipher)).unwrap();
+        assert_eq!(got.as_deref(), Some("sk-secret"));
+    }
+
+    #[test]
+    fn decrypt_provider_key_wrong_cipher_is_validation_err() {
+        // Regression: a key saved under one ENCRYPTION_KEY then read under another
+        // must surface a clear error, not be swallowed into a keyless request.
+        let saver = TokenCipher::from_key_str("key-saved-under").unwrap();
+        let blob = saver.encrypt("sk-secret").unwrap();
+        let other = TokenCipher::from_key_str("different-key").unwrap();
+        match decrypt_provider_key(Some(&blob), Some(&other)) {
+            Err(AppError::Validation(msg)) => assert!(msg.contains("ENCRYPTION_KEY")),
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decrypt_provider_key_stored_blob_without_cipher_is_err() {
+        let saver = TokenCipher::from_key_str("k").unwrap();
+        let blob = saver.encrypt("sk-secret").unwrap();
+        match decrypt_provider_key(Some(&blob), None) {
+            Err(AppError::Validation(msg)) => assert_eq!(
+                msg,
+                "已保存的 API Key 无法用当前 ENCRYPTION_KEY 解密,请在「服务商设置」重新输入并保存。"
+            ),
+            other => panic!("expected validation error, got {other:?}"),
+        }
+    }
 
     #[test]
     fn llm_settings_default_provider_is_ollama() {
@@ -377,5 +860,146 @@ mod tests {
         };
         assert_eq!(patch.provider.as_deref(), Some("openai"));
         assert!(patch.api_key.is_none());
+    }
+
+    #[test]
+    fn enhance_settings_default_is_disabled_and_not_runnable() {
+        let settings = EnhanceSettings::default();
+
+        assert!(!settings.enabled_default);
+        assert!(settings.members.is_empty());
+        assert!(settings.aggregator.is_none());
+        assert_eq!(settings.per_model_timeout_ms, 30_000);
+        assert_eq!(settings.max_parallel, 4);
+        assert!(!settings.is_runnable());
+    }
+
+    #[test]
+    fn enhance_settings_requires_member_and_aggregator_to_run() {
+        let member = EnhanceMemberConfig {
+            provider_id: "deepseek".into(),
+            model: "deepseek-chat".into(),
+        };
+        let mut settings = EnhanceSettings {
+            members: vec![member.clone()],
+            ..Default::default()
+        };
+
+        assert!(!settings.is_runnable());
+
+        settings.aggregator = Some(member);
+
+        assert!(settings.is_runnable());
+    }
+
+    #[test]
+    fn provider_repair_preserves_generation_controls() {
+        let row = LlmProviderRow {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            provider_id: "ollama".into(),
+            display_name: "Ollama（本地）".into(),
+            api_key_encrypted: None,
+            api_base_url: Some("http://localhost:11434".into()),
+            models: serde_json::json!([
+                { "id": "gemma4:12b", "name": "gemma4:12b", "display_name": "gemma4:12b" }
+            ]),
+            is_active: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let previous = LlmSettings {
+            provider: "openai".into(),
+            api_key: String::new(),
+            api_base_url: "https://api.deepseek.com".into(),
+            model: "deepseek-v4-flash".into(),
+            temperature: 1.1,
+            max_tokens: 10_000,
+            context_messages: 64,
+        };
+
+        let repaired = llm_settings_from_provider_row_preserving_generation(&row, &previous);
+
+        assert_eq!(repaired.provider, "ollama");
+        assert_eq!(repaired.api_base_url, "http://localhost:11434");
+        assert_eq!(repaired.model, "gemma4:12b");
+        assert!((repaired.temperature - 1.1).abs() < f32::EPSILON);
+        assert_eq!(repaired.max_tokens, 10_000);
+        assert_eq!(repaired.context_messages, 64);
+    }
+
+    fn default_ollama_client() -> crate::llm::client::LlmClient {
+        crate::llm::client::LlmClient::new(
+            reqwest::Client::new(),
+            "http://localhost:11434",
+            None,
+            None,
+        )
+    }
+
+    fn settings_for(provider: &str, api_base_url: &str) -> LlmSettings {
+        LlmSettings {
+            provider: provider.into(),
+            api_base_url: api_base_url.into(),
+            model: "test-model".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn only_ollama_uses_native_protocol() {
+        assert!(provider_uses_ollama_protocol("ollama"));
+        for p in [
+            "openai",
+            "deepseek",
+            "qwen",
+            "siliconflow",
+            "openrouter",
+            "moonshot",
+            "zhipu",
+            "google",
+            "custom",
+            "anthropic",
+            "some-unknown-provider",
+        ] {
+            assert!(
+                !provider_uses_ollama_protocol(p),
+                "{p} should be treated as OpenAI-compatible"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_client_applies_overrides_for_non_openai_cloud_providers() {
+        // Regression: switching to any OpenAI-compatible cloud provider other
+        // than the literal `openai` must route to its base URL, not fall back to
+        // the default Ollama client.
+        let default = default_ollama_client();
+        for provider in ["deepseek", "qwen", "siliconflow", "openrouter", "custom"] {
+            let settings = settings_for(provider, "https://api.example.com");
+            assert!(
+                settings.resolve_client(&default).is_openai(),
+                "provider {provider} must use the OpenAI-compatible path"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_client_keeps_ollama_on_native_path() {
+        let default = default_ollama_client();
+        let settings = settings_for("ollama", "http://localhost:11434");
+        assert!(
+            !settings.resolve_client(&default).is_openai(),
+            "Ollama must keep using its native /api/chat client"
+        );
+    }
+
+    #[test]
+    fn resolve_client_falls_back_without_base_url() {
+        // A non-Ollama provider with no base URL can't be overridden; it stays on
+        // the default client rather than producing a broken request.
+        let default = default_ollama_client();
+        let settings = settings_for("deepseek", "");
+        assert!(!settings.resolve_client(&default).is_openai());
     }
 }

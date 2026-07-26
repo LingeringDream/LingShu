@@ -10,6 +10,7 @@
 
 import { isTauri, invokeTauri } from './tauri';
 import { apiFetch } from './api';
+import type { CalendarRecurrenceRule } from './calendarPresentation';
 
 /** Authorization status returned by EventKit. */
 export type CalendarAccessStatus =
@@ -35,6 +36,7 @@ export interface AppleEventInput {
   location?: string;
   notes?: string;
   calendar_name?: string;
+  recurrence?: CalendarRecurrenceRule | null;
 }
 
 /**

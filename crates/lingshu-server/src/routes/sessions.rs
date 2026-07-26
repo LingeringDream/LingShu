@@ -1,4 +1,8 @@
-use axum::{extract::Path, routing::get, Json, Router};
+use axum::{
+    extract::Path,
+    routing::{get, patch},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -14,6 +18,14 @@ pub fn router() -> Router<AppState> {
             "/api/v1/chat/sessions/:id",
             get(get_session).delete(delete_session),
         )
+        .route(
+            "/api/v1/chat/sessions/:id/messages",
+            get(list_session_messages),
+        )
+        .route(
+            "/api/v1/chat/messages/:id",
+            patch(update_user_message).delete(withdraw_user_message),
+        )
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
@@ -22,6 +34,20 @@ pub struct SessionResponse {
     pub title: Option<String>,
     pub message_count: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, sqlx::FromRow)]
+pub struct StoredChatMessageResponse {
+    pub id: Uuid,
+    pub role: String,
+    pub content: String,
+    pub model_id: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateUserMessageRequest {
+    pub content: String,
 }
 
 /// Invalidate the cached session list for a user. Best-effort.
@@ -108,6 +134,142 @@ pub async fn get_session(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/v1/chat/sessions/{id}/messages",
+    params(("id" = Uuid, Path, description = "Chat session id")),
+    responses(
+        (status = 200, description = "Messages in the chat session", body = Vec<StoredChatMessageResponse>),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Session not found")
+    )
+)]
+pub async fn list_session_messages(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<StoredChatMessageResponse>>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM conversations \
+         WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !exists {
+        return Err(AppError::NotFound("Session not found".to_string()));
+    }
+
+    let messages = sqlx::query_as::<_, StoredChatMessageResponse>(
+        "SELECT id, role, content, model_id, created_at \
+         FROM messages WHERE conversation_id = $1 \
+         ORDER BY created_at ASC, id ASC",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(messages))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/v1/chat/messages/{id}",
+    params(("id" = Uuid, Path, description = "User message id")),
+    request_body = UpdateUserMessageRequest,
+    responses(
+        (status = 200, description = "Updated user message", body = StoredChatMessageResponse),
+        (status = 422, description = "Message content is empty"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "User message not found")
+    )
+)]
+pub async fn update_user_message(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateUserMessageRequest>,
+) -> Result<Json<StoredChatMessageResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    let content = req.content.trim();
+    if content.is_empty() {
+        return Err(AppError::Validation(
+            "Message content cannot be empty".to_string(),
+        ));
+    }
+
+    let updated = sqlx::query_as::<_, StoredChatMessageResponse>(
+        "UPDATE messages AS m SET content = $1 \
+         FROM conversations AS c \
+         WHERE m.id = $2 \
+           AND m.role = 'user' \
+           AND c.id = m.conversation_id \
+           AND c.user_id = $3 \
+           AND c.deleted_at IS NULL \
+         RETURNING m.id, m.role, m.content, m.model_id, m.created_at",
+    )
+    .bind(content)
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("User message not found".to_string()))?;
+
+    sqlx::query(
+        "UPDATE conversations SET updated_at = NOW() \
+         WHERE id = (SELECT conversation_id FROM messages WHERE id = $1)",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?;
+    invalidate_session_cache(&state, user_id).await;
+
+    Ok(Json(updated))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/v1/chat/messages/{id}",
+    params(("id" = Uuid, Path, description = "User message id")),
+    responses(
+        (status = 204, description = "User message withdrawn"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "User message not found")
+    )
+)]
+pub async fn withdraw_user_message(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<AuthUser>,
+    Path(id): Path<Uuid>,
+) -> Result<axum::http::StatusCode, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    let conversation_id = sqlx::query_scalar::<_, Uuid>(
+        "DELETE FROM messages AS m USING conversations AS c \
+         WHERE m.id = $1 \
+           AND m.role = 'user' \
+           AND c.id = m.conversation_id \
+           AND c.user_id = $2 \
+           AND c.deleted_at IS NULL \
+         RETURNING m.conversation_id",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("User message not found".to_string()))?;
+
+    sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1")
+        .bind(conversation_id)
+        .execute(&state.db)
+        .await?;
+    invalidate_session_cache(&state, user_id).await;
+
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
     delete,
     path = "/api/v1/chat/sessions/{id}",
     responses(
@@ -175,5 +337,12 @@ mod tests {
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json["title"].is_null());
+    }
+
+    #[test]
+    fn update_user_message_request_deserialization() {
+        let req: UpdateUserMessageRequest =
+            serde_json::from_value(serde_json::json!({"content": "修正后的内容"})).unwrap();
+        assert_eq!(req.content, "修正后的内容");
     }
 }

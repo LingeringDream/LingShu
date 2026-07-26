@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMemoryStore } from '../../stores/memoryStore';
+import { ChevronIcon } from '../icons';
 
 const TYPE_LABELS: Record<string, string> = {
   preference: '偏好',
@@ -88,9 +89,10 @@ export function MemoryCenter() {
         <span style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-secondary)' }}>
           记忆中心 ({memories.length})
         </span>
-        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-          {expanded ? '▼' : '▶'}
-        </span>
+        <ChevronIcon
+          size={14}
+          style={{ color: 'var(--text-secondary)', transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}
+        />
       </div>
 
       {!expanded && null}

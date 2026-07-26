@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import { ArrowUpRightIcon } from '../icons';
 
 interface PetDialogReplyProps {
   content: string;
@@ -10,11 +11,20 @@ interface PetDialogReplyProps {
   /** Open the full reply in the main console. Shown only when the reply
    *  overflows the cramped pet dialog. Omit to hide the affordance. */
   onExpand?: () => void;
+  maxHeight?: number;
+  variant?: 'full' | 'compact';
 }
 
-export function PetDialogReply({ content, streaming = false, onExpand }: PetDialogReplyProps) {
+export function PetDialogReply({
+  content,
+  streaming = false,
+  onExpand,
+  maxHeight = 150,
+  variant = 'full',
+}: PetDialogReplyProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [overflowing, setOverflowing] = useState(false);
+  const compact = variant === 'compact';
 
   // Surface the "view full reply" affordance whenever the content overflows
   // the cramped dialog. Scroll handling: while streaming, follow the bottom
@@ -34,18 +44,28 @@ export function PetDialogReply({ content, streaming = false, onExpand }: PetDial
   }, [content, streaming]);
 
   return (
-    <div style={{ marginBottom: 7 }}>
+    <div style={{
+      marginBottom: compact ? 0 : 7,
+      display: compact ? 'flex' : 'block',
+      alignItems: compact ? 'flex-start' : undefined,
+      gap: compact ? 4 : undefined,
+      minWidth: 0,
+    }}>
       <div
         ref={scrollRef}
         role="region"
         aria-label="宠物回复"
         style={{
-          minHeight: 36,
-          maxHeight: 150,
+          flex: compact ? 1 : undefined,
+          minWidth: 0,
+          minHeight: compact ? 20 : 36,
+          maxHeight,
           overflowY: 'auto',
           overflowX: 'hidden',
           color: '#40516f',
           paddingRight: 2,
+          fontSize: compact ? 11 : undefined,
+          lineHeight: compact ? 1.3 : undefined,
         }}
       >
         <MarkdownContent content={content} compact />
@@ -53,12 +73,17 @@ export function PetDialogReply({ content, streaming = false, onExpand }: PetDial
       {overflowing && onExpand && (
         <button
           type="button"
+          aria-label="在主窗口查看完整回复"
           onClick={onExpand}
           style={{
-            display: 'block',
-            width: '100%',
-            marginTop: 4,
-            padding: '3px 0',
+            display: compact ? 'inline-flex' : 'block',
+            alignItems: compact ? 'center' : undefined,
+            justifyContent: compact ? 'center' : undefined,
+            flex: compact ? '0 0 auto' : undefined,
+            width: compact ? 32 : '100%',
+            height: compact ? 22 : undefined,
+            marginTop: compact ? 0 : 4,
+            padding: compact ? 0 : '3px 0',
             border: 0,
             borderRadius: 6,
             background: 'rgba(46,107,255,0.08)',
@@ -68,7 +93,8 @@ export function PetDialogReply({ content, streaming = false, onExpand }: PetDial
             cursor: 'pointer',
           }}
         >
-          在主窗口查看完整回复 ↗
+          {compact ? '完整' : '在主窗口查看完整回复'}{' '}
+          <ArrowUpRightIcon size={11} style={{ verticalAlign: '-1px' }} />
         </button>
       )}
     </div>

@@ -13,6 +13,8 @@ use crate::routes::permissions::PermissionSettings;
 use crate::routes::settings::LlmSettings;
 use lingshu_vector::search::QdrantClient;
 
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 /// Real-time notification sent to connected pet-window clients via WebSocket.
 /// Serialised as JSON over the wire.
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +76,9 @@ pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: AppConfig,
     pub start_time: std::time::Instant,
+    /// Shared outbound HTTP client. Search requests use the same connection
+    /// pool as LLM and vector calls, with their own short per-request timeout.
+    pub http: reqwest::Client,
     pub llm: LlmClient,
     /// Redis client — `None` when the URL is empty or the connection failed.
     pub redis: OptionalRedis,
@@ -169,11 +174,24 @@ impl AppState {
         );
         // PostgreSQL is required — abort if it is unreachable.
         let db = db?;
+        tracing::info!("Running database migrations");
+        MIGRATOR.run(&db).await?;
+
+        // Resolve the encryption key: an explicit env/config value wins; otherwise
+        // fall back to the shared key file the packaged app uses (macOS only) so
+        // every local launch mode (`cargo run`, `tauri dev`, packaged app) agrees
+        // on one key and can decrypt provider API keys saved by any other mode.
+        let effective_encryption_key = config
+            .security
+            .encryption_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .map(str::to_string)
+            .or_else(crate::crypto::load_or_create_shared_encryption_key);
 
         // Pre-derive the encryption cipher once at startup (100k-round KDF)
-        let token_cipher: Option<Arc<TokenCipher>> = match config.security.encryption_key.as_deref()
-        {
-            Some(key) if !key.is_empty() => match TokenCipher::from_key_str(key) {
+        let token_cipher: Option<Arc<TokenCipher>> = match effective_encryption_key {
+            Some(key) => match TokenCipher::from_key_str(&key) {
                 Ok(cipher) => {
                     tracing::info!("TokenCipher initialised");
                     Some(Arc::new(cipher))
@@ -183,13 +201,14 @@ impl AppState {
                     None
                 }
             },
-            _ => None,
+            None => None,
         };
 
         Ok(Self {
             db,
             config: config.clone(),
             start_time: std::time::Instant::now(),
+            http: http.clone(),
             llm: LlmClient::new(
                 http.clone(),
                 &config.llm.ollama_url,

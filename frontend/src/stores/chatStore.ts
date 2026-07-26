@@ -1,7 +1,12 @@
 /* global CustomEvent, StorageEvent */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Message } from '../components/chat/MessageBubble';
+import type {
+  EnhanceMember,
+  EnhanceState,
+  FeedbackStyleTag,
+  Message,
+} from '../components/chat/MessageBubble';
 import { apiFetch } from '../lib/api';
 import { deleteAppleCalendarEvent } from '../lib/eventkit';
 import { runAutomationAction, readScreen } from '../lib/automation';
@@ -13,23 +18,61 @@ export const CHAT_SESSION_SYNC_DEBOUNCE_MS = 80;
 
 const CHAT_SYNC_SOURCE_ID = Math.random().toString(36).slice(2);
 
+function nextMessagesRevision(current: number): number {
+  return Math.max(current + 1, Date.now());
+}
+
 interface ChatSessionSnapshot {
   sourceId?: string;
   messages: Message[];
   isLoading?: boolean;
   streamingId?: string | null;
   sessionId: string | null;
+  messagesRevision?: number;
+  enhanceEnabled?: boolean;
+  enhanceDefaultLoaded?: boolean;
+}
+
+export interface EnhanceMemberConfig {
+  provider_id: string;
+  model: string;
+}
+
+export interface EnhanceRequestOverride {
+  members?: EnhanceMemberConfig[];
+  aggregator?: EnhanceMemberConfig | null;
+  per_model_timeout_ms?: number;
+  max_parallel?: number;
 }
 
 interface ChatState {
   messages: Message[];
+  /** Increments when a whole message set is intentionally replaced (load,
+   *  withdraw, clear) so another window cannot merge removed messages back. */
+  messagesRevision: number;
   isLoading: boolean;
   streamingId: string | null;
   /** Active conversation id — created lazily on first message so the backend
    *  persists the exchange and can replay history on later turns. */
   sessionId: string | null;
-  sendMessage: (content: string) => Promise<void>;
+  enhanceEnabled: boolean;
+  enhanceDefaultLoaded: boolean;
+  setEnhanceEnabled: (enabled: boolean) => void;
+  loadEnhanceDefault: () => Promise<void>;
+  sendMessage: (content: string, enhanceOverride?: EnhanceRequestOverride) => Promise<void>;
+  regenerateAssistantMessage: (messageId: string, styleTag: FeedbackStyleTag) => Promise<void>;
+  loadSession: (sessionId: string) => Promise<boolean>;
+  editUserMessage: (messageId: string, content: string) => Promise<void>;
+  withdrawUserMessage: (messageId: string) => Promise<void>;
   clearMessages: () => void;
+}
+
+interface StoredChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  model_id?: string | null;
+  created_at: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,6 +100,35 @@ function normalizePermissionRequests(value: unknown): Message['permissionRequest
     .filter((request) => request.kind && request.target && request.reason);
 }
 
+function normalizeEnhanceMember(value: unknown): EnhanceMember | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.id !== 'string' || typeof value.label !== 'string') return null;
+  if (value.status !== 'thinking' && value.status !== 'done' && value.status !== 'failed') return null;
+  return {
+    id: value.id,
+    label: value.label,
+    provider: typeof value.provider === 'string' ? value.provider : '',
+    status: value.status,
+    draft: typeof value.draft === 'string' ? value.draft : undefined,
+    error: typeof value.error === 'string' ? value.error : undefined,
+  };
+}
+
+function normalizeEnhanceState(value: unknown): EnhanceState | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.phase !== 'drafting' && value.phase !== 'aggregating' && value.phase !== 'done') {
+    return undefined;
+  }
+  const members = Array.isArray(value.members)
+    ? value.members.map(normalizeEnhanceMember).filter((member): member is EnhanceMember => member !== null)
+    : [];
+  return {
+    phase: value.phase,
+    members,
+    aggregatorLabel: typeof value.aggregatorLabel === 'string' ? value.aggregatorLabel : undefined,
+  };
+}
+
 function normalizeMessage(value: unknown): Message | null {
   if (!isRecord(value)) return null;
   if (value.role !== 'user' && value.role !== 'assistant') return null;
@@ -69,9 +141,19 @@ function normalizeMessage(value: unknown): Message | null {
     timestamp: normalizeTimestamp(value.timestamp),
   };
   if (typeof value.dbId === 'string') message.dbId = value.dbId;
+  if (typeof value.revision === 'number' && Number.isFinite(value.revision)) {
+    message.revision = value.revision;
+  }
   const permissionRequests = normalizePermissionRequests(value.permissionRequests);
   if (permissionRequests && permissionRequests.length > 0) {
     message.permissionRequests = permissionRequests;
+  }
+  if (typeof value.enhancing === 'boolean') {
+    message.enhancing = value.enhancing;
+  }
+  const enhance = normalizeEnhanceState(value.enhance);
+  if (enhance) {
+    message.enhance = enhance;
   }
   return message;
 }
@@ -93,6 +175,11 @@ function normalizeChatSessionSnapshot(value: unknown): ChatSessionSnapshot | nul
     isLoading: typeof state.isLoading === 'boolean' ? state.isLoading : undefined,
     streamingId: typeof state.streamingId === 'string' ? state.streamingId : null,
     sessionId: typeof state.sessionId === 'string' ? state.sessionId : null,
+    messagesRevision: typeof state.messagesRevision === 'number' && Number.isFinite(state.messagesRevision)
+      ? state.messagesRevision
+      : 0,
+    enhanceEnabled: typeof state.enhanceEnabled === 'boolean' ? state.enhanceEnabled : undefined,
+    enhanceDefaultLoaded: typeof state.enhanceDefaultLoaded === 'boolean' ? state.enhanceDefaultLoaded : undefined,
   };
 }
 
@@ -103,11 +190,16 @@ function canMergeChatSessionSnapshot(currentSessionId: string | null, nextSessio
 function chooseMessageWithMostContent(current: Message | undefined, incoming: Message): Message {
   if (!current || current.role !== incoming.role) return incoming;
 
-  const primary = current.content.length > incoming.content.length ? current : incoming;
+  const currentRevision = current.revision ?? 0;
+  const incomingRevision = incoming.revision ?? 0;
+  const primary = currentRevision !== incomingRevision
+    ? currentRevision > incomingRevision ? current : incoming
+    : current.content.length > incoming.content.length ? current : incoming;
   const fallback = primary === current ? incoming : current;
   const merged: Message = {
     ...primary,
     dbId: primary.dbId ?? fallback.dbId,
+    revision: Math.max(primary.revision ?? 0, fallback.revision ?? 0),
   };
 
   if (primary.permissionRequests && primary.permissionRequests.length > 0) {
@@ -115,6 +207,8 @@ function chooseMessageWithMostContent(current: Message | undefined, incoming: Me
   } else if (fallback.permissionRequests && fallback.permissionRequests.length > 0) {
     merged.permissionRequests = fallback.permissionRequests;
   }
+  merged.enhancing = primary.enhancing ?? fallback.enhancing;
+  merged.enhance = primary.enhance ?? fallback.enhance;
 
   return merged;
 }
@@ -181,15 +275,92 @@ async function ensureSessionId(
   }
 }
 
+function regenerationStatus(styleTag: FeedbackStyleTag): string {
+  switch (styleTag) {
+    case 'too_long':
+      return '（正在按“更精简”重写…）';
+    case 'too_short':
+      return '（正在按“更展开”重写…）';
+    case 'too_formal':
+      return '（正在按“更口语”重写…）';
+  }
+}
+
+function shouldBypassEnhancementForToolTurn(content: string): boolean {
+  const text = content.trim().toLowerCase();
+  if (!text) return false;
+
+  return [
+    '重试',
+    '再试一次',
+    '重新来',
+    '重新搜',
+    '重新搜索',
+    'retry',
+    '搜索',
+    '搜一下',
+    '上网',
+    '联网',
+    '查一下',
+    '帮我查',
+    '最新',
+    '新闻',
+    '价格',
+    '政策',
+    '版本',
+    '日程',
+    '提醒',
+    '安排',
+    '创建',
+    '删除',
+    '取消',
+    '打开',
+    '启动',
+    '屏幕识别',
+    '屏幕阅读',
+    '读取屏幕',
+    '看屏幕',
+    'read screen',
+    'open ',
+    'search',
+  ].some((keyword) => text.includes(keyword));
+}
+
 export const useChatStore = create<ChatState>()(
   persist(
     (set, get) => ({
       messages: [],
+      messagesRevision: 0,
       isLoading: false,
       streamingId: null,
       sessionId: null,
+      enhanceEnabled: false,
+      enhanceDefaultLoaded: false,
 
-      sendMessage: async (content: string) => {
+      setEnhanceEnabled: (enabled: boolean) => set({
+        enhanceEnabled: enabled,
+        enhanceDefaultLoaded: true,
+      }),
+
+      loadEnhanceDefault: async () => {
+        if (get().enhanceDefaultLoaded) return;
+        try {
+          const resp = await apiFetch('/api/v1/settings/enhance');
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          if (get().enhanceDefaultLoaded) return;
+          set({
+            enhanceEnabled: Boolean(data.enabled_default),
+            enhanceDefaultLoaded: true,
+          });
+        } catch {
+          if (get().enhanceDefaultLoaded) return;
+          set({ enhanceDefaultLoaded: true });
+        }
+      },
+
+      sendMessage: async (content: string, enhanceOverride?: EnhanceRequestOverride) => {
+        const enhanceActive = get().enhanceEnabled && !shouldBypassEnhancementForToolTurn(content);
         const userMessage: Message = {
           id: crypto.randomUUID(),
           role: 'user',
@@ -204,6 +375,8 @@ export const useChatStore = create<ChatState>()(
           role: 'assistant',
           content: '',
           timestamp: new Date(),
+          enhancing: enhanceActive,
+          enhance: enhanceActive ? { phase: 'drafting', members: [] } : undefined,
         };
 
         set((state) => ({
@@ -222,6 +395,181 @@ export const useChatStore = create<ChatState>()(
           const baseBody: Record<string, unknown> = sessionId
             ? { message: content, session_id: sessionId }
             : { message: content };
+
+          const updateAssistantMessage = (updater: (message: Message) => Message) => {
+            set((state) => ({
+              messages: state.messages.map((message) =>
+                message.id === assistantId ? updater(message) : message,
+              ),
+            }));
+          };
+
+          const runEnhancedChatStream = async (
+            body: Record<string, unknown>,
+          ): Promise<void> => {
+            const response = await apiFetch('/api/v1/chat/enhance', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+
+            const applyEnhanceEvent = (data: unknown): boolean => {
+              if (!isRecord(data) || typeof data.type !== 'string') return false;
+
+              switch (data.type) {
+                case 'start': {
+                  const members = Array.isArray(data.members)
+                    ? data.members.filter(isRecord).map((member, index): EnhanceMember => {
+                      const id = typeof member.id === 'string' ? member.id : String(index);
+                      return {
+                        id,
+                        label: typeof member.label === 'string' ? member.label : id,
+                        provider: typeof member.provider_id === 'string'
+                          ? member.provider_id
+                          : typeof member.provider === 'string'
+                            ? member.provider
+                            : '',
+                        status: 'thinking',
+                      };
+                    })
+                    : [];
+                  const aggregatorLabel = typeof data.aggregator === 'string' ? data.aggregator : undefined;
+                  updateAssistantMessage((message) => ({
+                    ...message,
+                    enhancing: true,
+                    enhance: { phase: 'drafting', members, aggregatorLabel },
+                  }));
+                  return false;
+                }
+                case 'candidate': {
+                  const id = typeof data.id === 'string' ? data.id : '';
+                  if (!id) return false;
+                  const status: EnhanceMember['status'] =
+                    data.status === 'done' ? 'done' : data.status === 'failed' ? 'failed' : 'thinking';
+                  const draft = typeof data.draft === 'string' ? data.draft : undefined;
+                  const error = typeof data.error === 'string' ? data.error : undefined;
+                  updateAssistantMessage((message) => {
+                    const current = message.enhance ?? { phase: 'drafting', members: [] };
+                    const hasMember = current.members.some((member) => member.id === id);
+                    const members = hasMember
+                      ? current.members.map((member) =>
+                        member.id === id ? { ...member, status, draft, error } : member,
+                      )
+                      : [...current.members, { id, label: id, provider: '', status, draft, error }];
+                    return {
+                      ...message,
+                      enhancing: true,
+                      enhance: { ...current, members },
+                    };
+                  });
+                  return false;
+                }
+                case 'aggregate': {
+                  updateAssistantMessage((message) => {
+                    const current = message.enhance ?? { phase: 'drafting', members: [] };
+                    return {
+                      ...message,
+                      enhancing: true,
+                      enhance: { ...current, phase: 'aggregating' },
+                    };
+                  });
+                  return false;
+                }
+                case 'content': {
+                  if (typeof data.content !== 'string' || data.content.length === 0) return false;
+                  updateAssistantMessage((message) => ({ ...message, content: message.content + data.content }));
+                  return false;
+                }
+                case 'error': {
+                  const messageText = typeof data.message === 'string' ? data.message : '增强输出失败。';
+                  updateAssistantMessage((message) => ({
+                    ...message,
+                    content: message.content.trim()
+                      ? `${message.content}\n\n错误: ${messageText}`
+                      : `错误: ${messageText}`,
+                  }));
+                  return false;
+                }
+                case 'done': {
+                  const dbId = typeof data.assistant_message_id === 'string'
+                    ? data.assistant_message_id
+                    : undefined;
+                  const userDbId = typeof data.user_message_id === 'string'
+                    ? data.user_message_id
+                    : undefined;
+                  set((state) => ({
+                    isLoading: false,
+                    streamingId: null,
+                    messages: state.messages.map((message) => {
+                      if (message.id === userMessage.id && userDbId) {
+                        return { ...message, dbId: userDbId };
+                      }
+                      if (message.id !== assistantId) return message;
+                      const current = message.enhance ?? { phase: 'done', members: [] };
+                      return {
+                        ...message,
+                        dbId,
+                        enhancing: false,
+                        enhance: { ...current, phase: 'done' },
+                      };
+                    }),
+                  }));
+                  return true;
+                }
+                default:
+                  return false;
+              }
+            };
+
+            const reader = response.body?.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            if (reader) {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                while (true) {
+                  const newlineIdx = buffer.indexOf('\n');
+                  if (newlineIdx === -1) break;
+
+                  const line = buffer.slice(0, newlineIdx).trim();
+                  buffer = buffer.slice(newlineIdx + 1);
+
+                  if (!line.startsWith('data:')) continue;
+
+                  try {
+                    const finished = applyEnhanceEvent(JSON.parse(line.slice(5).trimStart()));
+                    if (finished) return;
+                  } catch {
+                    // Skip malformed JSON lines
+                  }
+                }
+              }
+            }
+
+            set((state) => ({
+              isLoading: false,
+              streamingId: null,
+              messages: state.messages.map((message) => {
+                if (message.id !== assistantId) return message;
+                const current = message.enhance ?? { phase: 'done', members: [] };
+                return {
+                  ...message,
+                  enhancing: false,
+                  content: message.content || '（无响应）',
+                  enhance: { ...current, phase: 'done' },
+                };
+              }),
+            }));
+          };
 
           // Run one chat request and stream its SSE response into the assistant
           // bubble. Returns 'screen_read' when the backend asked the desktop
@@ -304,6 +652,14 @@ export const useChatStore = create<ChatState>()(
                         }
                       }
                       if (data.done) {
+                        const userDbId: string | undefined = data.user_message_id;
+                        if (userDbId) {
+                          set((state) => ({
+                            messages: state.messages.map((m) =>
+                              m.id === userMessage.id ? { ...m, dbId: userDbId } : m,
+                            ),
+                          }));
+                        }
                         // Screen-read handoff: do NOT finalize — let the caller
                         // capture screen text and run a second pass.
                         if (data.screen_read_request) {
@@ -342,6 +698,11 @@ export const useChatStore = create<ChatState>()(
             }));
             return 'done';
           };
+
+          if (enhanceActive) {
+            await runEnhancedChatStream(enhanceOverride ? { ...baseBody, enhance: enhanceOverride } : baseBody);
+            return;
+          }
 
           const outcome = await runChatStream(baseBody);
           if (outcome === 'screen_read') {
@@ -435,15 +796,227 @@ export const useChatStore = create<ChatState>()(
         }
       },
 
+      regenerateAssistantMessage: async (messageId: string, styleTag: FeedbackStyleTag) => {
+        if (get().isLoading) return;
+
+        const target = get().messages.find((message) =>
+          message.id === messageId && message.role === 'assistant' && message.dbId,
+        );
+        if (!target?.dbId) return;
+
+        const targetDbId = target.dbId;
+        const previousContent = target.content;
+        const previousPermissionRequests = target.permissionRequests;
+        const nextRevision = (target.revision ?? 0) + 1;
+
+        set((state) => ({
+          isLoading: true,
+          streamingId: messageId,
+          messages: state.messages.map((message) =>
+            message.id === messageId
+              ? {
+                  ...message,
+                  content: regenerationStatus(styleTag),
+                  dbId: undefined,
+                  permissionRequests: undefined,
+                  revision: nextRevision,
+                }
+              : message,
+          ),
+        }));
+
+        try {
+          const response = await apiFetch(`/api/v1/chat/messages/${targetDbId}/regenerate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ style_tag: styleTag }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const reader = response.body?.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          let regeneratedContent = '';
+
+          if (reader) {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+
+              while (true) {
+                const newlineIdx = buffer.indexOf('\n');
+                if (newlineIdx === -1) break;
+
+                const line = buffer.slice(0, newlineIdx).trim();
+                buffer = buffer.slice(newlineIdx + 1);
+
+                if (!line.startsWith('data: ')) continue;
+
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  if (data.content) {
+                    regeneratedContent += data.content;
+                    set((state) => ({
+                      messages: state.messages.map((message) =>
+                        message.id === messageId
+                          ? { ...message, content: regeneratedContent, revision: nextRevision }
+                          : message,
+                      ),
+                    }));
+                  }
+
+                  if (data.done) {
+                    const dbId = typeof data.assistant_message_id === 'string'
+                      ? data.assistant_message_id
+                      : targetDbId;
+                    set((state) => ({
+                      isLoading: false,
+                      streamingId: null,
+                      messages: state.messages.map((message) =>
+                        message.id === messageId
+                          ? {
+                              ...message,
+                              content: regeneratedContent || message.content || '（无响应）',
+                              dbId,
+                              revision: nextRevision,
+                            }
+                          : message,
+                      ),
+                    }));
+                    return;
+                  }
+                } catch {
+                  // Skip malformed JSON lines
+                }
+              }
+            }
+          }
+
+          set((state) => ({
+            isLoading: false,
+            streamingId: null,
+            messages: state.messages.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    content: regeneratedContent || '（无响应）',
+                    dbId: targetDbId,
+                    revision: nextRevision,
+                  }
+                : message,
+            ),
+          }));
+        } catch (error) {
+          set((state) => ({
+            isLoading: false,
+            streamingId: null,
+            messages: state.messages.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    content: previousContent || `错误: ${error instanceof Error ? error.message : '未知错误'}`,
+                    dbId: targetDbId,
+                    permissionRequests: previousPermissionRequests,
+                    revision: target.revision,
+                  }
+                : message,
+            ),
+          }));
+        }
+      },
+
+      loadSession: async (sessionId: string) => {
+        if (get().isLoading) return false;
+        set({ isLoading: true, streamingId: null });
+        try {
+          const response = await apiFetch(`/api/v1/chat/sessions/${sessionId}/messages`);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const rows: StoredChatMessage[] = await response.json();
+          const messages: Message[] = rows
+            .filter((row) => row.role === 'user' || row.role === 'assistant')
+            .map((row) => ({
+              id: row.id,
+              dbId: row.id,
+              role: row.role,
+              content: row.content,
+              timestamp: normalizeTimestamp(row.created_at),
+            }));
+          set((state) => ({
+            messages,
+            messagesRevision: nextMessagesRevision(state.messagesRevision),
+            sessionId,
+            isLoading: false,
+            streamingId: null,
+          }));
+          return true;
+        } catch {
+          set({ isLoading: false, streamingId: null });
+          return false;
+        }
+      },
+
+      editUserMessage: async (messageId: string, content: string) => {
+        if (get().isLoading) return;
+        const trimmed = content.trim();
+        const target = get().messages.find((message) => message.id === messageId);
+        if (!target || target.role !== 'user' || !target.dbId || !trimmed) return;
+
+        const response = await apiFetch(`/api/v1/chat/messages/${target.dbId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: trimmed }),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        set((state) => ({
+          messages: state.messages.map((message) =>
+            message.id === messageId
+              ? { ...message, content: trimmed, revision: (message.revision ?? 0) + 1 }
+              : message,
+          ),
+        }));
+      },
+
+      withdrawUserMessage: async (messageId: string) => {
+        if (get().isLoading) return;
+        const target = get().messages.find((message) => message.id === messageId);
+        if (!target || target.role !== 'user' || !target.dbId) return;
+
+        const response = await apiFetch(`/api/v1/chat/messages/${target.dbId}`, {
+          method: 'DELETE',
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        set((state) => ({
+          messages: state.messages.filter((message) => message.id !== messageId),
+          messagesRevision: nextMessagesRevision(state.messagesRevision),
+        }));
+      },
+
       // Start a fresh conversation: drop the session so the next message creates
       // a new one rather than appending to the previous thread.
-      clearMessages: () => set({ messages: [], sessionId: null }),
+      clearMessages: () => set((state) => ({
+        messages: [],
+        messagesRevision: nextMessagesRevision(state.messagesRevision),
+        sessionId: null,
+        isLoading: false,
+        streamingId: null,
+        enhanceDefaultLoaded: false,
+      })),
     }),
     {
       name: CHAT_SESSION_STORAGE_KEY,
       partialize: (state) => ({
         messages: state.messages,
+        messagesRevision: state.messagesRevision,
         sessionId: state.sessionId,
+        enhanceEnabled: state.enhanceEnabled,
+        enhanceDefaultLoaded: state.enhanceDefaultLoaded,
       }),
     },
   ),
@@ -460,6 +1033,9 @@ function createChatSessionSnapshot(state = useChatStore.getState()): ChatSession
     isLoading: state.isLoading,
     streamingId: state.streamingId,
     sessionId: state.sessionId,
+    messagesRevision: state.messagesRevision,
+    enhanceEnabled: state.enhanceEnabled,
+    enhanceDefaultLoaded: state.enhanceDefaultLoaded,
   };
 }
 
@@ -468,23 +1044,35 @@ function applyChatSessionSnapshot(value: unknown) {
   if (!snapshot || snapshot.sourceId === CHAT_SYNC_SOURCE_ID) return;
 
   const current = useChatStore.getState();
-  const shouldMerge = snapshot.messages.length > 0
+  const snapshotRevision = snapshot.messagesRevision ?? 0;
+  const snapshotIsNewerReplacement = snapshotRevision > current.messagesRevision;
+  const snapshotIsStaleReplacement = snapshotRevision < current.messagesRevision;
+  const shouldMerge = !snapshotIsNewerReplacement
+    && !snapshotIsStaleReplacement
+    && snapshot.messages.length > 0
     && current.messages.length > 0
     && canMergeChatSessionSnapshot(current.sessionId, snapshot.sessionId);
   const wouldRegressCompletedStream = shouldMerge && snapshotWouldRegressCompletedStream(current, snapshot);
   applyingRemoteSnapshot = true;
   try {
     useChatStore.setState({
-      messages: shouldMerge
-        ? mergeChatSessionMessages(current.messages, snapshot.messages)
-        : snapshot.messages,
+      messages: snapshotIsStaleReplacement
+        ? current.messages
+        : shouldMerge
+          ? mergeChatSessionMessages(current.messages, snapshot.messages)
+          : snapshot.messages,
+      messagesRevision: Math.max(current.messagesRevision, snapshotRevision),
       isLoading: wouldRegressCompletedStream
         ? current.isLoading
         : snapshot.isLoading ?? current.isLoading,
       streamingId: wouldRegressCompletedStream
         ? current.streamingId
         : snapshot.streamingId ?? null,
-      sessionId: snapshot.sessionId ?? (snapshot.messages.length > 0 ? current.sessionId : null),
+      sessionId: snapshotIsStaleReplacement
+        ? current.sessionId
+        : snapshot.sessionId ?? (snapshot.messages.length > 0 ? current.sessionId : null),
+      enhanceEnabled: snapshot.enhanceEnabled ?? current.enhanceEnabled,
+      enhanceDefaultLoaded: snapshot.enhanceDefaultLoaded ?? current.enhanceDefaultLoaded,
     });
   } finally {
     applyingRemoteSnapshot = false;

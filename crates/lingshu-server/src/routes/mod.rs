@@ -9,6 +9,7 @@ pub mod permissions;
 pub mod personality;
 pub mod project_members;
 pub mod projects;
+pub mod providers;
 pub mod sessions;
 pub mod settings;
 pub mod signals;
@@ -22,9 +23,10 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(
+    // `version` is intentionally omitted: utoipa falls back to CARGO_PKG_VERSION
+    // (the workspace version in the root Cargo.toml), our single source of truth.
     info(
         title = "LingShu API",
-        version = "1.0.0",
         description = "灵枢 macOS 桌面 AI 个人助理 API"
     ),
     paths(
@@ -35,6 +37,8 @@ use utoipa::OpenApi;
         users::update_me,
         settings::get_llm_settings,
         settings::update_llm_settings,
+        settings::get_enhance_settings,
+        settings::update_enhance_settings,
         projects::list_projects,
         projects::create_project,
         projects::get_project,
@@ -89,10 +93,22 @@ use utoipa::OpenApi;
         integrations::delete_integration,
         audit::list_entries,
         chat::chat,
+        chat::enhance_chat,
+        chat::regenerate_message,
         signals::ingest_signal,
         sessions::list_sessions,
         sessions::get_session,
+        sessions::list_session_messages,
+        sessions::update_user_message,
+        sessions::withdraw_user_message,
         sessions::delete_session,
+        providers::list_providers,
+        providers::get_provider,
+        providers::create_provider,
+        providers::update_provider,
+        providers::delete_provider,
+        providers::activate_provider,
+        providers::test_connectivity,
     ),
     components(schemas(
         system::HealthResponse,
@@ -101,6 +117,8 @@ use utoipa::OpenApi;
         users::UpdateUserRequest,
         settings::LlmSettings,
         settings::LlmSettingsPatch,
+        settings::EnhanceSettings,
+        settings::EnhanceMemberConfig,
         settings::RolePromptPatch,
         settings::RolePromptResponse,
         projects::CreateProjectRequest,
@@ -134,8 +152,18 @@ use utoipa::OpenApi;
         integrations::CreateIntegrationRequest,
         audit::AuditEntryResponse,
         chat::ChatRequest,
+        chat::RegenerateChatMessageRequest,
+        chat::ReplyStyleTag,
         signals::SignalIngestRequest,
         sessions::SessionResponse,
+        sessions::StoredChatMessageResponse,
+        sessions::UpdateUserMessageRequest,
+        providers::ProviderResponse,
+        providers::CreateProviderRequest,
+        providers::UpdateProviderRequest,
+        providers::ConnectivityResult,
+        providers::ProviderModel,
+        providers::BuiltInProvider,
     ))
 )]
 pub struct ApiDoc;

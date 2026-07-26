@@ -11,7 +11,15 @@ import {
   type AvatarControlSettings,
 } from './avatarControls';
 import { PetDialogReply } from './PetDialogReply';
+import { TauriOriginalPet } from './TauriOriginalPet';
 import { combinePetRenderScale } from './petScale';
+import { subscribeToCalendarReminders } from '../../lib/calendarReminderEvents';
+import {
+  PET_BODY,
+  PET_REPLY_BUBBLE_RECT,
+  PET_REPLY_PANEL_RECT,
+  PET_WINDOW_SIZE,
+} from './petReplyLayout';
 
 const DRAG_THRESHOLD_PX = 2;
 
@@ -19,16 +27,25 @@ const DRAG_THRESHOLD_PX = 2;
 // 200×260). The PixiJS character is drawn centered on (BODY_CX, BODY_CY); the
 // shaped click-through hit-test uses the same circle so only the body grabs the
 // mouse and the transparent rest of the window passes clicks through.
-const BODY_CX = 100;
-const BODY_CY = 110;
-const BODY_HIT_RADIUS = 64;
+const BODY_CX = PET_BODY.cx;
+const BODY_CY = PET_BODY.cy;
+const BODY_HIT_RADIUS = PET_BODY.radius;
 // The dialog is anchored to the window bottom and grows upward, so its height
 // varies with the reply length. The click-through hit-rect is therefore
 // measured from the live form each render (dialogRectRef) rather than fixed.
-const DIALOG_LEFT = 6;
-const DIALOG_BOTTOM = 8;
-const DIALOG_WIDTH = 172;
+const DIALOG_LEFT = PET_REPLY_PANEL_RECT.left;
+const DIALOG_TOP = PET_REPLY_PANEL_RECT.top;
+const DIALOG_WIDTH = PET_REPLY_PANEL_RECT.width;
+const DIALOG_HEIGHT = PET_REPLY_PANEL_RECT.height;
 const CONTEXT_MENU_SIZE = { width: 132, height: 44 };
+
+function isPetMood(value: unknown): value is Mood {
+  return value === 'idle'
+    || value === 'thinking'
+    || value === 'speaking'
+    || value === 'happy'
+    || value === 'sleepy';
+}
 
 // ── Pet Character ──────────────────────────────────────────────────
 
@@ -323,6 +340,10 @@ export function PetWindow() {
   const [inTauri, setInTauri] = useState(false);
   const [petVisible, setPetVisible] = useState(initialControlsRef.current.visible);
   const [petScale, setPetScale] = useState(initialControlsRef.current.sizeScale);
+  const [tauriPetMood, setTauriPetMood] = useState<Mood>(() => avatarMoodToPetMood(initialControlsRef.current?.mood ?? 'idle'));
+  const [tauriPetModifiers, setTauriPetModifiers] = useState<PersonalityModifiers>(() => defaultModifiers());
+  const [tauriPetReactionKey, setTauriPetReactionKey] = useState(0);
+  const [tauriPetPressed, setTauriPetPressed] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const sendChatMessage = useChatStore((state) => state.sendMessage);
   const chatMessages = useChatStore((state) => state.messages);
@@ -370,6 +391,10 @@ export function PetWindow() {
 
   useEffect(() => { chatMessagesRef.current = chatMessages; }, [chatMessages]);
 
+  const triggerTauriPetReaction = useCallback(() => {
+    setTauriPetReactionKey((key) => key + 1);
+  }, []);
+
   useEffect(() => {
     const targetId = petAssistantIdRef.current;
     if (!targetId) return;
@@ -380,20 +405,25 @@ export function PetWindow() {
     if (content) {
       setDialogReply(content);
       setDialogOpen(true);
-      petRef.current?.setMood(chatLoading ? 'speaking' : 'idle');
+      const nextMood = chatLoading ? 'speaking' : 'idle';
+      setTauriPetMood(nextMood);
+      petRef.current?.setMood(nextMood);
     } else if (chatLoading) {
       setDialogReply('思考中...');
       setDialogOpen(true);
+      setTauriPetMood('thinking');
       petRef.current?.setMood('thinking');
     }
   }, [chatMessages, chatLoading]);
 
   const applyAvatarControls = useCallback((settings: AvatarControlSettings) => {
     const scale = settings.sizeScale;
+    const mood = avatarMoodToPetMood(settings.mood);
     setPetVisible(settings.visible);
     setPetScale(scale);
+    setTauriPetMood(mood);
     petRef.current?.setUserScale(scale);
-    petRef.current?.setMood(avatarMoodToPetMood(settings.mood));
+    petRef.current?.setMood(mood);
 
     const text = settings.bubbleText.trim();
     if (!text) return;
@@ -429,7 +459,9 @@ export function PetWindow() {
   // IIFE), and an `initialized` flag guards against the StrictMode init/destroy
   // race (app.destroy() before app.init() resolves throws in PixiJS v8).
   useEffect(() => {
-    setInTauri(isTauri());
+    const tauriRuntime = isTauri();
+    setInTauri(tauriRuntime);
+    if (tauriRuntime) return;
     if (!canvasRef.current) return;
     const app = new Application();
     appRef.current = app;
@@ -439,7 +471,7 @@ export function PetWindow() {
 
     (async () => {
       try {
-        await app.init({ width: 200, height: 260, backgroundAlpha: 0, antialias: true, resolution: 2, autoDensity: true });
+        await app.init({ width: PET_WINDOW_SIZE.width, height: PET_WINDOW_SIZE.height, backgroundAlpha: 0, antialias: true, resolution: 2, autoDensity: true });
       } catch (err) {
         console.error('[pet] PixiJS init failed:', err);
         return;
@@ -473,6 +505,18 @@ export function PetWindow() {
 
   useEffect(() => subscribeToAvatarControlSettings(applyAvatarControls), [applyAvatarControls]);
 
+  useEffect(() => subscribeToCalendarReminders((reminder) => {
+    const reply = `日程提醒：${reminder.message}`;
+    setDialogReply(reply);
+    setDialogOpen(false);
+    setBubble(reply);
+    setTauriPetMood('happy');
+    petRef.current?.setMood('happy');
+    triggerTauriPetReaction();
+    petRef.current?.bounce();
+    setTimeout(() => setBubble(null), 5000);
+  }), [triggerTauriPetReaction]);
+
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!petVisibleRef.current) return;
     const r = canvasRef.current?.getBoundingClientRect();
@@ -483,19 +527,21 @@ export function PetWindow() {
     if (contextMenu) { setContextMenu(null); return; }
     if (!petVisibleRef.current) return;
     if (draggedRef.current) { draggedRef.current = false; return; }
+    setTauriPetPressed(false);
+    triggerTauriPetReaction();
     petRef.current?.burst();
     petRef.current?.bounce();
     setDialogOpen((open) => !open);
     if (!dialogOpenRef.current) setBubble(null);
-  }, [contextMenu]);
+  }, [contextMenu, triggerTauriPetReaction]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     if (!petVisibleRef.current) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const x = Math.min(200 - CONTEXT_MENU_SIZE.width - 8, Math.max(8, e.clientX - rect.left));
-    const y = Math.min(260 - CONTEXT_MENU_SIZE.height - 8, Math.max(8, e.clientY - rect.top));
+    const x = Math.min(PET_WINDOW_SIZE.width - CONTEXT_MENU_SIZE.width - 8, Math.max(8, e.clientX - rect.left));
+    const y = Math.min(PET_WINDOW_SIZE.height - CONTEXT_MENU_SIZE.height - 8, Math.max(8, e.clientY - rect.top));
     setContextMenu({ x, y });
   }, []);
 
@@ -514,11 +560,12 @@ export function PetWindow() {
   const handleDoubleClick = useCallback(async () => {
     if (!petVisibleRef.current) return;
     if (!draggedRef.current) {
+      triggerTauriPetReaction();
       petRef.current?.bounce();
       setDialogOpen(true);
       if (inTauri) await showMainWindow();
     }
-  }, [inTauri]);
+  }, [inTauri, triggerTauriPetReaction]);
 
   const submitMiniPrompt = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -528,6 +575,7 @@ export function PetWindow() {
     setBubble(null);
     setDialogOpen(true);
     setDialogReply('思考中...');
+    setTauriPetMood('thinking');
     petRef.current?.setMood('thinking');
 
     const previousIds = new Set(chatMessagesRef.current.map((message) => message.id));
@@ -539,6 +587,7 @@ export function PetWindow() {
     petAssistantIdRef.current = assistant?.id ?? null;
     pending.catch((error) => {
       setDialogReply(`错误: ${error instanceof Error ? error.message : '未知错误'}`);
+      setTauriPetMood('idle');
       petRef.current?.setMood('idle');
     });
   }, [chatLoading, draft, sendChatMessage]);
@@ -554,6 +603,7 @@ export function PetWindow() {
     if (!rect) return;
     const inBody = Math.hypot(e.clientX - rect.left - BODY_CX, e.clientY - rect.top - BODY_CY) <= BODY_HIT_RADIUS * petScaleRef.current;
     if (!inBody) return;
+    setTauriPetPressed(true);
     petRef.current?.squish();
     if (!inTauri) return;
     const sx = e.clientX, sy = e.clientY; draggedRef.current = false;
@@ -562,7 +612,7 @@ export function PetWindow() {
       if (Math.hypot(ev.clientX - sx, ev.clientY - sy) > DRAG_THRESHOLD_PX) {
         draggedRef.current = true; cleanup();
         document.body.style.cursor = 'grabbing';
-        const done = () => { document.body.style.cursor = ''; petRef.current?.relax(); };
+        const done = () => { document.body.style.cursor = ''; setTauriPetPressed(false); petRef.current?.relax(); };
         if (petWindowRef.current) {
           petWindowRef.current.startDragging().then(done).catch(done);
         } else {
@@ -570,7 +620,7 @@ export function PetWindow() {
         }
       }
     };
-    const cleanup = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', cleanup); };
+    const cleanup = () => { setTauriPetPressed(false); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', cleanup); };
     window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', cleanup);
   }, [inTauri]);
 
@@ -582,19 +632,26 @@ export function PetWindow() {
       try {
         const m = JSON.parse(e.data);
         if (m.type === 'mood') {
-          petRef.current?.setMood(m.title as Mood);
-          if (m.data) petRef.current?.applyPersonality(m.data as PersonalityTraits);
+          const nextMood = isPetMood(m.title) ? m.title : 'idle';
+          setTauriPetMood(nextMood);
+          petRef.current?.setMood(nextMood);
+          if (m.data) {
+            const modifiers = traitsToModifiers(m.data as PersonalityTraits);
+            setTauriPetModifiers(modifiers);
+            petRef.current?.applyPersonality(m.data as PersonalityTraits);
+          }
         } else if (m.type === 'calendar' || m.type === 'thought') {
           const reply = (m.type === 'calendar' ? '日程：' : '想法：') + m.title;
           setDialogReply(reply);
           if (getReplyDisplayTarget(reply) === 'bubble') setBubble(reply); else setDialogOpen(true);
+          triggerTauriPetReaction();
           petRef.current?.bounce();
           setTimeout(() => setBubble(null), 4000);
         }
       } catch { /* */ }
     };
     return () => ws.close();
-  }, [inTauri]);
+  }, [inTauri, triggerTauriPetReaction]);
 
   // Shaped click-through: only the pet body captures the mouse; the transparent
   // rest of the window passes clicks through to whatever is behind it. We poll
@@ -663,18 +720,27 @@ export function PetWindow() {
   return (
     <div onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onClick={handleClick} onContextMenu={handleContextMenu} onDoubleClick={handleDoubleClick}
       style={{ width: '100vw', height: '100vh', position: 'relative', background: 'transparent', userSelect: 'none', WebkitUserSelect: 'none', cursor: petVisible ? 'grab' : 'default', overflow: 'hidden', opacity: petVisible ? 1 : 0, transition: 'opacity 160ms ease' }}>
-      <div ref={canvasRef} style={{ position: 'absolute', left: '50%', top: '50%', width: 200, height: 260, transform: 'translate(-50%, -50%)' }} />
-      {bubble && <div style={{ position: 'absolute', left: '50%', top: dialogOpen ? 'calc(50% - 42px)' : 'calc(50% - 6px)', transform: 'translateX(-50%)', zIndex: 2, padding: '5px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.94)', color: '#24344f', fontSize: 12, lineHeight: 1.35, maxWidth: 180, textAlign: 'center', boxShadow: '0 8px 24px rgba(21,43,92,0.18)', border: '1px solid rgba(46,107,255,0.16)', animation: 'fadeIn 0.25s ease', pointerEvents: 'none' }}>{bubble}</div>}
+      <div ref={canvasRef} style={{ position: 'absolute', left: '50%', top: '50%', width: PET_WINDOW_SIZE.width, height: PET_WINDOW_SIZE.height, transform: 'translate(-50%, -50%)' }} />
+      <TauriOriginalPet
+        visible={inTauri && petVisible}
+        sizeScale={petScale}
+        mood={tauriPetMood}
+        reactionKey={tauriPetReactionKey}
+        pressed={tauriPetPressed}
+        modifiers={tauriPetModifiers}
+      />
+      {bubble && <div style={{ position: 'absolute', left: PET_REPLY_BUBBLE_RECT.left, top: PET_REPLY_BUBBLE_RECT.top, zIndex: 2, boxSizing: 'border-box', width: PET_REPLY_BUBBLE_RECT.width, maxHeight: PET_REPLY_BUBBLE_RECT.height, overflow: 'hidden', padding: '4px 10px', borderRadius: 10, background: 'rgba(255,255,255,0.94)', color: '#24344f', fontSize: 11, lineHeight: 1.25, textAlign: 'center', boxShadow: '0 8px 20px rgba(21,43,92,0.16)', border: '1px solid rgba(46,107,255,0.16)', animation: 'petReplyFadeIn 0.2s ease', pointerEvents: 'none', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{bubble}</div>}
       {dialogOpen && (
-        <form ref={dialogFormRef} onSubmit={submitMiniPrompt} style={{ position: 'absolute', left: DIALOG_LEFT, bottom: DIALOG_BOTTOM, zIndex: 1, width: DIALOG_WIDTH, padding: 8, borderRadius: 12, background: 'rgba(255,255,255,0.95)', color: '#1f2a44', boxShadow: '0 12px 36px rgba(21,43,92,0.22)', border: '1px solid rgba(46,107,255,0.18)', backdropFilter: 'blur(12px)', animation: 'fadeIn 0.2s ease', cursor: 'default' }} onClick={(e) => e.stopPropagation()}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-            <strong style={{ fontSize: 12, fontWeight: 700 }}>灵枢</strong>
-            <button type="button" aria-label="关闭对话框" onClick={() => setDialogOpen(false)} style={{ width: 18, height: 18, border: 0, borderRadius: 9, background: 'rgba(46,107,255,0.1)', color: '#2e6bff', fontSize: 12, lineHeight: '18px', padding: 0, cursor: 'pointer' }}>×</button>
+        <form ref={dialogFormRef} onSubmit={submitMiniPrompt} style={{ position: 'absolute', left: DIALOG_LEFT, top: DIALOG_TOP, zIndex: 2, boxSizing: 'border-box', width: DIALOG_WIDTH, height: DIALOG_HEIGHT, padding: 6, borderRadius: 10, background: 'rgba(255,255,255,0.95)', color: '#1f2a44', boxShadow: '0 10px 26px rgba(21,43,92,0.18)', border: '1px solid rgba(46,107,255,0.18)', backdropFilter: 'blur(12px)', animation: 'petReplyFadeIn 0.2s ease', cursor: 'default', overflow: 'hidden' }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, marginBottom: 5, minWidth: 0 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <PetDialogReply content={dialogReply} streaming={chatLoading} onExpand={expandToMain} maxHeight={28} variant="compact" />
+            </div>
+            <button type="button" aria-label="关闭对话框" onClick={() => setDialogOpen(false)} style={{ flex: '0 0 auto', width: 18, height: 18, border: 0, borderRadius: 9, background: 'rgba(46,107,255,0.1)', color: '#2e6bff', fontSize: 12, lineHeight: '18px', padding: 0, cursor: 'pointer' }}>×</button>
           </div>
-          <PetDialogReply content={dialogReply} streaming={chatLoading} onExpand={expandToMain} />
           <div style={{ display: 'flex', gap: 5 }}>
-            <input value={draft} onChange={(e) => setDraft(e.target.value)} disabled={chatLoading} placeholder="和灵枢说一句..." style={{ flex: 1, minWidth: 0, height: 24, borderRadius: 8, border: '1px solid rgba(46,107,255,0.2)', padding: '0 7px', fontSize: 11, outline: 'none', color: '#1f2a44', opacity: chatLoading ? 0.65 : 1 }} />
-            <button type="submit" aria-label="发送" disabled={chatLoading || !draft.trim()} style={{ width: 32, height: 24, border: 0, borderRadius: 8, background: '#2e6bff', color: '#fff', fontSize: 11, fontWeight: 700, cursor: chatLoading ? 'not-allowed' : 'pointer', opacity: chatLoading || !draft.trim() ? 0.55 : 1 }}>发</button>
+            <input value={draft} onChange={(e) => setDraft(e.target.value)} disabled={chatLoading} placeholder="和灵枢说一句..." style={{ flex: 1, minWidth: 0, height: 22, borderRadius: 7, border: '1px solid rgba(46,107,255,0.2)', padding: '0 7px', fontSize: 11, outline: 'none', color: '#1f2a44', opacity: chatLoading ? 0.65 : 1 }} />
+            <button type="submit" aria-label="发送" disabled={chatLoading || !draft.trim()} style={{ width: 30, height: 22, border: 0, borderRadius: 7, background: '#2e6bff', color: '#fff', fontSize: 11, fontWeight: 700, cursor: chatLoading ? 'not-allowed' : 'pointer', opacity: chatLoading || !draft.trim() ? 0.55 : 1 }}>发</button>
           </div>
         </form>
       )}
@@ -689,7 +755,7 @@ export function PetWindow() {
         </div>
       )}
       {!inTauri && !dialogOpen && <div style={{ position: 'absolute', left: '50%', top: 'calc(50% + 112px)', transform: 'translateX(-50%)', padding: '2px 8px', borderRadius: 8, background: 'rgba(0,0,0,0.5)', color: '#fffa', fontSize: 10 }}>Tauri 未连接</div>}
-      <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(4px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }`}</style>
+      <style>{`@keyframes petReplyFadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }`}</style>
     </div>
   );
 }

@@ -15,10 +15,12 @@ mod imp {
     use std::cell::RefCell;
 
     use objc2::rc::Retained;
+    use objc2::AnyThread;
     use objc2_event_kit::{
-        EKAuthorizationStatus, EKCalendar, EKEntityType, EKEvent, EKEventStore, EKSpan,
+        EKAuthorizationStatus, EKCalendar, EKEntityType, EKEvent, EKEventStore, EKRecurrenceEnd,
+        EKRecurrenceFrequency, EKRecurrenceRule, EKSpan,
     };
-    use objc2_foundation::{NSDate, NSError, NSString};
+    use objc2_foundation::{NSDate, NSError, NSInteger, NSString, NSUInteger};
 
     thread_local! {
         static STORE: RefCell<Option<Retained<EKEventStore>>> = const { RefCell::new(None) };
@@ -92,6 +94,7 @@ mod imp {
         location: Option<&str>,
         notes: Option<&str>,
         calendar_name: Option<&str>,
+        recurrence: Option<&super::RecurrenceInput>,
     ) -> Result<String, String> {
         with_store(|store| {
             let event = unsafe { EKEvent::eventWithEventStore(store) };
@@ -115,6 +118,45 @@ mod imp {
             let cal_name = calendar_name.unwrap_or("default");
             if let Some(cal) = find_calendar(store, cal_name) {
                 unsafe { event.setCalendar(Some(&cal)) };
+            }
+
+            // Attach a recurrence rule when the draft carries one, so the event
+            // actually repeats in the system calendar instead of degrading to a
+            // single occurrence. "none"/unknown frequency → no rule (one-off).
+            if let Some(r) = recurrence {
+                let freq = match r.frequency.as_str() {
+                    "daily" => Some(EKRecurrenceFrequency::Daily),
+                    "weekly" => Some(EKRecurrenceFrequency::Weekly),
+                    "monthly" => Some(EKRecurrenceFrequency::Monthly),
+                    "yearly" => Some(EKRecurrenceFrequency::Yearly),
+                    _ => None,
+                };
+                if let Some(freq) = freq {
+                    // EventKit takes exactly one end condition (or none = forever).
+                    // Prefer an explicit end date, else an occurrence count.
+                    let end: Option<Retained<EKRecurrenceEnd>> = match (&r.until, r.count) {
+                        (Some(iso), _) => {
+                            let end_date = iso_to_nsdate(iso)?;
+                            Some(unsafe {
+                                EKRecurrenceEnd::recurrenceEndWithEndDate(&end_date)
+                            })
+                        }
+                        (None, Some(c)) => Some(unsafe {
+                            EKRecurrenceEnd::recurrenceEndWithOccurrenceCount(c as NSUInteger)
+                        }),
+                        _ => None,
+                    };
+                    // interval 0 raises an EventKit exception; DB default is 1.
+                    let rule = unsafe {
+                        EKRecurrenceRule::initRecurrenceWithFrequency_interval_end(
+                            EKRecurrenceRule::alloc(),
+                            freq,
+                            r.interval.max(1) as NSInteger,
+                            end.as_deref(),
+                        )
+                    };
+                    unsafe { event.addRecurrenceRule(&rule) };
+                }
             }
 
             let result =
@@ -240,6 +282,25 @@ mod imp {
 
 // ── Command argument types (shared between platforms) ─────────────────
 
+/// Recurrence rule mirrored from the backend `RecurrenceRule` (calendar.rs),
+/// carried through to EventKit so confirmed drafts repeat in the system
+/// calendar. `frequency` is the snake_case tag (none|daily|weekly|monthly|yearly).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecurrenceInput {
+    #[serde(default)]
+    pub frequency: String,
+    #[serde(default = "default_recur_interval")]
+    pub interval: u32,
+    #[serde(default)]
+    pub until: Option<String>,
+    #[serde(default)]
+    pub count: Option<u32>,
+}
+
+fn default_recur_interval() -> u32 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalendarEventInput {
     pub title: String,
@@ -248,6 +309,8 @@ pub struct CalendarEventInput {
     pub location: Option<String>,
     pub notes: Option<String>,
     pub calendar_name: Option<String>,
+    #[serde(default)]
+    pub recurrence: Option<RecurrenceInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -285,6 +348,7 @@ pub fn create_calendar_event(event: CalendarEventInput) -> Result<String, String
             event.location.as_deref(),
             event.notes.as_deref(),
             event.calendar_name.as_deref(),
+            event.recurrence.as_ref(),
         )
     }
     #[cfg(not(target_os = "macos"))]

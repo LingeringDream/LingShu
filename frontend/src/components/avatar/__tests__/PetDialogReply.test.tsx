@@ -38,4 +38,27 @@ describe('PetDialogReply', () => {
       if (ch) Object.defineProperty(HTMLElement.prototype, 'clientHeight', ch);
     }
   });
+
+  it('supports a compact pet-panel variant for replies docked below the body', () => {
+    const sh = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+    const ch = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight');
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 300 });
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 30 });
+    try {
+      render(
+        <PetDialogReply
+          content={'很长很长的回复内容'}
+          maxHeight={30}
+          variant="compact"
+          onExpand={() => {}}
+        />,
+      );
+
+      expect(screen.getByRole('region', { name: '宠物回复' })).toHaveStyle({ maxHeight: '30px' });
+      expect(screen.getByRole('button', { name: '在主窗口查看完整回复' })).toHaveTextContent('完整');
+    } finally {
+      if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh);
+      if (ch) Object.defineProperty(HTMLElement.prototype, 'clientHeight', ch);
+    }
+  });
 });

@@ -1,15 +1,15 @@
 use axum::{
+    extract::Path,
     response::sse::{Event, Sse},
     routing::post,
     Json, Router,
 };
 use chrono::{DateTime, Local, Utc};
-use futures::{Stream, StreamExt};
-use serde::Deserialize;
+use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     convert::Infallible,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
 };
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -22,22 +22,486 @@ use crate::llm::client::{
 use crate::llm::forgetting::{self, ForgettingPolicy};
 use crate::llm::prompts::{personality_prompt, PersonalityValues};
 use crate::models::personality::PersonalityTraits;
-use crate::routes::settings::llm_settings_for_user;
+use crate::routes::settings::{
+    llm_settings_for_user, resolve_client_for_user, EnhanceMemberConfig, EnhanceSettings,
+};
 use crate::state::{AppState, PetNotification};
 
+type ChatSse = Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>;
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/v1/chat", post(chat))
+    Router::new()
+        .route("/api/v1/chat", post(chat))
+        .route("/api/v1/chat/enhance", post(enhance_chat))
+        .route(
+            "/api/v1/chat/messages/:id/regenerate",
+            post(regenerate_message),
+        )
+}
+
+// ── Multi-Model Enhancement (MoA) ───────────────────────────────────
+
+/// One enhancement member, echoed to the frontend so it can render a chip.
+#[derive(Debug, Clone, Serialize)]
+struct EnhanceMemberInfo {
+    id: String,
+    label: String,
+    provider_id: String,
+}
+
+/// SSE event emitted by the enhancement endpoint. Tagged with `type` so the
+/// frontend can switch on it in the same `onmessage` parser.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum EnhanceChunk {
+    /// Sent once at the start: which members will draft and who aggregates.
+    Start {
+        members: Vec<EnhanceMemberInfo>,
+        aggregator: String,
+    },
+    /// A member's draft finished (done) or dropped (failed).
+    Candidate {
+        id: String,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        draft: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Drafts are in; the aggregator is now synthesising the final reply.
+    Aggregate,
+    /// An incremental delta of the aggregated final reply.
+    Content { content: String },
+    /// Terminal event. `assistant_message_id` is set when the reply was saved.
+    Done {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        assistant_message_id: Option<uuid::Uuid>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user_message_id: Option<uuid::Uuid>,
+    },
+    /// A non-fatal error to surface in the chat bubble.
+    Error { message: String },
+}
+
+/// Per-turn override for MoA. The saved user settings remain the default, but
+/// the client can choose participants for the current message without
+/// persisting that choice.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
+pub struct EnhanceRequestOverride {
+    /// Models to draft this turn. Omitted = use saved members.
+    #[serde(default)]
+    pub members: Option<Vec<EnhanceMemberConfig>>,
+    /// Aggregator for this turn. Omitted/null = use saved aggregator.
+    #[serde(default)]
+    pub aggregator: Option<EnhanceMemberConfig>,
+    /// Per-member draft timeout for this turn. Omitted = use saved timeout.
+    #[serde(default)]
+    pub per_model_timeout_ms: Option<u64>,
+    /// Maximum member drafts to run concurrently this turn. Omitted = saved.
+    #[serde(default)]
+    pub max_parallel: Option<u32>,
+}
+
+fn apply_enhance_override(
+    mut settings: EnhanceSettings,
+    override_cfg: Option<EnhanceRequestOverride>,
+) -> EnhanceSettings {
+    let Some(override_cfg) = override_cfg else {
+        return settings;
+    };
+
+    if let Some(members) = override_cfg.members {
+        settings.members = members;
+    }
+    if let Some(aggregator) = override_cfg.aggregator {
+        settings.aggregator = Some(aggregator);
+    }
+    if let Some(timeout) = override_cfg.per_model_timeout_ms {
+        settings.per_model_timeout_ms = timeout.max(1_000);
+    }
+    if let Some(max_parallel) = override_cfg.max_parallel {
+        settings.max_parallel = max_parallel.max(1);
+    }
+
+    settings
+}
+
+/// Build the aggregator's user prompt: the question plus every member draft,
+/// with instructions to synthesise rather than concatenate. The system prompt
+/// (personality, memory, role) is supplied separately by the caller.
+fn build_aggregation_prompt(
+    user_message: &str,
+    drafts: &[(String, String)],
+    personality_snippet: &str,
+) -> String {
+    let mut s = String::new();
+    s.push_str("你正在综合多位 AI 助手对同一问题的回答,输出一份最终的、更完整优秀的回答。\n\n");
+    s.push_str("用户的问题:\n");
+    s.push_str(user_message);
+    s.push_str("\n\n各助手的回答(仅供参考,可能有错漏或冲突):\n");
+    for (i, (label, text)) in drafts.iter().enumerate() {
+        s.push_str(&format!("\n【回答 {} · {}】\n{}\n", i + 1, label, text));
+    }
+    s.push_str("\n综合要求:\n");
+    s.push_str("1. 取各家所长,补全任一回答遗漏的要点;\n");
+    s.push_str("2. 发现事实或逻辑冲突时,自行判断并只保留正确的一方,不要罗列分歧;\n");
+    s.push_str("3. 不要提及\"草稿\"\"其他助手\"\"综合\"等过程性词语,直接以你自己的口吻作答;\n");
+    s.push_str("4. 只输出一次最终答案,不要输出\"我来搜索\"\"我会处理\"\"请稍等\"等过程性确认;\n");
+    s.push_str("5. 若所有回答质量都不佳,请基于你自己的判断重写一份更好的回答。\n");
+    if !personality_snippet.is_empty() {
+        s.push_str("6. 保持你一贯的语气与风格。\n");
+    }
+    s.push_str("\n现在请直接输出最终回答:\n");
+    s
+}
+
+/// Emit a single-error SSE stream (e.g. enhancement not configured).
+fn enhance_error_sse(message: String) -> ChatSse {
+    let chunks = vec![
+        EnhanceChunk::Error { message },
+        EnhanceChunk::Done {
+            assistant_message_id: None,
+            user_message_id: None,
+        },
+    ];
+    let stream = futures::stream::iter(chunks.into_iter().map(|c| {
+        Ok::<_, Infallible>(
+            Event::default()
+                .json_data(c)
+                .unwrap_or_else(|_| Event::default().data("{\"type\":\"done\"}")),
+        )
+    }));
+    Sse::new(Box::pin(stream))
+}
+
+/// Multi-model enhanced chat. Several member models draft in parallel; a single
+/// aggregator model synthesises their drafts into one final reply, streamed to
+/// the client. Falls back to a direct answer if every member fails. Purely
+/// additive: ordinary `/api/v1/chat` is untouched.
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/enhance",
+    request_body = ChatRequest,
+    responses(
+        (status = 200, description = "SSE stream of EnhanceChunk events", content_type = "text/event-stream"),
+        (status = 401, description = "Unauthorized")
+    )
+)]
+pub async fn enhance_chat(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<crate::auth::AuthUser>,
+    Json(req): Json<ChatRequest>,
+) -> Result<ChatSse, AppError> {
+    let user_id = auth::require_user(auth).await?;
+
+    let enhance = apply_enhance_override(
+        crate::routes::settings::enhance_settings_for_user(&state, user_id).await,
+        req.enhance.clone(),
+    );
+    if !enhance.is_runnable() {
+        return Ok(enhance_error_sse(
+            "尚未配置增强:请在设置中至少选择一个参与模型,并指定一个整合模型。".to_string(),
+        ));
+    }
+    let aggregator_cfg = enhance
+        .aggregator
+        .clone()
+        .expect("is_runnable ensured Some");
+
+    // Generation knobs come from the user's global LLM settings.
+    let base_settings = llm_settings_for_user(&state, user_id).await;
+    let options = crate::llm::client::ChatOptions {
+        temperature: Some(base_settings.temperature),
+        num_predict: Some(base_settings.max_tokens),
+    };
+
+    let members =
+        crate::routes::settings::resolve_clients_for_enhance(&state, user_id, &enhance.members)
+            .await;
+    let aggregator = crate::routes::settings::resolve_clients_for_enhance(
+        &state,
+        user_id,
+        std::slice::from_ref(&aggregator_cfg),
+    )
+    .await
+    .into_iter()
+    .next();
+    let Some(aggregator) = aggregator else {
+        return Ok(enhance_error_sse("无法解析整合模型。".to_string()));
+    };
+
+    let session_id = req.session_id;
+    let user_message = req.message.clone();
+
+    // Reuse the normal chat setup: memory + personality + system prompt.
+    let memory_context = fetch_memory_context(
+        &state.db,
+        &state.vector,
+        &aggregator.client,
+        &state.config.llm.embed_model,
+        user_id,
+        &user_message,
+    )
+    .await;
+    let style_exemplar_snippet = load_style_exemplar_snippet(&state.db, user_id).await;
+    let personality_values = load_active_personality(&state.db, user_id).await;
+    let personality_snippet = personality_prompt(&personality_values);
+    let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
+    let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
+    let capabilities = capability_section(&perms);
+    let now = Local::now();
+    let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
+    let system_prompt = build_system_prompt(
+        &personality_snippet,
+        &memory_context,
+        &style_exemplar_snippet,
+        &role_prompt,
+        &capabilities,
+        &now_str,
+    );
+
+    let mut base_messages = vec![ChatMessage::system(system_prompt.clone())];
+    if let Some(sid) = session_id {
+        let history =
+            load_chat_history(&state.db, sid, user_id, base_settings.context_messages).await?;
+        for (role, content, ts) in history {
+            let content = if role == "user" {
+                let local_ts = ts.with_timezone(&Local);
+                format!("[{}]\n{}", local_ts.format("%Y-%m-%d %H:%M"), content)
+            } else {
+                content
+            };
+            base_messages.push(ChatMessage {
+                role,
+                content,
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+    }
+    base_messages.push(ChatMessage::user(format!(
+        "[{}]\n{}",
+        now.format("%Y-%m-%d %H:%M"),
+        user_message
+    )));
+
+    // Persist the user message and return its id so the frontend can edit or
+    // withdraw the exact row later.
+    let user_message_id = if let Some(sid) = session_id {
+        let message_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO messages (conversation_id, role, content) \
+             VALUES ($1, 'user', $2) RETURNING id",
+        )
+        .bind(sid)
+        .bind(&user_message)
+        .fetch_one(&state.db)
+        .await?;
+        sqlx::query(
+            "UPDATE conversations SET updated_at = NOW(), \
+             title = CASE WHEN title IS NULL OR BTRIM(title) = '' THEN $2 ELSE title END \
+             WHERE id = $1 AND user_id = $3 AND deleted_at IS NULL",
+        )
+        .bind(sid)
+        .bind(compact_conversation_title(&user_message))
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+        crate::routes::sessions::invalidate_session_cache(&state, user_id).await;
+        Some(message_id)
+    } else {
+        None
+    };
+
+    let member_infos: Vec<EnhanceMemberInfo> = members
+        .iter()
+        .enumerate()
+        .map(|(i, m)| EnhanceMemberInfo {
+            id: i.to_string(),
+            label: m.label.clone(),
+            provider_id: m.provider_id.clone(),
+        })
+        .collect();
+    let aggregator_label = aggregator.label.clone();
+    let member_timeout = std::time::Duration::from_millis(enhance.per_model_timeout_ms);
+    let max_parallel = enhance.max_parallel.max(1) as usize;
+
+    // A producer task streams enhancement events through an unbounded channel;
+    // the SSE response forwards them. Using a channel (rather than the
+    // async-stream macro) keeps the parallel-draft + streamed-aggregate phases
+    // straightforward and avoids adding a new dependency.
+    let (tx, rx) = futures::channel::mpsc::unbounded::<EnhanceChunk>();
+
+    tokio::spawn(async move {
+        let _ = tx.unbounded_send(EnhanceChunk::Start {
+            members: member_infos,
+            aggregator: aggregator_label,
+        });
+
+        // ── Phase 1: parallel drafts (timeout + fault tolerant) ──
+        let mut futs = futures::stream::iter(members.into_iter().enumerate().map(|(i, m)| {
+            let msgs = base_messages.clone();
+            let opts = options.clone();
+            let id = i.to_string();
+            let label = m.label.clone();
+            async move {
+                let r =
+                    tokio::time::timeout(member_timeout, m.client.chat(&m.model, msgs, Some(opts)))
+                        .await;
+                (id, label, r)
+            }
+        }))
+        .buffer_unordered(max_parallel);
+
+        let mut drafts: Vec<(String, String)> = Vec::new();
+        while let Some((id, label, r)) = futs.next().await {
+            let chunk = match r {
+                Ok(Ok(text)) if !text.trim().is_empty() => {
+                    drafts.push((label, text.clone()));
+                    EnhanceChunk::Candidate {
+                        id,
+                        status: "done".into(),
+                        draft: Some(text),
+                        error: None,
+                    }
+                }
+                Ok(Ok(_)) => EnhanceChunk::Candidate {
+                    id,
+                    status: "failed".into(),
+                    draft: None,
+                    error: Some("空回复".into()),
+                },
+                Ok(Err(e)) => EnhanceChunk::Candidate {
+                    id,
+                    status: "failed".into(),
+                    draft: None,
+                    error: Some(e.to_string()),
+                },
+                Err(_) => EnhanceChunk::Candidate {
+                    id,
+                    status: "failed".into(),
+                    draft: None,
+                    error: Some("超时".into()),
+                },
+            };
+            let _ = tx.unbounded_send(chunk);
+        }
+
+        // ── Phase 2: aggregate (streamed). All-failed → answer directly. ──
+        let _ = tx.unbounded_send(EnhanceChunk::Aggregate);
+
+        let agg_user = if drafts.is_empty() {
+            user_message.clone()
+        } else {
+            build_aggregation_prompt(&user_message, &drafts, &personality_snippet)
+        };
+        let agg_messages = vec![
+            ChatMessage::system(system_prompt.clone()),
+            ChatMessage::user(agg_user),
+        ];
+
+        let mut full = String::new();
+        let agg_stream =
+            aggregator
+                .client
+                .chat_stream(&aggregator.model, agg_messages, Some(options.clone()));
+        futures::pin_mut!(agg_stream);
+        while let Some(delta) = agg_stream.next().await {
+            match delta {
+                Ok(d) => {
+                    if d.content.is_empty() {
+                        continue;
+                    }
+                    full.push_str(&d.content);
+                    let _ = tx.unbounded_send(EnhanceChunk::Content { content: d.content });
+                }
+                Err(e) => {
+                    let _ = tx.unbounded_send(EnhanceChunk::Error {
+                        message: e.to_string(),
+                    });
+                }
+            }
+        }
+
+        // Persist the assistant reply (best-effort).
+        let assistant_message_id = match (session_id, full.trim().is_empty()) {
+            (Some(sid), false) => sqlx::query_scalar::<_, uuid::Uuid>(
+                "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'assistant', $2) RETURNING id",
+            )
+            .bind(sid)
+            .bind(&full)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten(),
+            _ => None,
+        };
+
+        let _ = tx.unbounded_send(EnhanceChunk::Done {
+            assistant_message_id,
+            user_message_id,
+        });
+    });
+
+    let stream = rx.map(|chunk: EnhanceChunk| {
+        Ok::<_, Infallible>(
+            Event::default()
+                .json_data(chunk)
+                .unwrap_or_else(|_| Event::default().data("{\"type\":\"done\"}")),
+        )
+    });
+
+    Ok(Sse::new(Box::pin(stream)))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ChatRequest {
     pub message: String,
     pub session_id: Option<Uuid>,
+    /// Optional per-turn MoA selection. Only used by `/api/v1/chat/enhance`;
+    /// normal `/api/v1/chat` ignores it.
+    #[serde(default)]
+    pub enhance: Option<EnhanceRequestOverride>,
     /// Screen text captured client-side (main app process) and fed back so the
     /// model can answer using it. Set only on the auto-continuation turn after
     /// a `read_screen` tool call; see the screen-read flow in this module.
     #[serde(default)]
     pub screen_context: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ChatChunkEnvelope<'a> {
+    #[serde(flatten)]
+    chunk: &'a ChatChunk,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_message_id: Option<Uuid>,
+}
+
+fn serialize_chat_chunk(chunk: &ChatChunk, user_message_id: Option<Uuid>) -> String {
+    serde_json::to_string(&ChatChunkEnvelope {
+        chunk,
+        user_message_id,
+    })
+    .unwrap_or_default()
+}
+
+fn compact_conversation_title(message: &str) -> String {
+    let compact = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    compact.chars().take(60).collect()
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, ToSchema)]
+pub enum ReplyStyleTag {
+    #[serde(rename = "too_long")]
+    Long,
+    #[serde(rename = "too_short")]
+    Short,
+    #[serde(rename = "too_formal")]
+    Formal,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RegenerateChatMessageRequest {
+    pub style_tag: ReplyStyleTag,
 }
 
 // ── Handler ───────────────────────────────────────────────────────
@@ -55,7 +519,7 @@ pub async fn chat(
     axum::extract::State(state): axum::extract::State<AppState>,
     auth: Option<crate::auth::AuthUser>,
     Json(req): Json<ChatRequest>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, AppError> {
+) -> Result<ChatSse, AppError> {
     let user_id = auth::require_user(auth).await?;
     let settings = llm_settings_for_user(&state, user_id).await;
 
@@ -65,22 +529,23 @@ pub async fn chat(
         )));
     }
 
-    // Use per-user provider config if set, otherwise fall back to server defaults
-    let llm = if settings.provider == "openai" && !settings.api_base_url.is_empty() {
-        state.llm.with_overrides(
-            if settings.api_key.is_empty() {
-                None
-            } else {
-                Some(settings.api_key.clone())
-            },
-            if settings.api_base_url.is_empty() {
-                None
-            } else {
-                Some(settings.api_base_url.clone())
-            },
-        )
-    } else {
-        state.llm.clone()
+    // Route to the user's active provider: OpenAI-compatible providers apply
+    // their base URL + (decrypted) API key; Ollama uses the server default.
+    // See settings::resolve_client_for_user.
+    //
+    // A stored API key that can't be decrypted (ENCRYPTION_KEY changed since it
+    // was saved) returns Err here. Surface it as a single SSE content event so
+    // the user sees an actionable message in the chat bubble, instead of a
+    // silent unauthenticated request the provider would reject with 401.
+    let llm = match resolve_client_for_user(&state, user_id, &settings).await {
+        Ok(client) => client,
+        Err(e) => {
+            let message = match e {
+                AppError::Validation(m) => m,
+                other => other.to_string(),
+            };
+            return Ok(single_chunk_sse(message, None));
+        }
     };
 
     let session_id = req.session_id;
@@ -106,12 +571,15 @@ pub async fn chat(
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
     let capabilities = capability_section(&perms);
 
+    let now = Local::now();
+    let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
     let system_prompt = build_system_prompt(
         &personality_snippet,
         &memory_context,
         &style_exemplar_snippet,
         &role_prompt,
         &capabilities,
+        &now_str,
     );
     let mut messages = vec![ChatMessage::system(system_prompt)];
 
@@ -120,7 +588,15 @@ pub async fn chat(
     // large-context cloud model (e.g. 200 for 1 M-token Gemini/Claude).
     if let Some(sid) = session_id {
         let history = load_chat_history(&state.db, sid, user_id, settings.context_messages).await?;
-        for (role, content) in history {
+        for (role, content, ts) in history {
+            // Prepend a local-time timestamp to user messages so the LLM can
+            // distinguish temporal references across sessions or days.
+            let content = if role == "user" {
+                let local_ts = ts.with_timezone(&Local);
+                format!("[{}]\n{}", local_ts.format("%Y-%m-%d %H:%M"), content)
+            } else {
+                content
+            };
             messages.push(ChatMessage {
                 role,
                 content,
@@ -130,28 +606,47 @@ pub async fn chat(
         }
     }
 
-    // Current user message
-    messages.push(ChatMessage::user(user_message.clone()));
+    // Current user message — timestamped so it's unambiguous relative to history
+    messages.push(ChatMessage::user(format!(
+        "[{}]\n{}",
+        now.format("%Y-%m-%d %H:%M"),
+        user_message
+    )));
 
-    // Persist user message to DB before streaming (only when session_id is set)
-    if let Some(sid) = session_id {
-        sqlx::query(
-            "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)",
+    // Persist the first pass of the user turn before streaming. A screen-read
+    // continuation reuses the same turn and must not insert a duplicate row.
+    let is_screen_continuation = req
+        .screen_context
+        .as_ref()
+        .is_some_and(|content| !content.trim().is_empty());
+    let user_message_id = if let (Some(sid), false) = (session_id, is_screen_continuation) {
+        let message_id = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO messages (conversation_id, role, content) \
+             VALUES ($1, 'user', $2) RETURNING id",
         )
         .bind(sid)
         .bind(&user_message)
-        .execute(&state.db)
+        .fetch_one(&state.db)
         .await?;
 
         // Bump updated_at so the session list order reflects latest activity
-        sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1")
-            .bind(sid)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE conversations SET updated_at = NOW(), \
+             title = CASE WHEN title IS NULL OR BTRIM(title) = '' THEN $2 ELSE title END \
+             WHERE id = $1 AND user_id = $3 AND deleted_at IS NULL",
+        )
+        .bind(sid)
+        .bind(compact_conversation_title(&user_message))
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
 
         // Invalidate cached session list
         crate::routes::sessions::invalidate_session_cache(&state, user_id).await;
-    }
+        Some(message_id)
+    } else {
+        None
+    };
 
     // Signal: detect explicit memory-storage request
     if crate::telemetry::detect_explicit_memory_request(&user_message) {
@@ -430,8 +925,8 @@ pub async fn chat(
                             };
                             pet_tx.send(PetNotification::mood(done_mood)).ok();
                         }
-                        return Ok(Event::default().data(
-                            serde_json::to_string(&ChatChunk {
+                        return Ok(Event::default().data(serialize_chat_chunk(
+                            &ChatChunk {
                                 content: chunk.content,
                                 done: true,
                                 assistant_message_id,
@@ -441,9 +936,9 @@ pub async fn chat(
                                 // Propagate the screen-read handoff signal from
                                 // the (single) tool-loop chunk to the client.
                                 screen_read_request: chunk.screen_read_request,
-                            })
-                            .unwrap_or_default(),
-                        ));
+                            },
+                            user_message_id,
+                        )));
                     }
 
                     event
@@ -466,6 +961,207 @@ pub async fn chat(
                             false,
                         );
                     }
+                    Ok(Event::default().data(serialize_chat_chunk(
+                        &ChatChunk {
+                            content: format!("[stream error: {e}]"),
+                            done: true,
+                            assistant_message_id: None,
+                            apple_calendar_deletes: None,
+                            automation_actions: None,
+                            permission_requests: None,
+                            screen_read_request: None,
+                        },
+                        user_message_id,
+                    )))
+                }
+            }
+        }
+    });
+
+    Ok(Sse::new(sse_stream.boxed()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/messages/{id}/regenerate",
+    params(
+        ("id" = Uuid, Path, description = "Assistant message id to regenerate")
+    ),
+    request_body = RegenerateChatMessageRequest,
+    responses(
+        (status = 200, description = "SSE stream of regenerated ChatChunk events", content_type = "text/event-stream"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Message not found")
+    )
+)]
+pub async fn regenerate_message(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    auth: Option<crate::auth::AuthUser>,
+    Path(message_id): Path<Uuid>,
+    Json(req): Json<RegenerateChatMessageRequest>,
+) -> Result<ChatSse, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    let settings = llm_settings_for_user(&state, user_id).await;
+
+    if settings.model.is_empty() {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "Model not configured. Set it via PATCH /api/v1/settings/llm or LLM_DEFAULT_MODEL in .env."
+        )));
+    }
+
+    let llm = match resolve_client_for_user(&state, user_id, &settings).await {
+        Ok(client) => client,
+        Err(e) => {
+            let message = match e {
+                AppError::Validation(m) => m,
+                other => other.to_string(),
+            };
+            return Ok(single_chunk_sse(message, Some(message_id)));
+        }
+    };
+
+    let target = load_regeneration_target(&state.db, message_id, user_id).await?;
+    let history = load_chat_history_before(
+        &state.db,
+        target.conversation_id,
+        user_id,
+        settings.context_messages,
+        target.created_at,
+    )
+    .await?;
+    let latest_user_message = history
+        .iter()
+        .rev()
+        .find_map(|(role, content, _ts)| (role == "user").then(|| content.clone()))
+        .ok_or_else(|| {
+            AppError::Validation("找不到可重写的上一条用户消息，请重新发送一次。".to_string())
+        })?;
+
+    let memory_context = fetch_memory_context(
+        &state.db,
+        &state.vector,
+        &llm,
+        &state.config.llm.embed_model,
+        user_id,
+        &latest_user_message,
+    )
+    .await;
+    let style_exemplar_snippet = load_style_exemplar_snippet(&state.db, user_id).await;
+    let personality_values = load_active_personality(&state.db, user_id).await;
+    let personality_snippet = personality_prompt(&personality_values);
+    let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
+    let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
+    let capabilities = capability_section(&perms);
+    let now = Local::now();
+    let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
+    let system_prompt = build_system_prompt(
+        &personality_snippet,
+        &memory_context,
+        &style_exemplar_snippet,
+        &role_prompt,
+        &capabilities,
+        &now_str,
+    );
+
+    let mut messages = vec![ChatMessage::system(system_prompt)];
+    for (role, content, ts) in history {
+        let content = if role == "user" {
+            let local_ts = ts.with_timezone(&Local);
+            format!("[{}]\n{}", local_ts.format("%Y-%m-%d %H:%M"), content)
+        } else {
+            content
+        };
+        messages.push(ChatMessage {
+            role,
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
+    messages.push(ChatMessage::user(regeneration_prompt(
+        req.style_tag,
+        &target.content,
+    )));
+
+    let options = ChatOptions {
+        temperature: Some(settings.temperature),
+        num_predict: Some(settings.max_tokens),
+    };
+
+    state
+        .pet_notifications
+        .send(PetNotification::mood("thinking"))
+        .ok();
+    state
+        .pet_notifications
+        .send(PetNotification::mood("speaking"))
+        .ok();
+
+    let chunk_stream = llm.chat_stream(&settings.model, messages, Some(options));
+    let assistant_accumulator: Arc<Mutex<AssistantStreamAccumulator>> =
+        Arc::new(Mutex::new(AssistantStreamAccumulator::new()));
+    let stream_finalized = Arc::new(Mutex::new(false));
+    let db_clone = state.db.clone();
+    let redis_clone = state.redis.clone();
+    let model_name = settings.model.clone();
+    let pet_tx = state.pet_notifications.clone();
+
+    let sse_stream = chunk_stream.then(move |result| {
+        let assistant_accumulator = Arc::clone(&assistant_accumulator);
+        let stream_finalized = Arc::clone(&stream_finalized);
+        let db = db_clone.clone();
+        let redis = redis_clone.clone();
+        let model = model_name.clone();
+        let pet_tx = pet_tx.clone();
+
+        async move {
+            match result {
+                Ok(chunk) => {
+                    if let Ok(mut acc) = assistant_accumulator.lock() {
+                        acc.push_chunk(&chunk.content);
+                    }
+
+                    let event =
+                        Ok(Event::default()
+                            .data(serde_json::to_string(&chunk).unwrap_or_default()));
+
+                    if chunk.done && mark_stream_finalized(&stream_finalized) {
+                        let assistant_response = assistant_accumulator
+                            .lock()
+                            .ok()
+                            .and_then(|acc| acc.finalize());
+                        let assistant_message_id =
+                            if let Some(content) = assistant_response.as_ref() {
+                                replace_assistant_message(
+                                    &db, &redis, message_id, user_id, content, &model,
+                                )
+                                .await
+                            } else {
+                                None
+                            };
+                        pet_tx.send(PetNotification::mood("idle")).ok();
+                        return Ok(Event::default().data(
+                            serde_json::to_string(&ChatChunk {
+                                content: chunk.content,
+                                done: true,
+                                assistant_message_id,
+                                apple_calendar_deletes: None,
+                                automation_actions: None,
+                                permission_requests: None,
+                                screen_read_request: None,
+                            })
+                            .unwrap_or_default(),
+                        ));
+                    }
+
+                    event
+                }
+                Err(e) => {
+                    if let Ok(mut acc) = assistant_accumulator.lock() {
+                        acc.mark_error();
+                    }
+                    pet_tx.send(PetNotification::mood("idle")).ok();
+                    mark_stream_finalized(&stream_finalized);
                     Ok(Event::default().data(
                         serde_json::to_string(&ChatChunk {
                             content: format!("[stream error: {e}]"),
@@ -483,7 +1179,7 @@ pub async fn chat(
         }
     });
 
-    Ok(Sse::new(sse_stream))
+    Ok(Sse::new(sse_stream.boxed()))
 }
 
 // ── System prompt ────────────────────────────────────────────────────
@@ -510,12 +1206,14 @@ fn capability_section(perms: &crate::routes::permissions::PermissionSettings) ->
             "未开启（需用户授权后可用）"
         }
     };
+    let web = state(perms.l1_web_search);
     let l1 = state(perms.l1_calendar);
     let l2 = state(perms.l2_automation);
     let l3 = state(perms.l3_accessibility);
     format!(
         r#"## 能力范围（你现在就能做的事，通过调用工具实现）
 - 对话交流：回答提问、讨论想法、给出建议
+- 联网搜索：搜索公开网页，获取最新信息并附上来源链接 —— web_search
 - 文件阅读：读取用户主目录下的文本文件（.md .txt .pdf .json .csv 等）、列出目录 —— read_file / list_directory
 - 日历管理：创建、查询、删除日程（事件默认「待确认」）—— create_calendar_event / list_calendar_events / delete_calendar_event
 - 屏幕识别：读取当前最前台窗口的屏幕文字（「屏幕识别」与「屏幕阅读」同义）—— read_screen
@@ -524,6 +1222,7 @@ fn capability_section(perms: &crate::routes::permissions::PermissionSettings) ->
 - 时间查询 —— get_current_time
 
 ## 权限边界（按等级，附当前真实状态）
+- L1 联网搜索：只读搜索公开网页 —— 当前{web}
 - L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前{l1}
 - L2 本机操作：打开 App、网址、文件 —— 当前{l2}
 - L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前{l3}
@@ -541,6 +1240,7 @@ fn build_system_prompt(
     style_exemplar_snippet: &str,
     role_prompt: &str,
     capabilities: &str,
+    now: &str,
 ) -> String {
     let base = r#"你是灵枢（LingShu），一个运行在 macOS 桌面上的 AI 个人助理。
 
@@ -556,6 +1256,7 @@ fn build_system_prompt(
 
 ## 工具使用 — 极其重要，必须遵守
 你有可以调用的工具（tools/function calling）。工具的使用对你的用户完全透明——调用工具后系统会返回真实的执行结果。
+每个用户回合只输出一条最终回复；如果需要工具，先调用工具，等工具结果返回后再回答。不要先输出「好的，我来搜索」「我将为你处理」这类过程性确认，也不要把过程拆成多条消息。
 
 **强制规则：**
 1. 当用户请求创建/安排/添加日程时，你**必须调用 create_calendar_event 工具**。不要先问「需要我帮你创建吗？」——直接调用。
@@ -566,6 +1267,7 @@ fn build_system_prompt(
 6. 「创建」与「删除」的确认方式不同——这是你既有自主性、又有边界的体现：
    - create_calendar_event 创建的是「待确认」草稿，由用户在卡片中裁决，因此**可直接调用、不必先口头询问**（即便人格偏谨慎也是如此，你的谨慎体现在措辞上，如说明「这是待确认草稿」）。
    - delete_calendar_event 等会移除/覆盖数据的不可逆操作，**必须按规则 3 先确认再执行**，即便人格偏主动/高风险容忍也不能跳过确认。
+7. 当用户明确要求「联网搜索 / 上网查 / 搜一下」，或问题依赖新闻、价格、版本、政策等可能变化的信息时，必须调用 web_search。回答只能依据工具返回的搜索结果，并为相关结论附上来源 URL；搜索失败时如实说明，禁止编造来源。搜索失败与模型训练数据截止日期无关，绝不要用「训练数据截止」解释工具失败，也不要反复重试同一次搜索。
 
 ## 对话风格指引
 - 用户说「帮我记一下」「记住」→ 确认已记录，不重复整段内容
@@ -579,6 +1281,20 @@ fn build_system_prompt(
 - 你是一个 AI 助手，不是真正的意识体"#;
 
     let mut parts = vec![base.to_string()];
+
+    // Current time — injected early so every response is temporally anchored.
+    // Prevents the LLM from confusing "today", "this week", or message order.
+    if !now.is_empty() {
+        parts.push(format!(
+            "## 时间感知\n\
+             当前时间：{now}\n\
+             系统会在用户每条消息的正文最前面自动加上 [YYYY-MM-DD HH:MM] 格式的本地时间戳，标注该消息的发送时刻。\
+             这不是你无法获取的「元数据」，而是直接写在消息正文里、对你完全可见的文字。\n\
+             - 结合这些时间戳理解对话中的时间引用（「今天」「刚才」「上周」「三天前」等）。\n\
+             - 当用户直接问你能否看到消息的发送时间或时间戳时，回答「能」，并以最近一条消息开头的 [时间戳] 为依据说明；绝不要说自己看不到时间戳、看不到消息发送时间或只能看到正文。\n\
+             - 需要精确到当下的系统时间时，调用 get_current_time。"
+        ));
+    }
 
     // Real capability + permission picture (grant-aware), right after the base
     // identity so it anchors what the assistant can truthfully claim.
@@ -598,7 +1314,7 @@ fn build_system_prompt(
 
     if !memory_context.is_empty() {
         parts.push(format!(
-            "## 用户档案与记忆\n以下是你在长期陪伴中记录的关于这位用户的信息。请自然地运用它们来个性化你的回复，但不要逐条复述——只在与当前对话直接相关时才引用。\n\n{memory_context}"
+            "## 用户档案与记忆\n以下是你在长期陪伴中记录的关于这位用户的信息。每条以 [类型·记于 YYYY-MM-DD] 开头，方括号内的日期是你记下这条信息的时间——理解其中的相对时间（「下周」「明天」等）时，请以该记录日期为基准，而非当前日期。请自然地运用这些信息来个性化你的回复，但不要逐条复述——只在与当前对话直接相关时才引用。\n\n{memory_context}"
         ));
     }
 
@@ -610,6 +1326,67 @@ fn build_system_prompt(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
+
+struct RegenerationTarget {
+    conversation_id: Uuid,
+    content: String,
+    created_at: DateTime<Utc>,
+}
+
+fn single_chunk_sse(content: String, assistant_message_id: Option<Uuid>) -> ChatSse {
+    let event = Event::default().data(
+        serde_json::to_string(&ChatChunk {
+            content,
+            done: true,
+            assistant_message_id,
+            apple_calendar_deletes: None,
+            automation_actions: None,
+            permission_requests: None,
+            screen_read_request: None,
+        })
+        .unwrap_or_default(),
+    );
+    Sse::new(futures::stream::once(async move { Ok::<Event, Infallible>(event) }).boxed())
+}
+
+fn regeneration_instruction(style_tag: ReplyStyleTag) -> &'static str {
+    match style_tag {
+        ReplyStyleTag::Long => {
+            "用户觉得上一版太长。请明显压缩篇幅，只保留最关键的信息，语气自然，不要丢掉必要结论。"
+        }
+        ReplyStyleTag::Short => {
+            "用户觉得上一版太短。请在保持重点清晰的前提下适当展开，补足有用细节、原因或下一步。"
+        }
+        ReplyStyleTag::Formal => {
+            "用户觉得上一版太正式。请改成更自然、更口语的表达，像日常协作里的简洁说明。"
+        }
+    }
+}
+
+fn regeneration_prompt(style_tag: ReplyStyleTag, previous_reply: &str) -> String {
+    let previous_reply = truncate_for_prompt(previous_reply, 12_000);
+    format!(
+        "用户刚刚对你上一版回复点了反馈。请基于同一条用户问题，直接重新生成一版助手回复。\n\n\
+         反馈要求：{}\n\n\
+         上一版回复：\n{}\n\n\
+         输出规则：\n\
+         - 只输出重写后的回复正文，不要解释你做了什么。\n\
+         - 不要提到“上一版”“反馈按钮”或“我会重写”。\n\
+         - 不要新增未验证事实，也不要声称执行了新的工具或本机操作。",
+        regeneration_instruction(style_tag),
+        previous_reply
+    )
+}
+
+fn truncate_for_prompt(value: &str, max_chars: usize) -> String {
+    let mut iter = value.chars();
+    let truncated: String = iter.by_ref().take(max_chars).collect();
+    if iter.next().is_some() {
+        format!("{truncated}\n\n[内容过长，已截断]")
+    } else {
+        truncated
+    }
+}
 
 /// Persist an assistant message to the database, bump session metadata,
 /// and invalidate the cached session list. Returns the inserted message's
@@ -660,6 +1437,95 @@ async fn persist_assistant_message(
     Some(row.0)
 }
 
+async fn load_regeneration_target(
+    db: &sqlx::PgPool,
+    message_id: Uuid,
+    user_id: Uuid,
+) -> Result<RegenerationTarget, AppError> {
+    let row: Option<(Uuid, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT m.conversation_id, m.content, m.created_at \
+         FROM messages m \
+         JOIN conversations c ON c.id = m.conversation_id \
+         WHERE m.id = $1 \
+           AND m.role = 'assistant' \
+           AND c.user_id = $2 \
+           AND c.deleted_at IS NULL",
+    )
+    .bind(message_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+
+    let Some((conversation_id, content, created_at)) = row else {
+        return Err(AppError::NotFound("Message not found".to_string()));
+    };
+
+    Ok(RegenerationTarget {
+        conversation_id,
+        content,
+        created_at,
+    })
+}
+
+async fn replace_assistant_message(
+    db: &sqlx::PgPool,
+    redis: &crate::state::OptionalRedis,
+    message_id: Uuid,
+    user_id: Uuid,
+    content: &str,
+    model: &str,
+) -> Option<Uuid> {
+    let row: Option<(Uuid,)> = match sqlx::query_as(
+        "UPDATE messages m \
+         SET content = $1, \
+             model_id = $2, \
+             metadata = m.metadata || jsonb_build_object('regenerated', true, 'regenerated_at', NOW()) \
+         WHERE m.id = $3 \
+           AND m.role = 'assistant' \
+           AND EXISTS ( \
+             SELECT 1 FROM conversations c \
+             WHERE c.id = m.conversation_id \
+               AND c.user_id = $4 \
+               AND c.deleted_at IS NULL \
+           ) \
+         RETURNING m.conversation_id",
+    )
+    .bind(content)
+    .bind(model)
+    .bind(message_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(%message_id, %e, "Failed to replace regenerated assistant message");
+            return None;
+        }
+    };
+
+    let Some((conversation_id,)) = row else {
+        tracing::warn!(%message_id, "Regenerated assistant message was not found for update");
+        return None;
+    };
+
+    if let Err(e) = sqlx::query(
+        "UPDATE conversations SET updated_at = NOW() \
+         WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .execute(db)
+    .await
+    {
+        tracing::warn!(%conversation_id, %e, "Failed to bump regenerated conversation updated_at");
+    }
+
+    crate::cache::del(redis, &crate::cache::chat_sessions_cache_key(user_id)).await;
+
+    Some(message_id)
+}
+
 fn mark_stream_finalized(finalized: &Arc<Mutex<bool>>) -> bool {
     let Ok(mut done) = finalized.lock() else {
         return false;
@@ -686,22 +1552,18 @@ fn has_assistant_response(assistant_response: &Option<String>) -> bool {
 /// Minimum seconds between automatic forgetting sweeps per user.
 const FORGETTING_SWEEP_COOLDOWN_SECS: u64 = 24 * 60 * 60; // 24 hours
 
-static LAST_FORGETTING_SWEEPS: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
-
 /// Check whether the per-user cooldown allows a forgetting sweep to run now.
 fn should_run_sweep(user_id: Uuid) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let mut map = last_forgetting_sweeps()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    should_run_sweep_at(&mut map, user_id, now)
+    crate::cooldown::forgetting_sweeps().should_run(user_id)
 }
 
 /// Pure helper — testable without a real system clock.
-fn should_run_sweep_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: u64) -> bool {
+#[cfg(test)]
+fn should_run_sweep_at(
+    last: &mut std::collections::HashMap<Uuid, u64>,
+    user_id: Uuid,
+    now: u64,
+) -> bool {
     if let Some(prev) = last.get(&user_id) {
         if now.saturating_sub(*prev) < FORGETTING_SWEEP_COOLDOWN_SECS {
             return false;
@@ -709,10 +1571,6 @@ fn should_run_sweep_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: u64) -
     }
     last.insert(user_id, now);
     true
-}
-
-fn last_forgetting_sweeps() -> &'static Mutex<HashMap<Uuid, u64>> {
-    LAST_FORGETTING_SWEEPS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// `(id, importance, last_accessed_at, created_at)` — one row of decay input.
@@ -868,10 +1726,13 @@ const THOUGHT_MAINTENANCE_COOLDOWN_SECS: u64 = 24 * 60 * 60; // 24 hours
 /// Pending/shown thoughts older than this are auto-expired.
 const STALE_THOUGHT_DAYS: i32 = 14;
 
-static LAST_THOUGHT_MAINTENANCE: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
-
 /// Per-user cooldown gate. Pure helper — testable without a real system clock.
-fn should_run_maintenance_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: u64) -> bool {
+#[cfg(test)]
+fn should_run_maintenance_at(
+    last: &mut std::collections::HashMap<Uuid, u64>,
+    user_id: Uuid,
+    now: u64,
+) -> bool {
     if let Some(prev) = last.get(&user_id) {
         if now.saturating_sub(*prev) < THOUGHT_MAINTENANCE_COOLDOWN_SECS {
             return false;
@@ -882,15 +1743,7 @@ fn should_run_maintenance_at(last: &mut HashMap<Uuid, u64>, user_id: Uuid, now: 
 }
 
 fn should_run_thought_maintenance(user_id: Uuid) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let mut map = LAST_THOUGHT_MAINTENANCE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    should_run_maintenance_at(&mut map, user_id, now)
+    crate::cooldown::thought_maintenance().should_run(user_id)
 }
 
 /// Best-effort background maintenance: expire stale pending/shown thoughts
@@ -1157,7 +2010,7 @@ async fn load_chat_history(
     conversation_id: Uuid,
     user_id: Uuid,
     limit: u32,
-) -> Result<Vec<(String, String)>, AppError> {
+) -> Result<Vec<(String, String, DateTime<Utc>)>, AppError> {
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM conversations \
          WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL)",
@@ -1171,8 +2024,8 @@ async fn load_chat_history(
         return Err(AppError::NotFound("Session not found".to_string()));
     }
 
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT role, content FROM ( \
+    let rows: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT role, content, created_at FROM ( \
              SELECT role, content, created_at FROM messages \
              WHERE conversation_id = $1 \
              ORDER BY created_at DESC \
@@ -1181,6 +2034,36 @@ async fn load_chat_history(
          ORDER BY created_at ASC",
     )
     .bind(conversation_id)
+    .bind(limit as i64)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows)
+}
+
+async fn load_chat_history_before(
+    db: &sqlx::PgPool,
+    conversation_id: Uuid,
+    user_id: Uuid,
+    limit: u32,
+    before: DateTime<Utc>,
+) -> Result<Vec<(String, String, DateTime<Utc>)>, AppError> {
+    let rows: Vec<(String, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT role, content, created_at FROM ( \
+             SELECT m.role, m.content, m.created_at FROM messages m \
+             JOIN conversations c ON c.id = m.conversation_id \
+             WHERE m.conversation_id = $1 \
+               AND c.user_id = $2 \
+               AND c.deleted_at IS NULL \
+               AND m.created_at < $3 \
+             ORDER BY m.created_at DESC \
+             LIMIT $4 \
+         ) recent_messages \
+         ORDER BY created_at ASC",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .bind(before)
     .bind(limit as i64)
     .fetch_all(db)
     .await?;
@@ -1229,7 +2112,7 @@ async fn fetch_memory_context(
     }
 
     // Bump access metadata
-    let ids: Vec<Uuid> = rows.iter().map(|(id, _, _)| *id).collect();
+    let ids: Vec<Uuid> = rows.iter().map(|(id, _, _, _)| *id).collect();
 
     // Signal: memory_retrieval_hit for each memory injected into context
     for memory_id in &ids {
@@ -1257,17 +2140,26 @@ async fn fetch_memory_context(
     }
 
     let mut ctx = String::new();
-    for (_, mtype, content) in &rows {
-        let label = match mtype.as_str() {
-            "preference" => "偏好",
-            "fact" => "事实",
-            "goal" => "目标",
-            "context" => "上下文",
-            _ => "信息",
-        };
-        ctx.push_str(&format!("- [{label}] {content}\n"));
+    for (_, mtype, content, created_at) in &rows {
+        ctx.push_str(&memory_context_line(mtype, content, *created_at));
     }
     ctx
+}
+
+/// Format one memory as a context line: a memory-type label, the local date the
+/// note was recorded, and its content. The recorded date lets the model anchor
+/// any relative time reference inside the memory ("下周出差", "明天交稿") to when
+/// the note was actually made, instead of mistaking it for the current week.
+fn memory_context_line(memory_type: &str, content: &str, recorded_at: DateTime<Utc>) -> String {
+    let label = match memory_type {
+        "preference" => "偏好",
+        "fact" => "事实",
+        "goal" => "目标",
+        "context" => "上下文",
+        _ => "信息",
+    };
+    let date = recorded_at.with_timezone(&Local).format("%Y-%m-%d");
+    format!("- [{label}·记于{date}] {content}\n")
 }
 
 /// Try the semantic path via the shared [`crate::llm::semantic::semantic_memory_search`].
@@ -1296,9 +2188,9 @@ async fn load_memories_by_ids(
     db: &sqlx::PgPool,
     user_id: Uuid,
     ids: &[Uuid],
-) -> Vec<(Uuid, String, String)> {
+) -> Vec<(Uuid, String, String, DateTime<Utc>)> {
     match sqlx::query_as(
-        "SELECT id, memory_type, content FROM memories \
+        "SELECT id, memory_type, content, created_at FROM memories \
          WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL AND importance >= 0.5",
     )
     .bind(ids)
@@ -1308,10 +2200,12 @@ async fn load_memories_by_ids(
     {
         Ok(rows) => {
             // Reorder rows to match the original Qdrant rank order
-            let mut row_map: std::collections::HashMap<Uuid, (String, String)> =
-                rows.into_iter().map(|(id, mt, c)| (id, (mt, c))).collect();
+            let mut row_map: std::collections::HashMap<Uuid, (String, String, DateTime<Utc>)> =
+                rows.into_iter()
+                    .map(|(id, mt, c, ts)| (id, (mt, c, ts)))
+                    .collect();
             ids.iter()
-                .filter_map(|id| row_map.remove(id).map(|(mt, c)| (*id, mt, c)))
+                .filter_map(|id| row_map.remove(id).map(|(mt, c, ts)| (*id, mt, c, ts)))
                 .collect()
         }
         Err(error) => {
@@ -1322,9 +2216,12 @@ async fn load_memories_by_ids(
 }
 
 /// Legacy fallback: top-N memories by importance + recency.
-async fn legacy_fetch_memories(db: &sqlx::PgPool, user_id: Uuid) -> Vec<(Uuid, String, String)> {
+async fn legacy_fetch_memories(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+) -> Vec<(Uuid, String, String, DateTime<Utc>)> {
     match sqlx::query_as(
-        "SELECT id, memory_type, content FROM memories \
+        "SELECT id, memory_type, content, created_at FROM memories \
          WHERE user_id = $1 AND deleted_at IS NULL AND importance >= 0.5 \
          ORDER BY importance DESC, updated_at DESC LIMIT 5",
     )
@@ -1504,7 +2401,14 @@ async fn preflight_calendar_intent(
         // The LLM will use these results — we just provide the data
         let list_text: String = events
             .iter()
-            .map(|e| format!("[{}] {}（{}）", e.id, e.title, e.start_time))
+            .map(|e| {
+                format!(
+                    "[{}] {}（{}）",
+                    e.id,
+                    e.title,
+                    fmt_event_local(e.start_time)
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -1535,7 +2439,11 @@ async fn preflight_calendar_intent(
             .map(|e| {
                 format!(
                     "[{}] {}：{} 至 {}（{}）",
-                    e.id, e.title, e.start_time, e.end_time, e.status
+                    e.id,
+                    e.title,
+                    fmt_event_local(e.start_time),
+                    fmt_event_local(e.end_time),
+                    e.status
                 )
             })
             .collect::<Vec<_>>()
@@ -1554,7 +2462,10 @@ async fn preflight_calendar_intent(
             Ok(event) => {
                 return Some(format!(
                     "[系统] 你已成功为用户创建了以下日程（这是真实结果，不是编造的）：\n- 标题：{}\n- 时间：{} 至 {}\n- 状态：{}\n\n请用自然的语言告知用户。",
-                    event.title, event.start_time, event.end_time, event.status
+                    event.title,
+                    fmt_event_local(event.start_time),
+                    fmt_event_local(event.end_time),
+                    event.status
                 ));
             }
             Err(e) => {
@@ -1695,6 +2606,26 @@ fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
             }),
         ),
         ToolDefinition::new(
+            "web_search",
+            "搜索公开互联网，返回网页标题、摘要和来源 URL。当用户明确要求联网搜索、上网查、搜一下，或者问题涉及新闻、价格、版本、政策、人物职务等会随时间变化的信息时调用。回答必须引用工具返回的来源 URL；不要编造未出现在结果中的事实或链接。",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "简洁、具体的搜索词；不要包含密码、令牌或其他敏感信息。"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回结果数，1 到 8，默认 5。",
+                        "minimum": 1,
+                        "maximum": 8
+                    }
+                },
+                "required": ["query"]
+            }),
+        ),
+        ToolDefinition::new(
             "open_app",
             "打开 macOS 上的一个应用程序。当用户说「打开/启动/帮我开...（某 App）」时调用。是否真正执行由系统的 L2 白名单决定：不在白名单内会被安全拒绝，你只需如实转达结果。",
             serde_json::json!({
@@ -1753,6 +2684,9 @@ struct ToolEffects {
     /// so the desktop client must capture the frontmost window's text in the
     /// authorized main-app process and resend the turn with `screen_context`.
     screen_read_request: bool,
+    /// Safe server-authored text that ends the tool loop immediately. Search
+    /// failures use this so the model cannot retry or invent a cutoff story.
+    terminal_response: Option<String>,
 }
 
 /// Extract a string argument from a tool call, trimmed; "" if missing.
@@ -1765,6 +2699,32 @@ fn tool_arg(tool_call: &crate::llm::client::ToolCall, key: &str) -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+fn tool_definitions_for_iteration(
+    tools: &[crate::llm::client::ToolDefinition],
+    web_search_used: bool,
+) -> Vec<crate::llm::client::ToolDefinition> {
+    tools
+        .iter()
+        .filter(|tool| !(web_search_used && tool.function.name == "web_search"))
+        .cloned()
+        .collect()
+}
+
+fn claim_web_search_budget(tool_name: &str, web_search_used: &mut bool) -> bool {
+    if tool_name != "web_search" {
+        return true;
+    }
+    if *web_search_used {
+        return false;
+    }
+    *web_search_used = true;
+    true
+}
+
+fn web_search_failure_response() -> String {
+    "联网搜索暂时不可用：主搜索与备用搜索均未能返回有效结果。请稍后重试。".to_string()
 }
 
 /// Enforce L2 permission + whitelist for an automation target, write an audit
@@ -1830,6 +2790,21 @@ async fn enforce_automation(
     }
 }
 
+/// Render an event time (`DateTime<Utc>` in the DB) in the user's local
+/// timezone with an explicit `YYYY-MM-DD HH:MM` format.
+///
+/// Calendar event times are stored as UTC. Formatting them with `{}` emits the
+/// UTC clock time (e.g. `2026-06-24 07:00:00 UTC`), while everything else the
+/// model sees — the message timestamps, the 时间感知 current time, and
+/// get_current_time — is local. That mismatch made the assistant misreport
+/// event times by the local UTC offset (8h for UTC+8). Converting to local here
+/// keeps all model-facing times in one consistent frame.
+fn fmt_event_local(dt: DateTime<Utc>) -> String {
+    dt.with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
+}
+
 /// Execute a single tool call and return a human-readable result string
 /// (for injection into the LLM conversation) plus any `ToolEffects` the
 /// frontend should carry out.
@@ -1855,10 +2830,11 @@ async fn execute_tool_call(
             match crate::routes::calendar::parse_and_create_event(state, user_id, text).await {
                 Ok(event) => Ok((
                     format!(
-                        "日程已创建：\n- 标题：{}\n- 时间：{} 至 {}\n- 状态：{}\n- 日历：{}",
+                        "日程已创建：\n- 标题：{}\n- 时间：{} 至 {}\n- 重复：{}\n- 状态：{}\n- 日历：{}",
                         event.title,
-                        event.start_time,
-                        event.end_time,
+                        fmt_event_local(event.start_time),
+                        fmt_event_local(event.end_time),
+                        crate::routes::calendar::recurrence_label(&event.recurrence),
                         event.status,
                         event.calendar_name
                     ),
@@ -1884,8 +2860,13 @@ async fn execute_tool_call(
                             .iter()
                             .map(|e| {
                                 format!(
-                                    "- [{}] {}：{} 至 {}（{}）",
-                                    e.id, e.title, e.start_time, e.end_time, e.status
+                                    "- [{}] {}：{} 至 {}，{}（{}）",
+                                    e.id,
+                                    e.title,
+                                    fmt_event_local(e.start_time),
+                                    fmt_event_local(e.end_time),
+                                    crate::routes::calendar::recurrence_label(&e.recurrence),
+                                    e.status
                                 )
                             })
                             .collect();
@@ -2094,6 +3075,85 @@ async fn execute_tool_call(
                 ToolEffects::default(),
             ))
         }
+        "web_search" => {
+            let query = tool_arg(tool_call, "query");
+            if query.is_empty() {
+                return Ok(("错误：未提供联网搜索词。".into(), ToolEffects::default()));
+            }
+
+            let perms = crate::routes::permissions::permissions_for_user(state, user_id).await;
+            if !perms.l1_web_search {
+                crate::routes::audit::record(
+                    &state.db,
+                    user_id,
+                    "web_search_denied",
+                    "network",
+                    None,
+                    serde_json::json!({ "result": "denied", "reason": "permission_disabled" }),
+                )
+                .await;
+                let message = "无法联网搜索：L1 联网搜索权限未开启。请在设置 → 权限分级中开启“L1 · 联网搜索”后重试。".to_string();
+                return Ok((
+                    message.clone(),
+                    ToolEffects {
+                        terminal_response: Some(message),
+                        ..Default::default()
+                    },
+                ));
+            }
+
+            let limit = tool_call
+                .function
+                .arguments
+                .get("limit")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(5)
+                .clamp(1, 8) as usize;
+            match crate::web_search::search(&state.http, &state.redis, &query, limit).await {
+                Ok(outcome) => {
+                    crate::routes::audit::record(
+                        &state.db,
+                        user_id,
+                        "web_search",
+                        "network",
+                        None,
+                        serde_json::json!({
+                            "result": "allowed",
+                            "result_count": outcome.results.len(),
+                            "providers": outcome.providers,
+                        }),
+                    )
+                    .await;
+                    Ok((
+                        crate::web_search::format_for_model(&query, &outcome),
+                        ToolEffects::default(),
+                    ))
+                }
+                Err(error) => {
+                    tracing::warn!(%user_id, %error, "Web search failed");
+                    crate::routes::audit::record(
+                        &state.db,
+                        user_id,
+                        "web_search_failed",
+                        "network",
+                        None,
+                        serde_json::json!({
+                            "result": "failed",
+                            "reason": "providers_unavailable",
+                        }),
+                    )
+                    .await;
+                    let message = web_search_failure_response();
+                    Ok((
+                        message.clone(),
+                        ToolEffects {
+                            terminal_response: Some(message),
+                            ..Default::default()
+                        },
+                    ))
+                }
+            }
+        }
         "delete_calendar_event" => {
             let event_id_str = tool_call
                 .function
@@ -2207,6 +3267,7 @@ async fn run_tool_loop(
     let mut messages = messages;
     let mut effects = ToolEffects::default();
     let mut iterations = 0;
+    let mut web_search_used = false;
 
     tracing::debug!(%user_id, tool_count = tools.len(), "Tool loop starting");
 
@@ -2218,12 +3279,13 @@ async fn run_tool_loop(
         }
 
         tracing::debug!(%user_id, iterations, msg_count = messages.len(), "Calling chat_with_tools");
+        let iteration_tools = tool_definitions_for_iteration(tools, web_search_used);
         let response = match llm
             .chat_with_tools(
                 model,
                 messages.clone(),
                 Some(options.clone()),
-                tools.to_vec(),
+                iteration_tools,
             )
             .await
         {
@@ -2261,12 +3323,21 @@ async fn run_tool_loop(
         // Execute each tool, pairing the result with its call id.
         let mut tool_results: Vec<(String, String)> = Vec::new();
         for tc in &tool_calls {
-            let (result, eff) = match execute_tool_call(state, user_id, tc).await {
-                Ok((text, eff)) => (text, eff),
-                Err(e) => {
-                    tracing::warn!(%user_id, tool = %tc.function.name, %e, "Tool execution failed");
-                    (format!("工具执行失败：{e}"), ToolEffects::default())
+            let (result, eff) = if claim_web_search_budget(&tc.function.name, &mut web_search_used)
+            {
+                match execute_tool_call(state, user_id, tc).await {
+                    Ok((text, eff)) => (text, eff),
+                    Err(e) => {
+                        tracing::warn!(%user_id, tool = %tc.function.name, %e, "Tool execution failed");
+                        (format!("工具执行失败：{e}"), ToolEffects::default())
+                    }
                 }
+            } else {
+                (
+                    "本回合已执行过一次联网搜索。请使用已经返回的搜索结果回答，不要再次搜索。"
+                        .to_string(),
+                    ToolEffects::default(),
+                )
             };
             effects
                 .apple_calendar_deletes
@@ -2274,7 +3345,17 @@ async fn run_tool_loop(
             effects.automation_actions.extend(eff.automation_actions);
             effects.permission_requests.extend(eff.permission_requests);
             effects.screen_read_request |= eff.screen_read_request;
+            if effects.terminal_response.is_none() {
+                effects.terminal_response = eff.terminal_response;
+            }
             tool_results.push((tc.id.clone(), result));
+        }
+
+        // Search permission/service failures use fixed server-authored text.
+        // Sending them back through the model caused repeated tool calls and a
+        // fabricated "training data cutoff" explanation in the desktop app.
+        if let Some(message) = effects.terminal_response.clone() {
+            return (messages, Some(message), effects);
         }
 
         // A read_screen call hands off to the desktop client to capture screen
@@ -2303,6 +3384,34 @@ async fn run_tool_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn final_chat_chunk_can_include_user_message_id() {
+        let user_message_id = Uuid::new_v4();
+        let json = serialize_chat_chunk(
+            &ChatChunk {
+                content: String::new(),
+                done: true,
+                assistant_message_id: None,
+                apple_calendar_deletes: None,
+                automation_actions: None,
+                permission_requests: None,
+                screen_read_request: None,
+            },
+            Some(user_message_id),
+        );
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["user_message_id"], user_message_id.to_string());
+        assert_eq!(value["done"], true);
+    }
+
+    #[test]
+    fn conversation_title_is_compact_and_unicode_safe() {
+        let title = compact_conversation_title("  第一行\n\n第二行   第三行  ");
+        assert_eq!(title, "第一行 第二行 第三行");
+        assert!(compact_conversation_title(&"灵".repeat(80)).chars().count() <= 60);
+    }
 
     #[test]
     fn chat_tools_includes_calendar_and_automation_tools() {
@@ -2314,6 +3423,7 @@ mod tests {
             "create_calendar_event",
             "list_calendar_events",
             "delete_calendar_event",
+            "web_search",
             "open_app",
             "open_url",
             "open_file",
@@ -2323,6 +3433,90 @@ mod tests {
                 "missing tool {expected}"
             );
         }
+    }
+
+    #[test]
+    fn fmt_event_local_is_local_minute_precision() {
+        use chrono::TimeZone;
+        // A fixed UTC instant. Raw `DateTime<Utc>` Display would render this as
+        // "2026-06-24 07:00:00 UTC"; fmt_event_local must instead emit the local
+        // wall-clock time at minute precision with no timezone suffix.
+        let utc = Utc.with_ymd_and_hms(2026, 6, 24, 7, 0, 0).unwrap();
+        let out = fmt_event_local(utc);
+
+        // No UTC leakage and no seconds — the two things that confused the model.
+        assert!(
+            !out.contains("UTC"),
+            "must not leak the UTC Display suffix: {out}"
+        );
+        assert!(
+            out.matches(':').count() == 1,
+            "minute precision only (no seconds): {out}"
+        );
+        // Shape: YYYY-MM-DD HH:MM
+        let (date, time) = out
+            .split_once(' ')
+            .expect("date and time separated by space");
+        assert_eq!(date.len(), 10, "YYYY-MM-DD: {out}");
+        assert_eq!(time.len(), 5, "HH:MM: {out}");
+
+        // It must equal the same instant converted to the machine's local zone,
+        // independent of what that zone is.
+        let expected = utc
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string();
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn build_system_prompt_asserts_timestamp_visibility() {
+        let prompt = build_system_prompt("", "", "", "", "", "2026-06-23 14:30 CST");
+        assert!(
+            prompt.contains("## 时间感知"),
+            "time-awareness section present"
+        );
+        assert!(
+            prompt.contains("2026-06-23 14:30 CST"),
+            "current time injected"
+        );
+        // The anti-denial instruction must survive into the final prompt — this
+        // is what counters the model's "I can't see metadata" reflex.
+        assert!(
+            prompt.contains("绝不要说自己看不到时间戳"),
+            "must instruct the model not to deny seeing timestamps"
+        );
+        // When no time is supplied the section is omitted entirely.
+        let no_time = build_system_prompt("", "", "", "", "", "");
+        assert!(
+            !no_time.contains("## 时间感知"),
+            "section omitted without a time"
+        );
+    }
+
+    #[test]
+    fn memory_context_line_tags_label_and_local_date() {
+        use chrono::TimeZone;
+        let recorded = Utc.with_ymd_and_hms(2026, 6, 20, 1, 30, 0).unwrap();
+        let line = memory_context_line("goal", "下周要交方案", recorded);
+
+        assert!(
+            line.starts_with("- [目标·记于"),
+            "label + recorded marker: {line}"
+        );
+        assert!(line.contains("下周要交方案"), "content preserved: {line}");
+        assert!(!line.contains("UTC"), "no raw UTC suffix: {line}");
+        // Date is the local calendar date of the same instant, day precision.
+        let expected_date = recorded
+            .with_timezone(&Local)
+            .format("%Y-%m-%d")
+            .to_string();
+        assert!(
+            line.contains(&expected_date),
+            "local date {expected_date} in: {line}"
+        );
+        // Unknown types fall back to the generic label.
+        assert!(memory_context_line("weird", "x", recorded).contains("[信息·记于"));
     }
 
     #[test]
@@ -2340,9 +3534,36 @@ mod tests {
     }
 
     #[test]
+    fn web_search_budget_allows_only_one_call_per_turn() {
+        let mut used = false;
+        assert!(claim_web_search_budget("web_search", &mut used));
+        assert!(!claim_web_search_budget("web_search", &mut used));
+        assert!(claim_web_search_budget("get_current_time", &mut used));
+    }
+
+    #[test]
+    fn later_tool_iterations_remove_web_search_definition() {
+        let tools = chat_tools();
+        assert!(tool_definitions_for_iteration(&tools, false)
+            .iter()
+            .any(|tool| tool.function.name == "web_search"));
+        assert!(!tool_definitions_for_iteration(&tools, true)
+            .iter()
+            .any(|tool| tool.function.name == "web_search"));
+    }
+
+    #[test]
+    fn search_failure_response_has_no_cutoff_story_or_unverified_link() {
+        let message = web_search_failure_response();
+        assert!(!message.contains("训练"));
+        assert!(!message.contains("http"));
+        assert!(!message.contains("LMSYS"));
+    }
+
+    #[test]
     fn build_system_prompt_includes_personality_snippet() {
         let snippet = "## 当前人格参数\n测试人格";
-        let prompt = build_system_prompt(snippet, "", "", "", "");
+        let prompt = build_system_prompt(snippet, "", "", "", "", "");
         assert!(
             prompt.contains("当前人格参数"),
             "System prompt should include personality snippet. Got:\n{prompt}"
@@ -2356,7 +3577,7 @@ mod tests {
     #[test]
     fn build_system_prompt_skips_memory_when_empty() {
         let snippet = "## 当前人格参数\n- 直接度：中";
-        let prompt = build_system_prompt(snippet, "", "", "", "");
+        let prompt = build_system_prompt(snippet, "", "", "", "", "");
         assert!(
             !prompt.contains("用户档案与记忆"),
             "System prompt should NOT include memory section when memory is empty"
@@ -2367,7 +3588,7 @@ mod tests {
     fn build_system_prompt_includes_memory_when_present() {
         let snippet = "## 当前人格参数\n- 直接度：中";
         let memories = "- [偏好] 喜欢安静的环境\n- [事实] 住在北京";
-        let prompt = build_system_prompt(snippet, memories, "", "", "");
+        let prompt = build_system_prompt(snippet, memories, "", "", "", "");
         assert!(
             prompt.contains("用户档案与记忆"),
             "System prompt should include memory section when memories exist"
@@ -2390,13 +3611,86 @@ mod tests {
     }
 
     #[test]
+    fn build_aggregation_prompt_includes_question_and_every_draft() {
+        let drafts = vec![
+            (
+                "DeepSeek · deepseek-chat".to_string(),
+                "先给出方案 A。".to_string(),
+            ),
+            ("OpenAI · gpt-4o".to_string(), "补充风险 B。".to_string()),
+        ];
+
+        let prompt = build_aggregation_prompt("如何规划一个 MoA 功能?", &drafts, "保持简洁");
+
+        assert!(prompt.contains("用户的问题"));
+        assert!(prompt.contains("如何规划一个 MoA 功能?"));
+        assert!(prompt.contains("DeepSeek · deepseek-chat"));
+        assert!(prompt.contains("先给出方案 A。"));
+        assert!(prompt.contains("OpenAI · gpt-4o"));
+        assert!(prompt.contains("补充风险 B。"));
+        assert!(prompt.contains("只输出一次最终答案"));
+        assert!(prompt.contains("不要输出\"我来搜索\""));
+        assert!(prompt.contains("直接输出最终回答"));
+    }
+
+    #[test]
+    fn enhance_request_override_replaces_members_without_persisting_shape() {
+        let saved_member = EnhanceMemberConfig {
+            provider_id: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+        };
+        let selected_member = EnhanceMemberConfig {
+            provider_id: "deepseek".to_string(),
+            model: "deepseek-chat".to_string(),
+        };
+        let selected_aggregator = EnhanceMemberConfig {
+            provider_id: "anthropic".to_string(),
+            model: "claude-sonnet-4".to_string(),
+        };
+        let saved = EnhanceSettings {
+            enabled_default: true,
+            members: vec![saved_member],
+            aggregator: None,
+            per_model_timeout_ms: 30_000,
+            max_parallel: 4,
+        };
+
+        let merged = apply_enhance_override(
+            saved,
+            Some(EnhanceRequestOverride {
+                members: Some(vec![selected_member.clone()]),
+                aggregator: Some(selected_aggregator.clone()),
+                per_model_timeout_ms: Some(0),
+                max_parallel: Some(0),
+            }),
+        );
+
+        assert_eq!(merged.members.len(), 1);
+        assert_eq!(merged.members[0].provider_id, selected_member.provider_id);
+        assert_eq!(merged.members[0].model, selected_member.model);
+        assert_eq!(
+            merged
+                .aggregator
+                .as_ref()
+                .map(|m| (m.provider_id.as_str(), m.model.as_str())),
+            Some((
+                selected_aggregator.provider_id.as_str(),
+                selected_aggregator.model.as_str()
+            ))
+        );
+        assert_eq!(merged.per_model_timeout_ms, 1_000);
+        assert_eq!(merged.max_parallel, 1);
+    }
+
+    #[test]
     fn build_system_prompt_contains_base_identity() {
         let snippet = "## 当前人格参数\n- 直接度：中";
         let caps = capability_section(&crate::routes::permissions::PermissionSettings::default());
-        let prompt = build_system_prompt(snippet, "", "", "", &caps);
+        let prompt = build_system_prompt(snippet, "", "", "", &caps, "");
         assert!(prompt.contains("灵枢"));
         assert!(prompt.contains("LingShu"));
         assert!(prompt.contains("权限边界"));
+        assert!(prompt.contains("每个用户回合只输出一条最终回复"));
     }
 
     #[test]
@@ -2423,6 +3717,7 @@ mod tests {
     fn capability_section_reflects_real_grant_state() {
         use crate::routes::permissions::PermissionSettings;
         let granted = PermissionSettings {
+            l1_web_search: true,
             l1_calendar: true,
             l3_accessibility: true,
             ..Default::default()
@@ -2431,17 +3726,35 @@ mod tests {
         assert!(caps.contains(
             "L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前已开启"
         ));
+        assert!(caps.contains("L1 联网搜索：只读搜索公开网页 —— 当前已开启"));
         assert!(caps.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前已开启"));
 
         // Default permissions have everything off — the section must say so
         // rather than claiming the capability is available (the original bug).
         let denied = capability_section(&PermissionSettings::default());
+        assert!(denied.contains("L1 联网搜索：只读搜索公开网页 —— 当前未开启（需用户授权后可用）"));
         assert!(denied.contains("L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前未开启（需用户授权后可用）"));
         assert!(denied.contains(
             "L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前未开启（需用户授权后可用）"
         ));
         // …but "未开启" must never read as "功能不存在".
         assert!(denied.contains("不等于功能不存在"));
+    }
+
+    #[test]
+    fn regeneration_instruction_maps_style_tags_to_rewrite_requirements() {
+        assert!(regeneration_instruction(ReplyStyleTag::Long).contains("压缩篇幅"));
+        assert!(regeneration_instruction(ReplyStyleTag::Short).contains("适当展开"));
+        assert!(regeneration_instruction(ReplyStyleTag::Formal).contains("口语"));
+    }
+
+    #[test]
+    fn regeneration_prompt_asks_for_rewritten_body_only() {
+        let prompt = regeneration_prompt(ReplyStyleTag::Formal, "原来的正式回复");
+        assert!(prompt.contains("原来的正式回复"));
+        assert!(prompt.contains("只输出重写后的回复正文"));
+        assert!(prompt.contains("不要提到"));
+        assert!(prompt.contains("不要新增未验证事实"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod message;
 pub mod personality;
 pub mod project;
 pub mod project_member;
+pub mod provider;
 pub mod task;
 pub mod task_dependency;
 pub mod thought;

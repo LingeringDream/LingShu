@@ -10,8 +10,6 @@
 //! cooldown.
 
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 use uuid::Uuid;
 
 use crate::llm::client::{ChatMessage, LlmClient};
@@ -35,25 +33,17 @@ const PERSONALITY_EVOLUTION_COOLDOWN_SECS: u64 = 24 * 60 * 60; // 24 hours
 
 // ── Cooldown (auto-trigger only) ──────────────────────────────────
 
-static LAST_EVOLUTIONS: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
-
 /// Check whether the per-user cooldown allows an automatic evolution
 /// trigger. Used by the chat post-stream path; the manual endpoint
 /// (`POST /api/v1/personality/evolve`) does **not** call this.
 pub fn should_evolve_personality(user_id: Uuid) -> bool {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let mut map = last_evolutions()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    should_evolve_personality_at(&mut map, user_id, now)
+    crate::cooldown::personality_evolutions().should_run(user_id)
 }
 
 /// Pure helper — testable without real system clock.
+#[cfg(test)]
 pub fn should_evolve_personality_at(
-    last: &mut HashMap<Uuid, u64>,
+    last: &mut std::collections::HashMap<Uuid, u64>,
     user_id: Uuid,
     now: u64,
 ) -> bool {
@@ -64,10 +54,6 @@ pub fn should_evolve_personality_at(
     }
     last.insert(user_id, now);
     true
-}
-
-fn last_evolutions() -> &'static Mutex<HashMap<Uuid, u64>> {
-    LAST_EVOLUTIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 // ── Public types ──────────────────────────────────────────────────
@@ -410,6 +396,7 @@ pub fn filter_source_memory_ids(ids: &[Uuid], valid_set: &[Uuid]) -> Vec<Uuid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn sample_traits(directness: f32) -> PersonalityTraits {
         PersonalityTraits {

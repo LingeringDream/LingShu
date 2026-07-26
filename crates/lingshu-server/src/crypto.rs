@@ -124,6 +124,107 @@ pub fn decrypt(blob: &[u8], key: &str) -> anyhow::Result<String> {
     TokenCipher::from_key_str(key)?.decrypt(blob)
 }
 
+// ── Shared encryption key file (single source of truth across launch modes) ─
+//
+// The packaged Tauri app generates and persists a random key at
+// `~/Library/Application Support/com.lingshu.desktop/sidecar-encryption-key`
+// (see the matching `sidecar_encryption_key` logic in `src-tauri/src/main.rs`).
+// When the backend runs natively (dev) with no explicit `ENCRYPTION_KEY` in
+// env/config, it reads/creates the SAME file so every local launch mode
+// (`cargo run`, `tauri dev`, packaged app) shares one key and can decrypt
+// provider API keys saved by any other mode. Docker/Linux deployments are not
+// covered (they supply `ENCRYPTION_KEY` via env), so this returns `None` there.
+
+/// AES-256 key length in bytes; the generated key is this many random bytes hex-encoded.
+#[cfg(any(target_os = "macos", test))]
+const SHARED_KEY_LEN: usize = 32;
+
+/// Load (or create) the shared encryption key. Returns `None` on non-macOS
+/// platforms, where `ENCRYPTION_KEY` must be supplied via env/config instead.
+#[cfg(target_os = "macos")]
+pub fn load_or_create_shared_encryption_key() -> Option<String> {
+    let path = shared_encryption_key_path()?;
+    load_or_create_shared_encryption_key_at(&path, generate_shared_encryption_key)
+}
+
+/// Non-macOS: no shared file; rely on env/config `ENCRYPTION_KEY`.
+#[cfg(not(target_os = "macos"))]
+pub fn load_or_create_shared_encryption_key() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+const SHARED_KEY_IDENTIFIER: &str = "com.lingshu.desktop";
+#[cfg(target_os = "macos")]
+const SHARED_KEY_FILE: &str = "sidecar-encryption-key";
+
+#[cfg(target_os = "macos")]
+fn shared_encryption_key_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        std::path::Path::new(&home)
+            .join("Library/Application Support")
+            .join(SHARED_KEY_IDENTIFIER)
+            .join(SHARED_KEY_FILE),
+    )
+}
+
+/// Read an existing key file (trimmed, non-empty) or generate, persist (0600 on
+/// unix), and return a new one. Path-injectable mirror of the Tauri-side helper
+/// so it can be unit-tested without touching the real config dir.
+#[cfg(any(target_os = "macos", test))]
+fn load_or_create_shared_encryption_key_at(
+    path: &std::path::Path,
+    generate: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    if let Ok(existing) = std::fs::read_to_string(path) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    let key = generate()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    write_secret_file(path, &key).ok()?;
+    Some(key)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn write_secret_file(path: &std::path::Path, value: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(value.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn generate_shared_encryption_key() -> Option<String> {
+    let mut bytes = [0u8; SHARED_KEY_LEN];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    Some(encode_hex(&bytes))
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +328,52 @@ mod tests {
         let k1 = derive_key("key-a");
         let k2 = derive_key("key-b");
         assert_ne!(k1, k2, "different inputs must produce different keys");
+    }
+
+    // ── Shared encryption key file ──────────────────────────────
+
+    fn unique_temp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "lingshu-shared-key-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
+    #[test]
+    fn shared_key_reuses_existing_file() {
+        let path = unique_temp_path("existing");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, "  existing-shared-key  \n").unwrap();
+
+        let key = load_or_create_shared_encryption_key_at(&path, || {
+            panic!("existing key must not be regenerated")
+        })
+        .expect("existing key");
+
+        assert_eq!(key, "existing-shared-key");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn shared_key_creates_missing_file_with_generated_value() {
+        let path = unique_temp_path("missing");
+        let _ = std::fs::remove_file(&path);
+
+        let key = load_or_create_shared_encryption_key_at(&path, generate_shared_encryption_key)
+            .expect("generated key");
+
+        // 32 random bytes hex-encoded
+        assert_eq!(key.len(), SHARED_KEY_LEN * 2);
+        assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
+        // Persisted (newline-terminated) and reused on the next read.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{key}\n"));
+        let reread =
+            load_or_create_shared_encryption_key_at(&path, || panic!("must reuse persisted key"))
+                .expect("reread key");
+        assert_eq!(reread, key);
+        let _ = std::fs::remove_file(path);
     }
 }

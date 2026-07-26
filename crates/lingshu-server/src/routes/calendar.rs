@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query},
     routing, Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -11,7 +11,7 @@ use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::llm::client::ChatMessage;
 use crate::routes::permissions::{permissions_for_user, PermissionSettings};
-use crate::routes::settings::llm_settings_for_user;
+use crate::routes::settings::{llm_settings_for_user, resolve_client_for_user};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -44,6 +44,8 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ParseRequest {
     pub text: String,
+    #[serde(default)]
+    pub recurrence: Option<RecurrenceRule>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -55,7 +57,74 @@ pub struct ParsedEvent {
     pub end_time: String,
     pub attendees: Vec<String>,
     pub calendar_name: String,
+    #[serde(default)]
+    pub recurrence: RecurrenceRule,
     pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecurrenceFrequency {
+    None,
+    Daily,
+    Weekly,
+    Monthly,
+    Yearly,
+}
+
+impl Default for RecurrenceFrequency {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct RecurrenceRule {
+    #[serde(default)]
+    pub frequency: RecurrenceFrequency,
+    #[serde(default = "default_recurrence_interval")]
+    pub interval: u32,
+    #[serde(default)]
+    pub until: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub count: Option<u32>,
+}
+
+impl Default for RecurrenceRule {
+    fn default() -> Self {
+        Self {
+            frequency: RecurrenceFrequency::None,
+            interval: default_recurrence_interval(),
+            until: None,
+            count: None,
+        }
+    }
+}
+
+fn default_recurrence_interval() -> u32 {
+    1
+}
+
+pub fn recurrence_label(rule: &RecurrenceRule) -> String {
+    let unit = match rule.frequency {
+        RecurrenceFrequency::None => return "一次".to_string(),
+        RecurrenceFrequency::Daily => "天",
+        RecurrenceFrequency::Weekly => "周",
+        RecurrenceFrequency::Monthly => "月",
+        RecurrenceFrequency::Yearly => "年",
+    };
+    if rule.interval <= 1 {
+        match rule.frequency {
+            RecurrenceFrequency::Daily => "每天",
+            RecurrenceFrequency::Weekly => "每周",
+            RecurrenceFrequency::Monthly => "每月",
+            RecurrenceFrequency::Yearly => "每年",
+            RecurrenceFrequency::None => "一次",
+        }
+        .to_string()
+    } else {
+        format!("每 {} {}", rule.interval, unit)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -69,6 +138,7 @@ pub struct EventResponse {
     pub attendees: serde_json::Value,
     pub status: String,
     pub calendar_name: String,
+    pub recurrence: RecurrenceRule,
     pub parse_confidence: Option<f32>,
     pub source_input: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -89,6 +159,8 @@ pub struct CreateEventRequest {
     pub attendees: Vec<String>,
     #[serde(default = "default_calendar")]
     pub calendar_name: String,
+    #[serde(default)]
+    pub recurrence: RecurrenceRule,
     #[serde(default)]
     pub source_input: Option<String>,
     #[serde(default)]
@@ -129,6 +201,23 @@ fn validate_event_time(start: DateTime<Utc>, end: DateTime<Utc>) -> Result<(), A
     Ok(())
 }
 
+fn normalize_recurrence(rule: RecurrenceRule) -> Result<RecurrenceRule, AppError> {
+    if rule.frequency == RecurrenceFrequency::None {
+        return Ok(RecurrenceRule::default());
+    }
+    if rule.interval == 0 {
+        return Err(AppError::Validation(
+            "recurrence.interval must be at least 1".into(),
+        ));
+    }
+    if matches!(rule.count, Some(0)) {
+        return Err(AppError::Validation(
+            "recurrence.count must be at least 1".into(),
+        ));
+    }
+    Ok(rule)
+}
+
 /// Parse an RFC 3339 time string into [`DateTime<Utc>`].
 fn parse_time(raw: &str) -> Result<DateTime<Utc>, AppError> {
     DateTime::parse_from_rfc3339(raw)
@@ -150,6 +239,8 @@ async fn insert_calendar_event(
 ) -> Result<EventRow, AppError> {
     validate_event_time(req.start_time, req.end_time)?;
     let attendees = serde_json::to_value(&req.attendees).unwrap_or_default();
+    let recurrence = normalize_recurrence(req.recurrence)?;
+    let recurrence = serde_json::to_value(&recurrence).unwrap_or_default();
 
     let status = if perms.l1_require_confirmation {
         "pending_confirmation"
@@ -160,10 +251,10 @@ async fn insert_calendar_event(
     let row: EventRow = sqlx::query_as(
         "INSERT INTO calendar_events \
          (user_id, title, description, location, start_time, end_time, \
-          attendees, calendar_name, parse_confidence, source_input, status) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
+          attendees, calendar_name, recurrence, parse_confidence, source_input, status) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         attendees, status, calendar_name, recurrence, parse_confidence, source_input, created_at, \
          apple_event_id, external_event_id",
     )
     .bind(user_id)
@@ -174,6 +265,7 @@ async fn insert_calendar_event(
     .bind(req.end_time)
     .bind(&attendees)
     .bind(&req.calendar_name)
+    .bind(&recurrence)
     .bind(req.parse_confidence)
     .bind(&req.source_input)
     .bind(status)
@@ -225,6 +317,15 @@ pub async fn parse_and_create_event(
     user_id: Uuid,
     text: &str,
 ) -> Result<EventResponse, AppError> {
+    parse_and_create_event_with_recurrence(state, user_id, text, None).await
+}
+
+async fn parse_and_create_event_with_recurrence(
+    state: &AppState,
+    user_id: Uuid,
+    text: &str,
+    recurrence_override: Option<RecurrenceRule>,
+) -> Result<EventResponse, AppError> {
     let perms = check_calendar_permission(state, user_id).await?;
     let settings = llm_settings_for_user(state, user_id).await;
     let model = settings.model.clone();
@@ -235,36 +336,27 @@ pub async fn parse_and_create_event(
 
     // Use per-user provider overrides so calendar parsing uses the same
     // LLM backend as chat (e.g. DeepSeek) instead of falling back to Ollama.
-    let llm = if settings.provider == "openai" && !settings.api_base_url.is_empty() {
-        state.llm.with_overrides(
-            if settings.api_key.is_empty() {
-                None
-            } else {
-                Some(settings.api_key.clone())
-            },
-            if settings.api_base_url.is_empty() {
-                None
-            } else {
-                Some(settings.api_base_url.clone())
-            },
-        )
-    } else {
-        state.llm.clone()
-    };
+    // Propagate a decrypt failure (stale ENCRYPTION_KEY) as a clear error.
+    let llm = resolve_client_for_user(state, user_id, &settings).await?;
 
-    let now = Utc::now().to_rfc3339();
+    // Local time with offset (e.g. ...+08:00) so the model anchors "今天/今晚/
+    // 几小时后" to the user's wall clock and emits local-offset times. Using UTC
+    // here made it tag local clock times as +00:00 — "今天下午3点" came out as
+    // 15:00Z = 23:00 local, an 8h error for UTC+8.
+    let now = Local::now().to_rfc3339();
     let prompt = format!(
         r###"你是 灵枢（LingShu）的日历解析引擎。请从用户的自然语言输入中提取一个日程事件。
 
-今天是 {now}。所有用户的时间表述都是相对于此日期的。
+现在是 {now}（本地时间，已含时区偏移）。用户的所有时间表述都基于这个本地时区；你输出的 start_time / end_time 必须使用同一本地时区偏移（如 +08:00），绝不要改用 UTC（+00:00）。
 
 ## 解析规则
 - **title**：简短日程标题。如果用户说「和张三开会讨论需求」，标题应为「与张三讨论需求」而非「开会」。
-- **start_time / end_time**：ISO 8601 格式。如果用户只说开始时间没说时长，默认持续 1 小时。如果只说「下午」，默认 14:00。注意区分「明天下午」和「今天下午」。
+- **start_time / end_time**：ISO 8601 格式，**带本地时区偏移**（例如 2026-06-24T15:00:00+08:00，而非 ...Z 或 +00:00）。如果用户只说开始时间没说时长，默认持续 1 小时。如果只说「下午」，默认 14:00。注意区分「明天下午」和「今天下午」。
 - **description**：备注、会议链接、讨论要点等额外信息。没有则设为 null。
 - **location**：线下地点或线上会议链接。没有则设为 null。
 - **attendees**：参与人姓名数组。从「和张三李四一起」「叫上王五」等表述中提取。没有则为空数组 []。
 - **calendar_name**：根据语境推断。提到工作/会议/客户 → "work"；提到私人/家人/健身/看病 → "personal"；其余 → "default"。
+- **recurrence**：重复规则。一次性事件返回 {{"frequency":"none","interval":1}}。用户说「每天/每日」→ daily，「每周/每星期」→ weekly，「每月」→ monthly，「每年」→ yearly。没有明确重复则 frequency 为 "none"。interval 默认 1。
 - **confidence**：你的解析置信度。时间表述模糊时降低，例如只说「下周」而非具体日期，或参与人不明确。
 
 ## 示例
@@ -279,6 +371,7 @@ pub async fn parse_and_create_event(
   "end_time": "...T16:00:00+08:00",
   "attendees": ["产品组"],
   "calendar_name": "work",
+  "recurrence": {{"frequency":"none","interval":1}},
   "confidence": 0.9
 }}
 ```
@@ -326,6 +419,7 @@ JSON："###
         end_time: parse_time(&parsed.end_time)?,
         attendees: parsed.attendees,
         calendar_name: parsed.calendar_name,
+        recurrence: recurrence_override.unwrap_or(parsed.recurrence),
         source_input: Some(text.to_string()),
         parse_confidence: Some(parsed.confidence),
     };
@@ -348,7 +442,7 @@ pub async fn list_user_events(
 
     let rows: Vec<EventRow> = sqlx::query_as(
         "SELECT id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         attendees, status, calendar_name, recurrence, parse_confidence, source_input, created_at, \
          apple_event_id, external_event_id \
          FROM calendar_events WHERE user_id = $1 \
          ORDER BY start_time DESC LIMIT $2",
@@ -415,7 +509,8 @@ async fn parse_calendar(
     Json(req): Json<ParseRequest>,
 ) -> Result<(axum::http::StatusCode, Json<EventResponse>), AppError> {
     let user_id = auth::require_user(auth).await?;
-    let event = parse_and_create_event(&state, user_id, &req.text).await?;
+    let event =
+        parse_and_create_event_with_recurrence(&state, user_id, &req.text, req.recurrence).await?;
     Ok((axum::http::StatusCode::CREATED, Json(event)))
 }
 
@@ -470,22 +565,23 @@ async fn update_event(
     Json(req): Json<CreateEventRequest>,
 ) -> Result<Json<EventResponse>, AppError> {
     let user_id = auth::require_user(auth).await?;
-    let perms = check_calendar_permission(&state, user_id).await?;
-    if perms.l1_require_confirmation {
-        return Err(AppError::Forbidden(
-            "Calendar updates require an explicit confirmation flow before execution.".into(),
-        ));
-    }
+    // User-initiated edits from the workspace are explicit actions — gate on the
+    // L1 calendar permission only, mirroring delete_event. (Previously this
+    // returned 403 whenever l1_require_confirmation was on, which blocked the
+    // user from editing their own events at all.)
+    check_calendar_permission(&state, user_id).await?;
     validate_event_time(req.start_time, req.end_time)?;
     let attendees = serde_json::to_value(&req.attendees).unwrap_or_default();
+    let recurrence = normalize_recurrence(req.recurrence)?;
+    let recurrence = serde_json::to_value(&recurrence).unwrap_or_default();
 
     let row: EventRow = sqlx::query_as(
         "UPDATE calendar_events SET title=$1, description=$2, location=$3, \
-         start_time=$4, end_time=$5, attendees=$6, calendar_name=$7, \
+         start_time=$4, end_time=$5, attendees=$6, calendar_name=$7, recurrence=$8, \
          updated_at=NOW() \
-         WHERE id=$8 AND user_id=$9 \
+         WHERE id=$9 AND user_id=$10 \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         attendees, status, calendar_name, recurrence, parse_confidence, source_input, created_at, \
          apple_event_id, external_event_id",
     )
     .bind(&req.title)
@@ -495,6 +591,7 @@ async fn update_event(
     .bind(req.end_time)
     .bind(&attendees)
     .bind(&req.calendar_name)
+    .bind(&recurrence)
     .bind(id)
     .bind(user_id)
     .fetch_optional(&state.db)
@@ -535,7 +632,7 @@ async fn confirm_event(
         "UPDATE calendar_events SET status = 'confirmed', updated_at = NOW() \
          WHERE id = $1 AND user_id = $2 AND status = 'pending_confirmation' \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         attendees, status, calendar_name, recurrence, parse_confidence, source_input, created_at, \
          apple_event_id, external_event_id",
     )
     .bind(id)
@@ -594,7 +691,7 @@ async fn save_apple_event_id(
         "UPDATE calendar_events SET apple_event_id = $1, updated_at = NOW() \
          WHERE id = $2 AND user_id = $3 AND status = 'confirmed' \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         attendees, status, calendar_name, recurrence, parse_confidence, source_input, created_at, \
          apple_event_id, external_event_id",
     )
     .bind(apple_event_id)
@@ -668,7 +765,7 @@ async fn write_external_event_id(
          SET external_event_id = $1, synced_to_eventkit = true, updated_at = NOW() \
          WHERE id = $2 AND user_id = $3 AND status = 'confirmed' \
          RETURNING id, title, description, location, start_time, end_time, \
-         attendees, status, calendar_name, parse_confidence, source_input, created_at, \
+         attendees, status, calendar_name, recurrence, parse_confidence, source_input, created_at, \
          apple_event_id, external_event_id",
     )
     .bind(external_event_id)
@@ -745,6 +842,7 @@ struct EventRow {
     attendees: serde_json::Value,
     status: String,
     calendar_name: String,
+    recurrence: serde_json::Value,
     parse_confidence: Option<f32>,
     source_input: Option<String>,
     created_at: DateTime<Utc>,
@@ -764,6 +862,7 @@ impl EventRow {
             attendees: self.attendees,
             status: self.status,
             calendar_name: self.calendar_name,
+            recurrence: serde_json::from_value(self.recurrence).unwrap_or_default(),
             parse_confidence: self.parse_confidence,
             source_input: self.source_input,
             created_at: self.created_at,
@@ -778,6 +877,7 @@ impl EventRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn parse_time_valid_rfc3339_succeeds() {
@@ -813,6 +913,36 @@ mod tests {
     fn parse_time_empty_string_returns_validation() {
         let err = parse_time("").unwrap_err();
         assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[test]
+    fn create_event_request_defaults_to_one_time_recurrence() {
+        let req: CreateEventRequest = serde_json::from_value(json!({
+            "title": "一次性会议",
+            "start_time": "2026-06-16T13:30:00Z",
+            "end_time": "2026-06-16T14:30:00Z"
+        }))
+        .expect("deserialize create event request");
+
+        assert_eq!(req.recurrence, RecurrenceRule::default());
+        assert_eq!(req.recurrence.frequency, RecurrenceFrequency::None);
+    }
+
+    #[test]
+    fn create_event_request_accepts_recurring_rule() {
+        let req: CreateEventRequest = serde_json::from_value(json!({
+            "title": "每日复盘",
+            "start_time": "2026-06-16T13:30:00Z",
+            "end_time": "2026-06-16T14:30:00Z",
+            "recurrence": {
+                "frequency": "daily",
+                "interval": 2
+            }
+        }))
+        .expect("deserialize recurring event request");
+
+        assert_eq!(req.recurrence.frequency, RecurrenceFrequency::Daily);
+        assert_eq!(req.recurrence.interval, 2);
     }
 
     #[test]

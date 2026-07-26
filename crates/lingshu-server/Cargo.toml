@@ -36,6 +36,7 @@ rand = { workspace = true }
 prometheus-client = { workspace = true }
 futures = { workspace = true }
 bytes = { workspace = true }
+scraper = { workspace = true }
 
 dotenvy = "0.15"
 # getppid() for the "exit when the Tauri parent dies" sidecar watchdog (unix

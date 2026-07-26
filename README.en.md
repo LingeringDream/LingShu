@@ -1,6 +1,6 @@
 # LingShu · 灵枢
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FLingeringDream%2FLingShu%2Fmain%2FCargo.toml&query=%24.workspace.package.version&label=version&prefix=v&color=blue)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.88-orange)](./rust-toolchain.toml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](./CONTRIBUTING.md)
@@ -23,13 +23,14 @@ A macOS desktop-companion AI assistant — a floating desktop pet with long-term
 | Integration Token Encryption | AES-256-GCM at-rest encryption | ✅ Implemented |
 | Signal Telemetry | Append-only event log, wired into memory, personality, and chat paths | ✅ Implemented |
 | Chat Tool Calling | Native tool-use loop, supports Ollama / OpenAI-compatible / DeepSeek models | ✅ Implemented |
+| Web Search | Search public webpages in chat with titles, snippets, and source URLs; controlled by a separate L1 permission | ✅ Implemented |
 | Role Prompts | User-customizable system role prompts, integrated into chat workspace | ✅ Implemented |
 | Markdown Rendering | MessageBubble supports formatted Markdown display | ✅ Implemented |
 | LLM Settings Persistence | LLM config (model, max_tokens, context_messages, etc.) stored in PostgreSQL, survives restarts | ✅ Implemented |
 
 ## Project Status
 
-**v1.0.0 — Core features complete; finishing desktop/native integration.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and calendar EventKit write-back/delete are all implemented. Backend carries **300+ test functions (16 DB-gated ignored)**; the frontend adds a Vitest suite (stores / lib / components, 18 tests).
+**Core features complete; finishing desktop/native integration.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and calendar EventKit write-back/delete are all implemented. Backend carries **300+ test functions (16 DB-gated ignored)**; the frontend adds a Vitest suite (stores / lib / components, 18 tests).
 
 - ✅ Rust + Axum backend (API, WebSocket, DB migrations 001–0022)
 - ✅ React + TypeScript + Vite frontend (chat + memory/personality/calendar/thought centers + settings + role prompts + workspace)
@@ -43,6 +44,7 @@ A macOS desktop-companion AI assistant — a floating desktop pet with long-term
 - ✅ Tauri 2 desktop shell (main + pet windows) + EventKit bridge (macOS 14+ `NSCalendarsFullAccessUsageDescription`)
 - ✅ Apple Calendar: NL parse + CRUD + L1 confirmation + EventKit write-back/delete + external_event_id sync
 - ✅ Chat: tool-use loop, role prompts, Markdown rendering, streaming SSE responses
+- ✅ Web search: separate L1 permission, result parsing, source preservation, timeout and response-size limits
 - ✅ LLM settings persisted to PostgreSQL (model, max_tokens, context_messages, etc. — survives restarts)
 - ✅ Frontend Vitest unit suite (chatStore / memoryStore / projectStore / MessageBubble / api / tauri / eventkit)
 

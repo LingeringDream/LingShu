@@ -1,6 +1,4 @@
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 use tracing;
 use uuid::Uuid;
 
@@ -11,7 +9,6 @@ use lingshu_vector::search::{QdrantClient, SearchResult};
 use sqlx::PgPool;
 
 /// Minimum seconds between memory extraction calls to avoid overwhelming the LLM.
-static LAST_EXTRACTIONS: OnceLock<Mutex<HashMap<Uuid, u64>>> = OnceLock::new();
 const EXTRACTION_COOLDOWN_SECS: u64 = 60;
 
 /// A memory candidate extracted from conversation by LLM.
@@ -284,17 +281,7 @@ pub async fn extract_and_save(
     user_message: &str,
     assistant_response: &str,
 ) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let should_extract = {
-        let mut last_extractions = last_extractions()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        should_extract_memory(&mut last_extractions, user_id, now)
-    };
+    let should_extract = crate::cooldown::memory_extractions().should_run(user_id);
     if !should_extract {
         return;
     }
@@ -422,12 +409,9 @@ fn parse_candidates(raw: &str) -> anyhow::Result<Vec<MemoryCandidate>> {
     Ok(candidates)
 }
 
-fn last_extractions() -> &'static Mutex<HashMap<Uuid, u64>> {
-    LAST_EXTRACTIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
+#[cfg(test)]
 fn should_extract_memory(
-    last_extractions: &mut HashMap<Uuid, u64>,
+    last_extractions: &mut std::collections::HashMap<Uuid, u64>,
     user_id: Uuid,
     now: u64,
 ) -> bool {
