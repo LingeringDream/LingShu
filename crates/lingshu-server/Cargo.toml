@@ -2,6 +2,7 @@
 name = "lingshu-server"
 version.workspace = true
 edition.workspace = true
+license-file.workspace = true
 
 [[bin]]
 name = "lingshu-server"

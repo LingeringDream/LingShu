@@ -3,7 +3,7 @@ name = "lingshu-tauri"
 version = "1.4.0"
 description = "灵枢 (LingShu) — macOS Desktop AI Assistant"
 edition = "2021"
-license = "MIT"
+license-file = "../LICENSE"
 
 # NOT part of the root cargo workspace — Tauri pulls its own tokio & deps
 # to avoid version conflicts with the axum backend. Build with:

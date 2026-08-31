@@ -1,7 +1,7 @@
 # 灵枢 · LingShu
 
 [![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FLingeringDream%2FLingShu%2Fmain%2FCargo.toml&query=%24.workspace.package.version&label=version&prefix=v&color=blue)](./CHANGELOG.md)
-[![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![License](https://img.shields.io/badge/license-Commercial-red)](./LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.88-orange)](./rust-toolchain.toml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](./CONTRIBUTING.md)
 
@@ -262,4 +262,4 @@ OpenAPI 3.0 由 [utoipa](https://github.com/juhaku/utoipa) 生成，覆盖全部
 
 ## 许可证
 
-MIT — 详见 [LICENSE](./LICENSE)。
+商业专有软件，未经书面商业授权不得使用、复制、修改或分发。详见 [LICENSE](./LICENSE)。
