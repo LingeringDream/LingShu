@@ -9,6 +9,7 @@ mod cooldown;
 mod crypto;
 mod db;
 mod error;
+mod file_tools;
 mod llm;
 mod models;
 mod patch;
@@ -22,7 +23,6 @@ mod ws;
 
 use axum::http::{HeaderValue, Method};
 use axum::Router;
-#[cfg(unix)]
 use std::ffi::OsStr;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -30,11 +30,13 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::config::AppConfig;
 use crate::state::AppState;
 
-#[cfg(unix)]
 const EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
-#[cfg(unix)]
 const EXIT_WITH_PARENT_VALUE: &str = "1";
 const LOCAL_FRONTEND_ORIGIN: &str = "http://localhost:5173";
+
+fn sidecar_mode_requested(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|value| value == EXIT_WITH_PARENT_VALUE)
+}
 
 /// When launched as the Tauri desktop sidecar (the spawner sets
 /// `LINGSHU_EXIT_WITH_PARENT=1`), terminate ourselves as soon as that parent
@@ -48,7 +50,7 @@ const LOCAL_FRONTEND_ORIGIN: &str = "http://localhost:5173";
 #[cfg(unix)]
 fn exit_when_parent_dies() {
     let requested = std::env::var_os(EXIT_WITH_PARENT_ENV);
-    if !parent_watch_requested(requested.as_deref()) {
+    if !sidecar_mode_requested(requested.as_deref()) {
         return;
     }
     let original_ppid = unsafe { libc::getppid() };
@@ -66,11 +68,6 @@ fn exit_when_parent_dies() {
             }
         })
         .ok();
-}
-
-#[cfg(unix)]
-fn parent_watch_requested(value: Option<&OsStr>) -> bool {
-    value.is_some_and(|value| value == EXIT_WITH_PARENT_VALUE)
 }
 
 #[cfg(unix)]
@@ -118,8 +115,7 @@ async fn main() -> anyhow::Result<()> {
     // Refuse to start with insecure default secrets in non-sidecar mode.
     // Sidecar mode (LINGSHU_EXIT_WITH_PARENT=1) is the Tauri desktop bundle
     // where the backend is an internal process not exposed to the network.
-    let is_sidecar = cfg!(unix)
-        && std::env::var_os(EXIT_WITH_PARENT_ENV).is_some_and(|v| v == EXIT_WITH_PARENT_VALUE);
+    let is_sidecar = sidecar_mode_requested(std::env::var_os(EXIT_WITH_PARENT_ENV).as_deref());
     if !is_sidecar {
         let insecure_defaults = [
             "lingshu-local-dev",
@@ -214,16 +210,13 @@ fn allowed_cors_origins(config: &crate::config::CorsConfig) -> Vec<HeaderValue> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
-    use std::ffi::OsStr;
 
-    #[cfg(unix)]
     #[test]
-    fn parent_watch_env_requires_exact_opt_in_value() {
-        assert!(!parent_watch_requested(None));
-        assert!(!parent_watch_requested(Some(OsStr::new(""))));
-        assert!(!parent_watch_requested(Some(OsStr::new("0"))));
-        assert!(parent_watch_requested(Some(OsStr::new("1"))));
+    fn sidecar_mode_requires_exact_opt_in_value_on_every_platform() {
+        assert!(!sidecar_mode_requested(None));
+        assert!(!sidecar_mode_requested(Some(OsStr::new(""))));
+        assert!(!sidecar_mode_requested(Some(OsStr::new("0"))));
+        assert!(sidecar_mode_requested(Some(OsStr::new("1"))));
     }
 
     #[cfg(unix)]

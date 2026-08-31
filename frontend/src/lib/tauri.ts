@@ -7,6 +7,43 @@
 // Phase B: invoke() for EventKit commands (create_calendar_event, etc.)
 
 let cachedIsTauri: boolean | null = null;
+let platformCapabilitiesRequest: Promise<PlatformCapabilities> | null = null;
+
+export type PlatformName = 'macos' | 'windows' | 'linux' | 'browser' | 'unknown';
+export type CalendarProvider = 'eventkit' | 'ics' | 'none';
+
+export interface PlatformCapabilities {
+  platform: PlatformName;
+  isDesktop: boolean;
+  calendarProvider: CalendarProvider;
+  screenReader: boolean;
+  applicationAutomation: boolean;
+  urlOpener: boolean;
+  pathOpener: boolean;
+  fileReader: boolean;
+  pdfReader: boolean;
+  desktopPet: boolean;
+}
+
+const BROWSER_CAPABILITIES: PlatformCapabilities = {
+  platform: 'browser',
+  isDesktop: false,
+  calendarProvider: 'ics',
+  screenReader: false,
+  applicationAutomation: false,
+  urlOpener: false,
+  pathOpener: false,
+  fileReader: false,
+  pdfReader: false,
+  desktopPet: false,
+};
+
+const UNKNOWN_DESKTOP_CAPABILITIES: PlatformCapabilities = {
+  ...BROWSER_CAPABILITIES,
+  platform: 'unknown',
+  isDesktop: true,
+  calendarProvider: 'none',
+};
 
 /** True when running inside a Tauri 2 webview. */
 export function isTauri(): boolean {
@@ -54,6 +91,33 @@ export async function invokeTauri<T>(
     console.error(`[tauri] invoke "${cmd}" failed:`, err);
     throw err;
   }
+}
+
+/**
+ * Return capabilities implemented by the current app build.
+ *
+ * Browser mode and an older/unreachable native bridge both receive a
+ * conservative fallback, so the UI hides unsupported actions instead of
+ * exposing a button that fails after click.
+ */
+export async function getPlatformCapabilities(): Promise<PlatformCapabilities> {
+  if (!isTauri()) return { ...BROWSER_CAPABILITIES };
+
+  if (!platformCapabilitiesRequest) {
+    platformCapabilitiesRequest = invokeTauri<PlatformCapabilities>('get_platform_capabilities')
+      .then((capabilities) => capabilities ?? { ...UNKNOWN_DESKTOP_CAPABILITIES })
+      .catch((error) => {
+        console.warn('[tauri] platform capability detection failed:', error);
+        return { ...UNKNOWN_DESKTOP_CAPABILITIES };
+      });
+  }
+
+  return platformCapabilitiesRequest;
+}
+
+/** Clear the stable runtime cache. Primarily useful for isolated tests. */
+export function resetPlatformCapabilitiesCache(): void {
+  platformCapabilitiesRequest = null;
 }
 
 /** Cross-window event: tell the main window to switch to a given section. */

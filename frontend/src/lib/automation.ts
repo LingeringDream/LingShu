@@ -7,11 +7,12 @@
 // + whitelist before emitting an action on the chat SSE stream, so this layer
 // only forwards approved actions to the OS.
 
-import { isTauri, invokeTauri } from './tauri';
+import { getPlatformCapabilities, invokeTauri } from './tauri';
 
 /** Open a macOS application by name. */
 export async function openApplication(name: string): Promise<boolean> {
-  if (!isTauri()) return false;
+  const capabilities = await getPlatformCapabilities();
+  if (!capabilities.applicationAutomation) return false;
   try {
     await invokeTauri('open_application', { name });
     return true;
@@ -23,7 +24,8 @@ export async function openApplication(name: string): Promise<boolean> {
 
 /** Open a URL in the default browser (http/https only — re-checked natively). */
 export async function openUrl(url: string): Promise<boolean> {
-  if (!isTauri()) return false;
+  const capabilities = await getPlatformCapabilities();
+  if (!capabilities.urlOpener) return false;
   try {
     await invokeTauri('open_url', { url });
     return true;
@@ -35,7 +37,8 @@ export async function openUrl(url: string): Promise<boolean> {
 
 /** Open a local file or folder with its default application. */
 export async function openPath(path: string): Promise<boolean> {
-  if (!isTauri()) return false;
+  const capabilities = await getPlatformCapabilities();
+  if (!capabilities.pathOpener) return false;
   try {
     await invokeTauri('open_path', { path });
     return true;
@@ -60,8 +63,9 @@ export interface AutomationAction {
  * surface the one-click grant flow.
  */
 export async function readScreen(): Promise<string> {
-  if (!isTauri()) {
-    throw new Error('屏幕识别仅在桌面应用中可用');
+  const capabilities = await getPlatformCapabilities();
+  if (!capabilities.screenReader) {
+    throw new Error('当前平台暂不支持屏幕识别');
   }
   const text = await invokeTauri<string>('read_screen');
   return text ?? '';

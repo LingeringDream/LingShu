@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { apiFetch, postSignal } from '../../lib/api';
 import { runAutomationAction } from '../../lib/automation';
-import { isTauri, invokeTauri } from '../../lib/tauri';
+import { getPlatformCapabilities, invokeTauri } from '../../lib/tauri';
 import { MarkdownContent } from './MarkdownContent';
 import {
   ThumbsUpIcon,
@@ -444,11 +444,27 @@ interface PermissionRequest {
 
 function PermissionGrantButton({ requests }: { requests: PermissionRequest[] }) {
   const [granted, setGranted] = useState<Set<string>>(new Set());
+  const [unavailable, setUnavailable] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
 
   const handleGrant = async (req: PermissionRequest) => {
     setLoading(true);
     try {
+      const capabilities = await getPlatformCapabilities();
+      const supported = req.kind === 'accessibility'
+        ? capabilities.screenReader
+        : req.kind === 'open_app'
+          ? capabilities.applicationAutomation
+          : req.kind === 'open_url'
+            ? capabilities.urlOpener
+            : req.kind === 'open_file'
+              ? capabilities.pathOpener
+              : true;
+      if (!supported) {
+        setUnavailable((targets) => new Set(targets).add(req.target));
+        return;
+      }
+
       if (req.kind === 'accessibility') {
         // Screen reading needs two grants: the in-app L3 tier and the macOS
         // Accessibility permission. Enable L3 here, then fire the system
@@ -459,12 +475,10 @@ function PermissionGrantButton({ requests }: { requests: PermissionRequest[] }) 
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ l3_accessibility: true }),
         });
-        if (isTauri()) {
-          try {
-            await invokeTauri('request_accessibility_permission');
-          } catch (e) {
-            console.error('[permission] accessibility prompt failed:', e);
-          }
+        try {
+          await invokeTauri('request_accessibility_permission');
+        } catch (e) {
+          console.error('[permission] accessibility prompt failed:', e);
         }
         setGranted((s) => new Set(s).add(req.target));
         return;
@@ -500,7 +514,7 @@ function PermissionGrantButton({ requests }: { requests: PermissionRequest[] }) 
       {requests.map((req, i) => (
         <button
           key={i}
-          disabled={loading || granted.has(req.target)}
+          disabled={loading || granted.has(req.target) || unavailable.has(req.target)}
           onClick={() => handleGrant(req)}
           style={{
             padding: '6px 14px',
@@ -509,14 +523,18 @@ function PermissionGrantButton({ requests }: { requests: PermissionRequest[] }) 
             borderRadius: 6,
             background: granted.has(req.target) ? '#4caf50' : 'var(--accent, #0a73ff)',
             color: '#fff',
-            cursor: granted.has(req.target) ? 'default' : 'pointer',
+            cursor: granted.has(req.target) || unavailable.has(req.target) ? 'default' : 'pointer',
             opacity: loading ? 0.6 : 1,
           }}
         >
           {granted.has(req.target)
             ? <CheckIcon size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />
             : <UnlockIcon size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />}
-          {req.kind === 'accessibility'
+          {unavailable.has(req.target)
+            ? req.kind === 'accessibility'
+              ? '当前平台暂不支持屏幕识别'
+              : '当前平台暂不支持此系统操作'
+            : req.kind === 'accessibility'
             ? granted.has(req.target)
               ? '已开启 L3 权限——请在系统设置中勾选「灵枢」后重试'
               : '开启屏幕识别权限'

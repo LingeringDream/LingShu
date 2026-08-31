@@ -6,7 +6,10 @@
 // SECURITY: the authoritative permission + whitelist check happens server-side
 // (lingshu-server `execute_tool_call` → `PermissionSettings::automation_allowed`).
 // These commands only execute actions the backend already approved and streamed
-// down to the frontend. They shell out to macOS `open(1)` via an absolute path.
+// down to the frontend. URL and path opening use Tauri's cross-platform opener;
+// application-by-name remains a macOS adapter until Windows UI automation lands.
+
+use tauri_plugin_opener::OpenerExt;
 
 /// Open a macOS application by name (e.g. "Calculator", "Safari").
 /// Tries multiple name variants: bare, with `.app`, and lookup via `mdfind`.
@@ -82,32 +85,24 @@ fn find_app_path(name: &str) -> Result<String, ()> {
 /// Open a URL in the user's default browser. Re-checks the scheme as defence in
 /// depth (the backend only ever emits http/https).
 #[tauri::command]
-pub fn open_url(url: String) -> Result<(), String> {
+pub fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     let lower = url.to_ascii_lowercase();
     if !(lower.starts_with("http://") || lower.starts_with("https://")) {
         return Err(format!("refusing to open non-http(s) URL: {url}"));
     }
-    run_open(&[url.as_str()])
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("failed to open URL: {e}"))
 }
 
 /// Open a local file or folder with its default application.
 #[tauri::command]
-pub fn open_path(path: String) -> Result<(), String> {
-    run_open(&[path.as_str()])
-}
-
-#[cfg(target_os = "macos")]
-fn run_open(args: &[&str]) -> Result<(), String> {
-    use std::process::Command;
-    let status = Command::new("/usr/bin/open")
-        .args(args)
-        .status()
-        .map_err(|e| format!("failed to launch `open`: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("`open` exited with status {status}"))
-    }
+pub fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let canonical =
+        std::fs::canonicalize(&path).map_err(|e| format!("path does not exist: {e}"))?;
+    app.opener()
+        .open_path(canonical.display().to_string(), None::<&str>)
+        .map_err(|e| format!("failed to open path: {e}"))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -118,9 +113,4 @@ fn run_open_status(_args: &[&str]) -> i32 {
 #[cfg(not(target_os = "macos"))]
 fn find_app_path(_name: &str) -> Result<String, ()> {
     Err(())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn run_open(_args: &[&str]) -> Result<(), String> {
-    Err("L2 automation is only supported on macOS".into())
 }

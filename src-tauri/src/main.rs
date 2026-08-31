@@ -42,6 +42,12 @@ mod fileio;
 #[path = "screenreader.rs"]
 mod screenreader;
 
+#[path = "platform.rs"]
+mod platform;
+
+#[path = "calendar_export.rs"]
+mod calendar_export;
+
 /// Wrapper so we can shut down the sidecar when the app exits.
 /// `Mutex` is required by `app.manage()` (`T: Sync`). The lock is only
 /// ever contended at program exit (single `Drop` call), so `lock()` never
@@ -468,6 +474,8 @@ fn main() {
             screenreader::request_accessibility_permission,
             fileio::read_file,
             fileio::list_directory,
+            platform::get_platform_capabilities,
+            calendar_export::export_calendar_file,
         ])
         .setup(|app| {
             install_tray(app)?;

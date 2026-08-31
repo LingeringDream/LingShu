@@ -46,6 +46,21 @@ describe('MessageBubble', () => {
     expect(container.querySelector('[style*="word-break"]')).toBeTruthy();
   });
 
+  it('explains when screen-reading permission is unavailable on the current platform', async () => {
+    render(<MessageBubble message={makeMessage({
+      role: 'assistant',
+      permissionRequests: [{
+        kind: 'accessibility',
+        target: 'frontmost-window',
+        reason: '读取当前窗口',
+      }],
+    })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '开启屏幕识别权限' }));
+
+    expect(await screen.findByRole('button', { name: '当前平台暂不支持屏幕识别' })).toBeDisabled();
+  });
+
   it('renders user message with pre-wrap whitespace', () => {
     render(<MessageBubble message={makeMessage({ role: 'user', content: 'line1\nline2' })} />);
     const span = screen.getByText(/line1/);

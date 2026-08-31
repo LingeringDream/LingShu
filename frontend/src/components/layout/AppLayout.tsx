@@ -50,7 +50,7 @@ export function AppLayout({ children, activeSection = 'home', onNavigate }: AppL
             <img className="brand-mark" src="/icon.png" alt="" aria-hidden="true" />
             <div>
               <div className="brand-title">灵枢</div>
-              <div className="brand-subtitle">macOS 桌面 AI 个人助理</div>
+              <div className="brand-subtitle">跨平台 AI 个人助理</div>
             </div>
           </div>
 

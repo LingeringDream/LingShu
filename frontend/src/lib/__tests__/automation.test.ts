@@ -3,11 +3,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Hoisted so the vi.mock factory below can reference them safely.
 const { invokeMock, env } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
-  env: { tauri: true },
+  env: {
+    capabilities: {
+      platform: 'macos',
+      isDesktop: true,
+      calendarProvider: 'eventkit',
+      screenReader: true,
+      applicationAutomation: true,
+      urlOpener: true,
+      pathOpener: true,
+      fileReader: true,
+      pdfReader: true,
+      desktopPet: true,
+    },
+  },
 }));
 
 vi.mock('../tauri', () => ({
-  isTauri: () => env.tauri,
+  getPlatformCapabilities: () => Promise.resolve(env.capabilities),
   invokeTauri: (...args: unknown[]) => invokeMock(...args),
 }));
 
@@ -17,7 +30,9 @@ describe('automation dispatcher', () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(undefined);
-    env.tauri = true;
+    env.capabilities.applicationAutomation = true;
+    env.capabilities.urlOpener = true;
+    env.capabilities.pathOpener = true;
   });
 
   it('routes open_app → open_application', async () => {
@@ -40,8 +55,8 @@ describe('automation dispatcher', () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  it('no-ops in a browser (non-Tauri)', async () => {
-    env.tauri = false;
+  it('does not invoke macOS application automation on unsupported desktops', async () => {
+    env.capabilities.applicationAutomation = false;
     const ok = await openApplication('Calculator');
     expect(ok).toBe(false);
     expect(invokeMock).not.toHaveBeenCalled();

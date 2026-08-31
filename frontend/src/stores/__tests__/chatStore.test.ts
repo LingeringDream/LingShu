@@ -199,7 +199,7 @@ describe('chatStore', () => {
       '/api/v1/chat/messages/db-a1/regenerate',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ style_tag: 'too_formal' }),
+        body: JSON.stringify({ style_tag: 'too_formal', client_platform: 'browser' }),
       }),
     );
     const state = useChatStore.getState();
@@ -250,7 +250,11 @@ describe('chatStore', () => {
       '/api/v1/chat/enhance',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ message: '解释 MoA', session_id: 'session-123' }),
+        body: JSON.stringify({
+          message: '解释 MoA',
+          session_id: 'session-123',
+          client_platform: 'browser',
+        }),
       }),
     );
     const assistant = useChatStore.getState().messages.find((message) => message.role === 'assistant');
@@ -314,6 +318,7 @@ describe('chatStore', () => {
         body: JSON.stringify({
           message: '解释 MoA',
           session_id: 'session-123',
+          client_platform: 'browser',
           enhance: {
             members: [{ provider_id: 'deepseek', model: 'deepseek-chat' }],
             aggregator: { provider_id: 'openai', model: 'gpt-4o' },
@@ -358,7 +363,11 @@ describe('chatStore', () => {
       '/api/v1/chat',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ message: '重试', session_id: 'session-123' }),
+        body: JSON.stringify({
+          message: '重试',
+          session_id: 'session-123',
+          client_platform: 'browser',
+        }),
       }),
     );
     const state = useChatStore.getState();

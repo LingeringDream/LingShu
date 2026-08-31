@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../../lib/api';
 import { useProjectStore, type Project } from '../../stores/projectStore';
-import { isTauri } from '../../lib/tauri';
+import { getPlatformCapabilities, type CalendarProvider } from '../../lib/tauri';
 import { syncEventToAppleCalendar, deleteAppleCalendarEvent, updateAppleCalendarEvent } from '../../lib/eventkit';
+import { exportCalendarEvent } from '../../lib/ics';
 import {
   formatRecurrenceLabel,
   isRecurringEvent,
@@ -109,7 +110,7 @@ function CalendarSection() {
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<Set<string>>(new Set());
   const [syncResults, setSyncResults] = useState<Record<string, string>>({});
-  const [inTauri, setInTauri] = useState(false);
+  const [calendarProvider, setCalendarProvider] = useState<CalendarProvider>('none');
   const [collapsed, setCollapsed] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [loadingEvents, setLoadingEvents] = useState(false);
@@ -143,7 +144,14 @@ function CalendarSection() {
     }
   }, []);
 
-  useEffect(() => { fetchEvents(); setInTauri(isTauri()); }, [fetchEvents]);
+  useEffect(() => {
+    let disposed = false;
+    fetchEvents();
+    getPlatformCapabilities().then((capabilities) => {
+      if (!disposed) setCalendarProvider(capabilities.calendarProvider);
+    });
+    return () => { disposed = true; };
+  }, [fetchEvents]);
 
   // Refresh calendar list when chat modifies events (e.g. delete via tool call)
   useEffect(() => {
@@ -236,20 +244,38 @@ function CalendarSection() {
     }
   };
 
-  const handleSync = async (ev: CalendarEvent) => {
+  const handleCalendarAction = async (ev: CalendarEvent) => {
     setSyncing((s) => new Set(s).add(ev.id));
     try {
-      await syncEventToAppleCalendar(ev.id, {
-        title: ev.title,
-        start_time: ev.start_time,
-        end_time: ev.end_time,
-        location: ev.location,
-        notes: ev.description,
-        recurrence: ev.recurrence,
-      });
-      setSyncResults((r) => ({ ...r, [ev.id]: '已同步到系统日历' }));
+      if (calendarProvider === 'eventkit') {
+        const eventIdentifier = await syncEventToAppleCalendar(ev.id, {
+          title: ev.title,
+          start_time: ev.start_time,
+          end_time: ev.end_time,
+          location: ev.location,
+          notes: ev.description,
+          recurrence: ev.recurrence,
+        });
+        if (!eventIdentifier) throw new Error('系统日历同步未完成');
+        setSyncResults((r) => ({ ...r, [ev.id]: '已同步到系统日历' }));
+      } else if (calendarProvider === 'ics') {
+        const result = await exportCalendarEvent({
+          id: ev.id,
+          title: ev.title,
+          start_time: ev.start_time,
+          end_time: ev.end_time,
+          location: ev.location,
+          description: ev.description,
+          recurrence: ev.recurrence,
+        });
+        if (result.method === 'unsupported') throw new Error('当前平台无法导出日历文件');
+        setSyncResults((r) => ({
+          ...r,
+          [ev.id]: result.method === 'native' ? '已导出到下载目录' : '已下载日历文件',
+        }));
+      }
     } catch (e) {
-      setSyncResults((r) => ({ ...r, [ev.id]: getErrorMessage(e, '同步失败') }));
+      setSyncResults((r) => ({ ...r, [ev.id]: getErrorMessage(e, '日历操作失败') }));
     } finally {
       setSyncing((s) => { const n = new Set(s); n.delete(ev.id); return n; });
     }
@@ -506,17 +532,24 @@ function CalendarSection() {
                         color: confirmingDelete === ev.id ? '#fff' : '#e05555',
                       }}
                     >{confirmingDelete === ev.id ? '确认删除？' : '删除'}</button>
-                    {inTauri && recurring && ev.status === 'confirmed' && (
+                    {calendarProvider === 'eventkit' && recurring && ev.status === 'confirmed' && (
                       <span style={{ alignSelf: 'center', fontSize: 11, color: 'var(--color-secondary-text, #888)' }}>
                         循环暂不支持同步
                       </span>
                     )}
-                    {inTauri && !recurring && (
+                    {calendarProvider === 'eventkit' && !recurring && (
                       <button
-                        onClick={() => handleSync(ev)}
+                        onClick={() => handleCalendarAction(ev)}
                         disabled={syncing.has(ev.id)}
                         style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid var(--color-accent, #0a73ff)', borderRadius: 3, background: 'transparent', color: 'var(--color-accent, #0a73ff)' }}
                       >{syncing.has(ev.id) ? '同步中...' : (syncResults[ev.id] || '同步到系统日历')}</button>
+                    )}
+                    {calendarProvider === 'ics' && (
+                      <button
+                        onClick={() => handleCalendarAction(ev)}
+                        disabled={syncing.has(ev.id)}
+                        style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', border: '1px solid var(--color-accent, #0a73ff)', borderRadius: 3, background: 'transparent', color: 'var(--color-accent, #0a73ff)' }}
+                      >{syncing.has(ev.id) ? '导出中...' : (syncResults[ev.id] || '导出日历文件')}</button>
                     )}
                   </div>
                   </>

@@ -8,7 +8,7 @@
 //   2. invoke create_calendar_event  →  get eventIdentifier
 //   3. PATCH /api/v1/calendar/events/{id}/external  →  store external_event_id
 
-import { isTauri, invokeTauri } from './tauri';
+import { getPlatformCapabilities, invokeTauri } from './tauri';
 import { apiFetch } from './api';
 import type { CalendarRecurrenceRule } from './calendarPresentation';
 
@@ -23,7 +23,8 @@ export type CalendarAccessStatus =
 
 /** Request calendar permissions from the user. */
 export async function requestCalendarAccess(): Promise<CalendarAccessStatus> {
-  if (!isTauri()) return 'unsupported';
+  const capabilities = await getPlatformCapabilities();
+  if (capabilities.calendarProvider !== 'eventkit') return 'unsupported';
   const result = await invokeTauri<string>('request_calendar_access');
   return (result as CalendarAccessStatus) ?? 'unsupported';
 }
@@ -49,8 +50,9 @@ export async function syncEventToAppleCalendar(
   backendEventId: string,
   event: AppleEventInput
 ): Promise<string | null> {
-  if (!isTauri()) {
-    console.log('[eventkit] Running in browser — skipping system calendar sync');
+  const capabilities = await getPlatformCapabilities();
+  if (capabilities.calendarProvider !== 'eventkit') {
+    console.log('[eventkit] EventKit unavailable — skipping Apple Calendar sync');
     return null;
   }
 
@@ -111,7 +113,8 @@ export async function updateAppleCalendarEvent(
     notes?: string;
   }
 ): Promise<boolean> {
-  if (!isTauri()) return false;
+  const capabilities = await getPlatformCapabilities();
+  if (capabilities.calendarProvider !== 'eventkit') return false;
 
   try {
     await invokeTauri('update_calendar_event', {
@@ -130,7 +133,8 @@ export async function updateAppleCalendarEvent(
 export async function deleteAppleCalendarEvent(
   eventIdentifier: string
 ): Promise<boolean> {
-  if (!isTauri()) return false;
+  const capabilities = await getPlatformCapabilities();
+  if (capabilities.calendarProvider !== 'eventkit') return false;
 
   try {
     await invokeTauri('delete_calendar_event', {

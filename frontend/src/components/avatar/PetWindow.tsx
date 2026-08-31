@@ -1,7 +1,7 @@
 /* global WebSocket, HTMLFormElement, requestAnimationFrame, cancelAnimationFrame */
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { Application, Graphics, Text, Container, BlurFilter } from 'pixi.js';
-import { isTauri, showMainWindow } from '../../lib/tauri';
+import { getPlatformCapabilities, isTauri, showMainWindow } from '../../lib/tauri';
 import { installChatSessionSync, useChatStore } from '../../stores/chatStore';
 import { getMoodPresentation, getReplyDisplayTarget, lerpPresentation, traitsToModifiers, defaultModifiers, type Mood, type EyeShape, type MoodPresentation, type PersonalityTraits, type PersonalityModifiers } from './petPresentation';
 import {
@@ -450,8 +450,11 @@ export function PetWindow() {
     // Silent accessibility status check (no system dialog at startup — the
     // real prompt fires from the chat's one-click grant button at point of
     // need, via request_accessibility_permission with prompt: true).
-    import('@tauri-apps/api/core').then(({ invoke }) => {
-      invoke('request_accessibility_permission', { prompt: false }).catch(() => {});
+    getPlatformCapabilities().then((capabilities) => {
+      if (!capabilities.screenReader) return;
+      import('@tauri-apps/api/core').then(({ invoke }) => {
+        invoke('request_accessibility_permission', { prompt: false }).catch(() => {});
+      }).catch(() => {});
     }).catch(() => {});
   }, []);
 

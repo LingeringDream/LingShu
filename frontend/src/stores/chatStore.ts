@@ -10,7 +10,7 @@ import type {
 import { apiFetch } from '../lib/api';
 import { deleteAppleCalendarEvent } from '../lib/eventkit';
 import { runAutomationAction, readScreen } from '../lib/automation';
-import { isTauri } from '../lib/tauri';
+import { getPlatformCapabilities, isTauri } from '../lib/tauri';
 
 export const CHAT_SESSION_STORAGE_KEY = 'lingshu-chat-session';
 export const CHAT_SESSION_SYNC_EVENT = 'lingshu:chat-session-sync';
@@ -391,10 +391,11 @@ export const useChatStore = create<ChatState>()(
           const sessionId = await ensureSessionId(get().sessionId, (id) =>
             set({ sessionId: id }),
           );
+          const clientPlatform = (await getPlatformCapabilities()).platform;
 
           const baseBody: Record<string, unknown> = sessionId
-            ? { message: content, session_id: sessionId }
-            : { message: content };
+            ? { message: content, session_id: sessionId, client_platform: clientPlatform }
+            : { message: content, client_platform: clientPlatform };
 
           const updateAssistantMessage = (updater: (message: Message) => Message) => {
             set((state) => ({
@@ -826,10 +827,11 @@ export const useChatStore = create<ChatState>()(
         }));
 
         try {
+          const clientPlatform = (await getPlatformCapabilities()).platform;
           const response = await apiFetch(`/api/v1/chat/messages/${targetDbId}/regenerate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ style_tag: styleTag }),
+            body: JSON.stringify({ style_tag: styleTag, client_platform: clientPlatform }),
           });
 
           if (!response.ok) {

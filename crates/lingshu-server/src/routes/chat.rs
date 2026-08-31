@@ -249,7 +249,10 @@ pub async fn enhance_chat(
     let personality_snippet = personality_prompt(&personality_values);
     let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
-    let capabilities = capability_section(&perms);
+    let capabilities = capability_section_for_platform(
+        &perms,
+        client_supports_macos_native(req.client_platform.as_deref()),
+    );
     let now = Local::now();
     let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
     let system_prompt = build_system_prompt(
@@ -458,6 +461,11 @@ pub async fn enhance_chat(
 pub struct ChatRequest {
     pub message: String,
     pub session_id: Option<Uuid>,
+    /// Platform reported by the active client (`macos`, `windows`, `linux`,
+    /// or `browser`). Older clients may omit it; those retain the compiled
+    /// desktop behavior for backward compatibility.
+    #[serde(default)]
+    pub client_platform: Option<String>,
     /// Optional per-turn MoA selection. Only used by `/api/v1/chat/enhance`;
     /// normal `/api/v1/chat` ignores it.
     #[serde(default)]
@@ -503,6 +511,12 @@ pub enum ReplyStyleTag {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RegenerateChatMessageRequest {
     pub style_tag: ReplyStyleTag,
+    #[serde(default)]
+    pub client_platform: Option<String>,
+}
+
+fn client_supports_macos_native(client_platform: Option<&str>) -> bool {
+    cfg!(target_os = "macos") && matches!(client_platform, None | Some("macos"))
 }
 
 // ── Handler ───────────────────────────────────────────────────────
@@ -570,7 +584,8 @@ pub async fn chat(
     // Load the real permission grants once so the system prompt reflects what
     // the assistant can actually do (reused by the screen-read preflight below).
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
-    let capabilities = capability_section(&perms);
+    let macos_native = client_supports_macos_native(req.client_platform.as_deref());
+    let capabilities = capability_section_for_platform(&perms, macos_native);
 
     let now = Local::now();
     let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
@@ -712,7 +727,8 @@ pub async fn chat(
     //            window's text (authorized main-app process) and resends with
     //            `screen_context`, then the model answers using it.
     //   L3 off → return the one-click L3 grant button.
-    let screen_preflight: Option<(Option<String>, ToolEffects)> = if screen_context.is_none()
+    let screen_preflight: Option<(Option<String>, ToolEffects)> = if macos_native
+        && screen_context.is_none()
         && preflight_screen_read_intent(&user_message)
     {
         if perms.l3_accessibility {
@@ -741,7 +757,7 @@ pub async fn chat(
     };
 
     // ── Tool calling loop (fallback for complex / chained ops) ─────
-    let mut tools = chat_tools();
+    let mut tools = chat_tools_for_platform(macos_native);
     if screen_context.is_some() {
         tools.retain(|t| t.function.name != "read_screen");
     }
@@ -1052,7 +1068,10 @@ pub async fn regenerate_message(
     let personality_snippet = personality_prompt(&personality_values);
     let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
-    let capabilities = capability_section(&perms);
+    let capabilities = capability_section_for_platform(
+        &perms,
+        client_supports_macos_native(req.client_platform.as_deref()),
+    );
     let now = Local::now();
     let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
     let system_prompt = build_system_prompt(
@@ -1200,6 +1219,13 @@ pub async fn regenerate_message(
 ///   2. Claiming a permission is unavailable when the user has actually granted
 ///      it (the static text used to say "需授权" regardless of real state).
 fn capability_section(perms: &crate::routes::permissions::PermissionSettings) -> String {
+    capability_section_for_platform(perms, cfg!(target_os = "macos"))
+}
+
+fn capability_section_for_platform(
+    perms: &crate::routes::permissions::PermissionSettings,
+    is_macos: bool,
+) -> String {
     let state = |on: bool| {
         if on {
             "已开启"
@@ -1210,27 +1236,47 @@ fn capability_section(perms: &crate::routes::permissions::PermissionSettings) ->
     let web = state(perms.l1_web_search);
     let l1 = state(perms.l1_calendar);
     let l2 = state(perms.l2_automation);
-    let l3 = state(perms.l3_accessibility);
+    let l3 = if is_macos {
+        state(perms.l3_accessibility)
+    } else {
+        "平台不支持"
+    };
+    let screen_capability = if is_macos {
+        "- 屏幕识别：读取当前最前台窗口的屏幕文字（「屏幕识别」与「屏幕阅读」同义）—— read_screen"
+    } else {
+        "- 屏幕识别：当前平台未提供原生适配，不得声称已经读取屏幕"
+    };
+    let application_capability = if is_macos {
+        "- 打开应用：按名称启动已安装的应用 —— open_app"
+    } else {
+        "- 打开应用：当前平台未提供按名称启动适配；仍可打开网址和已有文件"
+    };
+    let l3_instruction = if is_macos {
+        "1.「屏幕识别 / 屏幕阅读」属于 **L3，已经实现**，绝不要说它是 L4 或「未来才有、尚未开放的功能」。唯一尚未开放的是 L4「自主点击操作」。"
+    } else {
+        "1. 当前平台未提供 L3 屏幕识别适配；不得假装读取屏幕，也不要把它描述成当前可用功能。"
+    };
     format!(
         r#"## 能力范围（你现在就能做的事，通过调用工具实现）
 - 对话交流：回答提问、讨论想法、给出建议
 - 联网搜索：搜索公开网页，获取最新信息并附上来源链接 —— web_search
 - 文件阅读：读取用户主目录下的文本文件（.md .txt .pdf .json .csv 等）、列出目录 —— read_file / list_directory
 - 日历管理：创建、查询、删除日程（事件默认「待确认」）—— create_calendar_event / list_calendar_events / delete_calendar_event
-- 屏幕识别：读取当前最前台窗口的屏幕文字（「屏幕识别」与「屏幕阅读」同义）—— read_screen
-- 打开应用 / 网址 / 文件 —— open_app / open_url / open_file
+{screen_capability}
+{application_capability}
+- 打开网址 / 文件 —— open_url / open_file
 - 记忆管理：从对话中自动提取重要信息，用户可在记忆中心查看和编辑
 - 时间查询 —— get_current_time
 
 ## 权限边界（按等级，附当前真实状态）
 - L1 联网搜索：只读搜索公开网页 —— 当前{web}
 - L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前{l1}
-- L2 本机操作：打开 App、网址、文件 —— 当前{l2}
+- L2 本机操作：打开网址、文件及平台支持的应用 —— 当前{l2}
 - L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前{l3}
 - L4 自主操作：自主连续点击/代替用户操作界面 —— 远期规划，尚未开放
 
 重要：
-1.「屏幕识别 / 屏幕阅读」属于 **L3，已经实现**，绝不要说它是 L4 或「未来才有、尚未开放的功能」。唯一尚未开放的是 L4「自主点击操作」。
+{l3_instruction}
 2. 以上「当前未开启」只表示该等级权限尚未授权，**不等于功能不存在**。遇到这种请求时，照常尝试调用对应工具——若工具返回权限错误，如实转达并提示用户去开启对应等级即可，不要谎称已完成，也不要说该功能不存在。"#
     )
 }
@@ -1243,10 +1289,10 @@ fn build_system_prompt(
     capabilities: &str,
     now: &str,
 ) -> String {
-    let base = r#"你是灵枢（LingShu），一个运行在 macOS 桌面上的 AI 个人助理。
+    let base = r#"你是灵枢（LingShu），一个跨平台 AI 个人助理。
 
 ## 身份
-你以桌面宠物的形态常驻在用户的 Mac 屏幕上。你是用户的智慧中枢：连接日程、记忆、想法和本机操作。你不是藏在浏览器标签页里的聊天框，你是一个有存在感、有连续性、有边界、有控制权的桌面伙伴。
+在桌面版中，你以桌面宠物和控制台的形态陪伴用户；在 Web 版中，你通过浏览器提供通用核心能力。你是用户的智慧中枢：连接日程、记忆、想法和经过授权的本机操作。你有存在感、有连续性、有边界，也尊重用户控制权。
 
 ## 核心人格
 - 亲切但不肉麻：称呼用户为「你」，不要用「主人」之类的称呼。对话自然流畅，像一位相处多年的得力搭档。
@@ -2712,8 +2758,12 @@ fn parse_dsml_tool_calls(content: &str, allowed_tools: &[String]) -> Option<Vec<
 
 /// Build the tool definitions that are available to the LLM during chat.
 fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
+    chat_tools_for_platform(cfg!(target_os = "macos"))
+}
+
+fn chat_tools_for_platform(is_macos: bool) -> Vec<crate::llm::client::ToolDefinition> {
     use crate::llm::client::ToolDefinition;
-    vec![
+    let mut tools = vec![
         ToolDefinition::new(
             "create_calendar_event",
             "立即从自然语言描述创建日历事件。当用户说「帮我看/创建/添加/安排/预订/记一下...日程/会议/提醒/预约」或任何暗示想要安排时间的表述时，直接调用此工具，不要先口头询问。工具会自动创建「待确认」状态的草稿事件，用户稍后可在日历中确认。",
@@ -2768,7 +2818,7 @@ fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "文件的绝对路径，例如 /Users/xxx/Documents/notes.md"
+                        "description": "文件的绝对路径，例如 C:\\Users\\xxx\\Documents\\notes.md 或 /Users/xxx/Documents/notes.md"
                     }
                 },
                 "required": ["path"]
@@ -2782,7 +2832,7 @@ fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "目录的绝对路径，例如 /Users/xxx/Documents"
+                        "description": "目录的绝对路径，例如 C:\\Users\\xxx\\Documents 或 /Users/xxx/Documents"
                     }
                 },
                 "required": ["path"]
@@ -2859,7 +2909,11 @@ fn chat_tools() -> Vec<crate::llm::client::ToolDefinition> {
                 "required": ["path"]
             }),
         ),
-    ]
+    ];
+    if !is_macos {
+        tools.retain(|tool| !matches!(tool.function.name.as_str(), "read_screen" | "open_app"));
+    }
+    tools
 }
 
 /// Side effects a chat tool wants the desktop frontend to perform. Accumulated
@@ -3133,116 +3187,20 @@ async fn execute_tool_call(
             if path.is_empty() {
                 return Ok(("错误：未提供文件路径。".into(), ToolEffects::default()));
             }
-            // Security: only allow files under user's home
-            let home = std::env::var("HOME").unwrap_or_default();
-            let canonical = match std::fs::canonicalize(&path) {
-                Ok(p) => p,
-                Err(e) => {
-                    return Ok((format!("文件不存在或无法访问: {e}"), ToolEffects::default()))
-                }
-            };
-            if !canonical.starts_with(&home) {
-                return Ok((
-                    "安全限制：只能读取用户主目录下的文件。".into(),
-                    ToolEffects::default(),
-                ));
-            }
-            let ext = canonical
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            match ext.as_str() {
-                "txt" | "md" | "json" | "csv" | "log" | "yaml" | "yml" | "toml" | "rs" | "ts"
-                | "tsx" | "js" | "jsx" | "html" | "css" | "py" | "sh" => {
-                    match std::fs::read_to_string(&canonical) {
-                        Ok(content) => {
-                            let truncated = if content.len() > 8000 {
-                                format!(
-                                    "{}...\n\n(内容已截断，共 {} 字符)",
-                                    &content[..8000],
-                                    content.len()
-                                )
-                            } else {
-                                content
-                            };
-                            Ok((
-                                format!("[文件] {}\n---\n{truncated}", canonical.display()),
-                                ToolEffects::default(),
-                            ))
-                        }
-                        Err(e) => Ok((format!("读取失败: {e}"), ToolEffects::default())),
-                    }
-                }
-                "pdf" => {
-                    // Try pdftotext, then textutil
-                    let path_str = path.clone();
-                    for (cmd, args) in [
-                        ("pdftotext", vec!["-layout", path_str.as_str(), "-"]),
-                        (
-                            "textutil",
-                            vec!["-convert", "txt", "-stdout", path_str.as_str()],
-                        ),
-                    ] {
-                        if let Ok(output) = std::process::Command::new(cmd).args(&args).output() {
-                            if output.status.success() {
-                                let text = String::from_utf8_lossy(&output.stdout).into_owned();
-                                if !text.trim().is_empty() {
-                                    return Ok((text, ToolEffects::default()));
-                                }
-                            }
-                        }
-                    }
-                    Ok((
-                        "无法提取 PDF 文本。请安装 pdftotext: brew install poppler".into(),
-                        ToolEffects::default(),
-                    ))
-                }
-                _ => Ok((
-                    format!("不支持的文件类型: .{ext}（支持 .md .txt .pdf .json .csv 等）"),
-                    ToolEffects::default(),
-                )),
-            }
+            Ok((
+                crate::file_tools::read_file(&path).unwrap_or_else(|error| error),
+                ToolEffects::default(),
+            ))
         }
         "list_directory" => {
             let path = tool_arg(tool_call, "path");
             if path.is_empty() {
                 return Ok(("错误：未提供目录路径。".into(), ToolEffects::default()));
             }
-            let home = std::env::var("HOME").unwrap_or_default();
-            let p = std::path::Path::new(&path);
-            let canonical = match p.canonicalize() {
-                Ok(c) => c,
-                Err(e) => return Ok((format!("目录不存在: {e}"), ToolEffects::default())),
-            };
-            if !canonical.starts_with(&home) {
-                return Ok((
-                    "安全限制：只能浏览用户主目录下的文件。".into(),
-                    ToolEffects::default(),
-                ));
-            }
-            match std::fs::read_dir(&canonical) {
-                Ok(rd) => {
-                    let mut entries: Vec<String> = Vec::new();
-                    for entry in rd.flatten() {
-                        let name = entry.file_name().to_string_lossy().into_owned();
-                        if !name.starts_with('.') {
-                            let prefix = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                                "📁"
-                            } else {
-                                "📄"
-                            };
-                            entries.push(format!("{prefix} {name}"));
-                        }
-                    }
-                    entries.sort();
-                    Ok((
-                        format!("{}\n---\n{}", canonical.display(), entries.join("\n")),
-                        ToolEffects::default(),
-                    ))
-                }
-                Err(e) => Ok((format!("读取目录失败: {e}"), ToolEffects::default())),
-            }
+            Ok((
+                crate::file_tools::list_directory(&path).unwrap_or_else(|error| error),
+                ToolEffects::default(),
+            ))
         }
         "get_current_time" => {
             let now = Local::now();
@@ -3633,7 +3591,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_tools_includes_calendar_and_automation_tools() {
+    fn chat_tools_match_the_compiled_platform() {
         let names: Vec<String> = chat_tools()
             .iter()
             .map(|t| t.function.name.clone())
@@ -3643,7 +3601,6 @@ mod tests {
             "list_calendar_events",
             "delete_calendar_event",
             "web_search",
-            "open_app",
             "open_url",
             "open_file",
         ] {
@@ -3652,6 +3609,43 @@ mod tests {
                 "missing tool {expected}"
             );
         }
+        assert_eq!(
+            names.contains(&"read_screen".to_string()),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            names.contains(&"open_app".to_string()),
+            cfg!(target_os = "macos")
+        );
+    }
+
+    #[test]
+    fn non_macos_tools_exclude_apple_only_actions() {
+        let names: Vec<String> = chat_tools_for_platform(false)
+            .iter()
+            .map(|tool| tool.function.name.clone())
+            .collect();
+        assert!(!names.contains(&"read_screen".to_string()));
+        assert!(!names.contains(&"open_app".to_string()));
+        assert!(names.contains(&"open_url".to_string()));
+        assert!(names.contains(&"open_file".to_string()));
+        assert!(names.contains(&"read_file".to_string()));
+    }
+
+    #[test]
+    fn client_platform_prevents_native_tools_from_leaking_into_web_or_windows() {
+        assert!(!client_supports_macos_native(Some("browser")));
+        assert!(!client_supports_macos_native(Some("windows")));
+        assert!(!client_supports_macos_native(Some("linux")));
+        assert_eq!(
+            client_supports_macos_native(Some("macos")),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            client_supports_macos_native(None),
+            cfg!(target_os = "macos"),
+            "missing field preserves older desktop-client behavior"
+        );
     }
 
     #[test]
@@ -3993,28 +3987,33 @@ mod tests {
         let prompt = build_system_prompt(snippet, "", "", "", &caps, "");
         assert!(prompt.contains("灵枢"));
         assert!(prompt.contains("LingShu"));
+        assert!(prompt.contains("跨平台 AI 个人助理"));
         assert!(prompt.contains("权限边界"));
         assert!(prompt.contains("每个用户回合只输出一条最终回复"));
     }
 
     #[test]
-    fn capability_section_keeps_screen_recognition_as_l3_not_l4() {
+    fn capability_section_matches_platform_screen_support() {
         let caps = capability_section(&crate::routes::permissions::PermissionSettings::default());
-        // 屏幕识别 must be presented as an available L3 capability, and the L4
-        // line must be the autonomous-click feature — never screen recognition.
         assert!(
             caps.contains("屏幕识别"),
             "must mention 屏幕识别 explicitly"
         );
-        assert!(caps.contains("read_screen"));
         assert!(
             caps.contains("L4 自主操作") && caps.contains("尚未开放"),
             "L4 must be the unreleased autonomous-click feature"
         );
-        assert!(
-            caps.contains("绝不要说它是 L4"),
-            "must explicitly forbid demoting 屏幕识别 to L4"
-        );
+        if cfg!(target_os = "macos") {
+            assert!(caps.contains("read_screen"));
+            assert!(
+                caps.contains("绝不要说它是 L4"),
+                "must explicitly forbid demoting 屏幕识别 to L4"
+            );
+        } else {
+            assert!(!caps.contains("—— read_screen"));
+            assert!(caps.contains("当前平台未提供原生适配"));
+            assert!(caps.contains("不得假装读取屏幕"));
+        }
     }
 
     #[test]
@@ -4031,18 +4030,40 @@ mod tests {
             "L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前已开启"
         ));
         assert!(caps.contains("L1 联网搜索：只读搜索公开网页 —— 当前已开启"));
-        assert!(caps.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前已开启"));
+        if cfg!(target_os = "macos") {
+            assert!(caps.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前已开启"));
+        } else {
+            assert!(caps.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前平台不支持"));
+        }
 
         // Default permissions have everything off — the section must say so
         // rather than claiming the capability is available (the original bug).
         let denied = capability_section(&PermissionSettings::default());
         assert!(denied.contains("L1 联网搜索：只读搜索公开网页 —— 当前未开启（需用户授权后可用）"));
         assert!(denied.contains("L1 日历：创建/查询/删除日程（事件默认「待确认」，由用户在卡片中裁决）—— 当前未开启（需用户授权后可用）"));
-        assert!(denied.contains(
-            "L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前未开启（需用户授权后可用）"
-        ));
+        if cfg!(target_os = "macos") {
+            assert!(denied.contains(
+                "L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前未开启（需用户授权后可用）"
+            ));
+        } else {
+            assert!(denied.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前平台不支持"));
+        }
         // …but "未开启" must never read as "功能不存在".
         assert!(denied.contains("不等于功能不存在"));
+    }
+
+    #[test]
+    fn non_macos_capability_section_never_claims_screen_access() {
+        let granted = crate::routes::permissions::PermissionSettings {
+            l3_accessibility: true,
+            ..Default::default()
+        };
+        let caps = capability_section_for_platform(&granted, false);
+        assert!(caps.contains("当前平台未提供原生适配"));
+        assert!(caps.contains("当前平台不支持"));
+        assert!(caps.contains("不得假装读取屏幕"));
+        assert!(!caps.contains("—— read_screen"));
+        assert!(!caps.contains("L3 屏幕识别：读取前台窗口文字、辅助功能树 —— 当前已开启"));
     }
 
     #[test]

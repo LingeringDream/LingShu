@@ -3,14 +3,30 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspacePage } from '../WorkspacePage';
 import { apiFetch } from '../../../lib/api';
+import { exportCalendarEvent } from '../../../lib/ics';
 import { useProjectStore } from '../../../stores/projectStore';
+
+const { platformState } = vi.hoisted(() => ({
+  platformState: { calendarProvider: 'none' as 'none' | 'eventkit' | 'ics' },
+}));
 
 vi.mock('../../../lib/api', () => ({
   apiFetch: vi.fn(),
 }));
 
 vi.mock('../../../lib/tauri', () => ({
-  isTauri: () => false,
+  getPlatformCapabilities: () => Promise.resolve({
+    platform: platformState.calendarProvider === 'eventkit' ? 'macos' : 'windows',
+    isDesktop: true,
+    calendarProvider: platformState.calendarProvider,
+    screenReader: false,
+    applicationAutomation: false,
+    urlOpener: false,
+    pathOpener: false,
+    fileReader: false,
+    pdfReader: false,
+    desktopPet: true,
+  }),
 }));
 
 vi.mock('../../../lib/eventkit', () => ({
@@ -19,7 +35,12 @@ vi.mock('../../../lib/eventkit', () => ({
   updateAppleCalendarEvent: vi.fn(),
 }));
 
+vi.mock('../../../lib/ics', () => ({
+  exportCalendarEvent: vi.fn(),
+}));
+
 const mockedApiFetch = vi.mocked(apiFetch);
+const mockedExportCalendarEvent = vi.mocked(exportCalendarEvent);
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -56,6 +77,9 @@ function upcomingEventTimes(durationMinutes: number): { start: string; end: stri
 describe('WorkspacePage', () => {
   beforeEach(() => {
     mockedApiFetch.mockReset();
+    mockedExportCalendarEvent.mockReset();
+    mockedExportCalendarEvent.mockResolvedValue({ method: 'browser', path: 'event.ics' });
+    platformState.calendarProvider = 'none';
     useProjectStore.setState({
       projects: [],
       loading: false,
@@ -247,5 +271,105 @@ describe('WorkspacePage', () => {
     const date = localInputValue(new Date(event.start_time)).slice(0, 10);
     expect(body.start_time).toBe(utcFromLocalInput(`${date}T11:15`));
     expect(body.end_time).toBe(utcFromLocalInput(`${date}T12:00`));
+  });
+
+  it('hides Apple Calendar sync when the desktop platform has no EventKit provider', async () => {
+    const times = upcomingEventTimes(30);
+    const event = {
+      id: 'windows-event',
+      title: '跨平台评审',
+      description: null,
+      location: '线上',
+      start_time: times.start,
+      end_time: times.end,
+      status: 'confirmed',
+      calendar_name: 'default',
+      attendees: [],
+      recurrence: { frequency: 'none', interval: 1 },
+      parse_confidence: null,
+      apple_event_id: null,
+      external_event_id: null,
+    };
+
+    mockedApiFetch.mockImplementation(async (input, init) => {
+      if (input === '/api/v1/calendar/events?limit=20' && !init?.method) return jsonResponse([event]);
+      if (input === '/api/v1/projects' && !init?.method) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${input}`);
+    });
+
+    render(<WorkspacePage />);
+
+    expect(await screen.findByText('跨平台评审')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '同步到系统日历' })).toBeNull();
+  });
+
+  it('shows native calendar sync when EventKit is available', async () => {
+    platformState.calendarProvider = 'eventkit';
+    const times = upcomingEventTimes(30);
+    const event = {
+      id: 'mac-event',
+      title: 'macOS评审',
+      description: null,
+      location: '线上',
+      start_time: times.start,
+      end_time: times.end,
+      status: 'confirmed',
+      calendar_name: 'default',
+      attendees: [],
+      recurrence: { frequency: 'none', interval: 1 },
+      parse_confidence: null,
+      apple_event_id: null,
+      external_event_id: null,
+    };
+
+    mockedApiFetch.mockImplementation(async (input, init) => {
+      if (input === '/api/v1/calendar/events?limit=20' && !init?.method) return jsonResponse([event]);
+      if (input === '/api/v1/projects' && !init?.method) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${input}`);
+    });
+
+    render(<WorkspacePage />);
+
+    expect(await screen.findByRole('button', { name: '同步到系统日历' })).toBeInTheDocument();
+  });
+
+  it('exports an ICS file when the platform uses the portable calendar provider', async () => {
+    platformState.calendarProvider = 'ics';
+    const times = upcomingEventTimes(30);
+    const event = {
+      id: 'portable-event',
+      title: '跨平台答辩',
+      description: '校赛演示',
+      location: '报告厅',
+      start_time: times.start,
+      end_time: times.end,
+      status: 'confirmed',
+      calendar_name: 'default',
+      attendees: [],
+      recurrence: { frequency: 'none', interval: 1 },
+      parse_confidence: null,
+      apple_event_id: null,
+      external_event_id: null,
+    };
+
+    mockedApiFetch.mockImplementation(async (input, init) => {
+      if (input === '/api/v1/calendar/events?limit=20' && !init?.method) return jsonResponse([event]);
+      if (input === '/api/v1/projects' && !init?.method) return jsonResponse([]);
+      throw new Error(`Unexpected request: ${input}`);
+    });
+
+    render(<WorkspacePage />);
+    fireEvent.click(await screen.findByRole('button', { name: '导出日历文件' }));
+
+    await waitFor(() => expect(mockedExportCalendarEvent).toHaveBeenCalledWith({
+      id: event.id,
+      title: event.title,
+      start_time: event.start_time,
+      end_time: event.end_time,
+      location: event.location,
+      description: event.description,
+      recurrence: event.recurrence,
+    }));
+    expect(await screen.findByRole('button', { name: '已下载日历文件' })).toBeInTheDocument();
   });
 });

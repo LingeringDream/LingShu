@@ -86,6 +86,45 @@ jobs:
       - run: npm run type-check
       - run: npm run build
 
+  windows-desktop:
+    name: Windows Desktop Package
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            src-tauri -> target
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Run frontend tests
+        run: npm run test
+        working-directory: frontend
+      - name: Build Windows sidecar
+        shell: pwsh
+        run: ./scripts/build-sidecar.ps1 -Target x86_64-pc-windows-msvc
+      - name: Build NSIS installer
+        run: npm run tauri build -- --bundles nsis
+        working-directory: frontend
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lingshu-windows-nsis
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
   openapi-contract:
     name: OpenAPI Contract
     runs-on: ubuntu-latest

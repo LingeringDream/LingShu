@@ -27,7 +27,7 @@ use utoipa::OpenApi;
     // (the workspace version in the root Cargo.toml), our single source of truth.
     info(
         title = "LingShu API",
-        description = "灵枢 macOS 桌面 AI 个人助理 API"
+        description = "灵枢跨平台 AI 个人助理 API"
     ),
     paths(
         system::health_check,
