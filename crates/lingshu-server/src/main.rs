@@ -8,6 +8,8 @@ mod config;
 mod cooldown;
 mod crypto;
 mod db;
+#[cfg(feature = "desktop-embedded-db")]
+mod embedded_db;
 mod error;
 mod llm;
 mod models;
@@ -30,9 +32,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::config::AppConfig;
 use crate::state::AppState;
 
-#[cfg(unix)]
 const EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
-#[cfg(unix)]
 const EXIT_WITH_PARENT_VALUE: &str = "1";
 const LOCAL_FRONTEND_ORIGIN: &str = "http://localhost:5173";
 
@@ -112,14 +112,29 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Load configuration
+    // Load configuration. Only the desktop build mutates the database URL.
+    #[cfg(feature = "desktop-embedded-db")]
+    let mut config = AppConfig::load()?;
+    #[cfg(not(feature = "desktop-embedded-db"))]
     let config = AppConfig::load()?;
 
     // Refuse to start with insecure default secrets in non-sidecar mode.
     // Sidecar mode (LINGSHU_EXIT_WITH_PARENT=1) is the Tauri desktop bundle
     // where the backend is an internal process not exposed to the network.
-    let is_sidecar = cfg!(unix)
-        && std::env::var_os(EXIT_WITH_PARENT_ENV).is_some_and(|v| v == EXIT_WITH_PARENT_VALUE);
+    let is_sidecar =
+        std::env::var_os(EXIT_WITH_PARENT_ENV).is_some_and(|v| v == EXIT_WITH_PARENT_VALUE);
+
+    // The packaged desktop binary includes its own PostgreSQL runtime. Start it
+    // before AppState connects, and override any developer DATABASE_URL that
+    // may be present in the parent environment.
+    #[cfg(feature = "desktop-embedded-db")]
+    let embedded_database = if is_sidecar {
+        let database = embedded_db::EmbeddedDatabase::start().await?;
+        config.database.url = database.database_url();
+        Some(database)
+    } else {
+        None
+    };
     if !is_sidecar {
         let insecure_defaults = [
             "lingshu-local-dev",
@@ -194,9 +209,33 @@ async fn main() -> anyhow::Result<()> {
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("Listening on {}", addr);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(is_sidecar))
+        .await?;
+
+    #[cfg(feature = "desktop-embedded-db")]
+    if let Some(database) = embedded_database {
+        database.stop().await;
+    }
 
     Ok(())
+}
+
+async fn shutdown_signal(is_sidecar: bool) {
+    if !is_sidecar {
+        let _ = tokio::signal::ctrl_c().await;
+        return;
+    }
+
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) if line.trim().eq_ignore_ascii_case("shutdown") => return,
+            Ok(Some(_)) => continue,
+            Ok(None) | Err(_) => return,
+        }
+    }
 }
 
 fn allowed_cors_origins(config: &crate::config::CorsConfig) -> Vec<HeaderValue> {

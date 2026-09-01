@@ -47,7 +47,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 
 # OpenAPI
 utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
-utoipa-swagger-ui = { version = "8", features = ["axum"] }
+utoipa-swagger-ui = { version = "8", features = ["axum", "vendored"] }
 
 # UUID
 uuid = { version = "1", features = ["v4", "serde"] }
