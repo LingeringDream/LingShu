@@ -78,3 +78,4 @@ src-tauri/binaries/lingshu-server-*
 
 # Live2D model files (large, licensed separately)
 frontend/public/live2d/*
+!frontend/public/live2d/README.md
