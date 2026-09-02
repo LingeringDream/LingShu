@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-02
+
+### Version 1.5.0
+
+- `feat(memory)`: add a three-layer `episode` / `fact` / `experience` memory protocol with temporal metadata, scene tags, and provenance.
+- `feat(memory-gateway)`: add multi-Agent private, shared, and global memory spaces with per-memory grants and access isolation.
+- `feat(retrieval)`: add temporal conflict governance, adaptive six-factor reranking, stale-memory filtering, and a static RAG comparison mode.
+- `feat(benchmark)`: add a reproducible 60-turn dataset, baseline comparison, ablation experiments, threshold reporting, and the Memory Evolution Lab UI.
+- `feat(desktop)`: add embedded PostgreSQL support for the self-contained Windows sidecar package.
+- `docs`: add the ZTE 1529 competition delivery index, architecture, deployment guide, innovation brief, experiment report, and evidence boundaries.
+
 ## 2026-08-31
 
 ### Licensing
