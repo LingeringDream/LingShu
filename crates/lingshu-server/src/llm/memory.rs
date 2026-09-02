@@ -17,6 +17,18 @@ struct MemoryCandidate {
     content: String,
     importance: f32,
     memory_type: String,
+    #[serde(default)]
+    scene_tags: Vec<String>,
+    #[serde(default)]
+    fact_key: Option<String>,
+    #[serde(default)]
+    fact_value: Option<String>,
+    #[serde(default = "default_candidate_trust")]
+    source_trust: f32,
+}
+
+fn default_candidate_trust() -> f32 {
+    0.75
 }
 
 /// Outcome of [`save_memory`].
@@ -149,8 +161,8 @@ pub async fn save_memory(
 
     // 2. No duplicate — insert
     let inserted: Memory = sqlx::query_as(
-        "INSERT INTO memories (user_id, memory_type, content, importance) \
-         VALUES ($1, $2, $3, $4) \
+        "INSERT INTO memories (user_id, memory_type, content, importance, memory_layer) \
+         VALUES ($1, $2, $3, $4, 'fact') \
          RETURNING *",
     )
     .bind(user_id)
@@ -281,6 +293,32 @@ pub async fn extract_and_save(
     user_message: &str,
     assistant_response: &str,
 ) {
+    // Every completed exchange is retained as a traceable episode. Structured
+    // facts extracted below link back to this raw fragment through
+    // source_memory_ids, forming the first two layers of the three-layer model.
+    let episode_id: Option<Uuid> = match sqlx::query_scalar(
+        "INSERT INTO memories (user_id, memory_type, content, importance, memory_layer, \
+         owner_agent_id, memory_scope, scene_tags, episode_id, source_type, source_trust) \
+         VALUES ($1, 'context', $2, 0.5, 'episode', 'lingshu', 'private', $3, gen_random_uuid(), 'conversation', 0.9) \
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(format!(
+        "用户：{}\n助手：{}",
+        user_message.trim(),
+        assistant_response.trim()
+    ))
+    .bind(vec!["conversation".to_string()])
+    .fetch_one(db)
+    .await
+    {
+        Ok(id) => Some(id),
+        Err(error) => {
+            tracing::warn!(%user_id, %error, "Failed to persist raw interaction episode");
+            None
+        }
+    };
+
     let should_extract = crate::cooldown::memory_extractions().should_run(user_id);
     if !should_extract {
         return;
@@ -324,6 +362,36 @@ pub async fn extract_and_save(
         .await
         {
             Ok(outcome) => {
+                let source_ids = episode_id.into_iter().collect::<Vec<_>>();
+                if let Err(error) = sqlx::query(
+                    "UPDATE memories SET memory_layer='fact', scene_tags=$1, fact_key=$2, fact_value=$3, \
+                     source_trust=$4, source_type='conversation_extraction', source_memory_ids=$5, updated_at=NOW() \
+                     WHERE id=$6 AND user_id=$7",
+                )
+                .bind(&c.scene_tags)
+                .bind(c.fact_key.as_deref())
+                .bind(c.fact_value.as_deref())
+                .bind(c.source_trust.clamp(0.0, 1.0))
+                .bind(&source_ids)
+                .bind(outcome.memory.id)
+                .bind(user_id)
+                .execute(db)
+                .await
+                {
+                    tracing::warn!(memory_id=%outcome.memory.id, %error, "Failed to enrich structured memory");
+                }
+                if let Some(fact_key) = c.fact_key.as_deref().filter(|key| !key.trim().is_empty()) {
+                    if let Err(error) = crate::routes::memory_gateway::reconcile_memory_conflicts(
+                        db,
+                        user_id,
+                        outcome.memory.id,
+                        fact_key,
+                    )
+                    .await
+                    {
+                        tracing::warn!(memory_id=%outcome.memory.id, %error, "Failed to reconcile extracted memory conflict");
+                    }
+                }
                 if outcome.created {
                     saved += 1;
                 }
@@ -351,6 +419,12 @@ pub fn build_memory_extraction_prompt(user_message: &str, assistant_response: &s
 - **目标 (goal)**：用户提到的工作/生活目标或计划。例如：「这个季度要上线用户系统」「我计划年底前学会 SwiftUI」
 - **上下文 (context)**：用户的工作场景、所处环境、角色身份。例如：「我最近在负责前端重构项目」「我是 iOS 团队的 PM」
 
+## 结构化与来源字段
+- scene_tags：1-3 个简短场景标签，例如 project、schedule、preference
+- fact_key：稳定的事实键，例如 profile.city、project.stack；无法结构化时为 null
+- fact_value：事实当前值；无法结构化时为 null
+- source_trust：本轮用户直接陈述通常为 0.85-1.0，含糊推断不得高于 0.7
+
 ## 不重要的事（跳过）
 - 闲聊、问候、感谢（「谢谢」「好的」「明白了」）
 - 一次性请求（「帮我查一下天气」）
@@ -368,7 +442,7 @@ pub fn build_memory_extraction_prompt(user_message: &str, assistant_response: &s
 如果用户说的内容与已有记忆高度重叠，降低 importance 或直接跳过。不要为同一事实创建多条重复记忆。
 
 ## 输出格式
-严格返回 JSON 数组。每条对象包含：content（记忆内容，用中文概括）、importance（0.0-1.0）、memory_type（preference | fact | goal | context）。
+严格返回 JSON 数组。每条对象包含：content（记忆内容，用中文概括）、importance（0.0-1.0）、memory_type（preference | fact | goal | context）、scene_tags、fact_key、fact_value、source_trust。
 
 如果消息中没有任何值得记住的内容，返回 []。
 

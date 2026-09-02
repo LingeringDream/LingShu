@@ -5,6 +5,7 @@ export type AppSectionKey =
   | 'chat'
   | 'workspace'
   | 'memory'
+  | 'memory-lab'
   | 'personality'
   | 'thoughts'
   | 'preferences'
@@ -22,6 +23,7 @@ const navItems: { key: AppSectionKey; label: string }[] = [
   { key: 'chat', label: '聊天' },
   { key: 'workspace', label: '工作台' },
   { key: 'memory', label: '记忆中心' },
+  { key: 'memory-lab', label: '记忆进化实验台' },
   { key: 'personality', label: '人格中心' },
   { key: 'thoughts', label: '思维队列' },
   { key: 'preferences', label: '偏好设置' },

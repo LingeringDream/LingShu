@@ -3,6 +3,7 @@ import { AppLayout, type AppSectionKey } from './components/layout/AppLayout';
 import { ChatWindow } from './components/chat/ChatWindow';
 import { ChatSettings } from './components/chat/ChatSettings';
 import { MemoryCenter } from './components/memory/MemoryCenter';
+import { MemoryEvolutionLab } from './components/memory/MemoryEvolutionLab';
 import { WorkspacePage } from './components/workspace/WorkspacePage';
 import { PermissionSettings } from './components/settings/PermissionSettings';
 import { PersonalityCenter } from './components/personality/PersonalityCenter';
@@ -526,6 +527,8 @@ export default function App() {
             <MemoryCenter />
           </section>
         );
+      case 'memory-lab':
+        return <MemoryEvolutionLab />;
       case 'personality':
         return (
           <section className="dashboard-card page-tool-card narrow-tool-card">

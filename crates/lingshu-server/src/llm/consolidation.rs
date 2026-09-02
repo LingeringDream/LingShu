@@ -281,8 +281,8 @@ async fn apply_merge_group(
     // 1. Insert the derived memory
     let derived: Memory = sqlx::query_as(
         "INSERT INTO memories \
-         (user_id, memory_type, content, importance, source_memory_ids, tier) \
-         VALUES ($1, $2, $3, $4, $5, 'derived') \
+         (user_id, memory_type, content, importance, source_memory_ids, tier, memory_layer, source_type) \
+         VALUES ($1, $2, $3, $4, $5, 'derived', 'experience', 'consolidation') \
          RETURNING *",
     )
     .bind(user_id)

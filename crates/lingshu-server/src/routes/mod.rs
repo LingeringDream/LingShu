@@ -5,6 +5,8 @@ pub mod chat;
 pub mod conversations;
 pub mod integrations;
 pub mod memories;
+pub mod memory_benchmark;
+pub mod memory_gateway;
 pub mod permissions;
 pub mod personality;
 pub mod project_members;
@@ -60,6 +62,16 @@ use utoipa::OpenApi;
         memories::update_memory,
         memories::delete_memory,
         memories::search_memories,
+        memory_gateway::list_agents,
+        memory_gateway::create_agent,
+        memory_gateway::list_gateway_memories,
+        memory_gateway::create_gateway_memory,
+        memory_gateway::grant_memory_access,
+        memory_gateway::gateway_search,
+        memory_gateway::list_conflicts,
+        memory_gateway::run_maintenance,
+        memory_gateway::gateway_stats,
+        memory_benchmark::run_benchmark,
         calendar::parse_calendar,
         calendar::list_events,
         calendar::create_event,
@@ -131,6 +143,24 @@ use utoipa::OpenApi;
         memories::MemoryResponse,
         memories::CreateMemoryRequest,
         memories::UpdateMemoryRequest,
+        memory_gateway::AgentResponse,
+        memory_gateway::CreateAgentRequest,
+        memory_gateway::CreateGatewayMemoryRequest,
+        memory_gateway::GatewayMemoryResponse,
+        memory_gateway::GrantMemoryRequest,
+        memory_gateway::GrantMemoryResponse,
+        memory_gateway::GatewaySearchRequest,
+        memory_gateway::GatewaySearchResponse,
+        memory_gateway::RankedMemoryResponse,
+        memory_gateway::ConflictEventResponse,
+        memory_gateway::MaintenanceResponse,
+        memory_gateway::GatewayStatsResponse,
+        memory_benchmark::BenchmarkMetrics,
+        memory_benchmark::AblationResult,
+        memory_benchmark::ThresholdCheck,
+        memory_benchmark::BenchmarkResponse,
+        crate::llm::evolutionary_memory::RetrievalWeights,
+        crate::llm::evolutionary_memory::ScoreBreakdown,
         calendar::ParsedEvent,
         calendar::EventResponse,
         calendar::CreateEventRequest,

@@ -1,5 +1,7 @@
 # 灵枢 · LingShu
 
+> 中国国际大学生创新大赛（2026）中兴 1529 命题原型与可复现实验见 [竞赛交付索引](docs/competition/README.md)。
+
 [![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FLingeringDream%2FLingShu%2Fmain%2FCargo.toml&query=%24.workspace.package.version&label=version&prefix=v&color=blue)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.88-orange)](./rust-toolchain.toml)

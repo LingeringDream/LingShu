@@ -848,46 +848,23 @@ mod integrations {
 mod memories {
     use super::*;
 
-    /// SELECT * must return columns matching the Memory struct, including
-    /// tier and source_memory_ids from migration 0018.
+    /// SELECT * must return columns matching the full Memory struct, including
+    /// the competition memory protocol fields from migration 20260902000001.
     #[ignore]
-    #[allow(clippy::type_complexity)]
     #[tokio::test]
     async fn memory_select_star_matches_insert_returning_star() {
+        use crate::models::memory::Memory;
+
         let pool = dev_pool().await;
         let user_id = create_user(&pool).await;
         let memory_id = Uuid::new_v4();
         let source_ids: Vec<Uuid> = vec![Uuid::new_v4(), Uuid::new_v4()];
 
-        // INSERT with explicit tier + source_memory_ids, RETURNING *
-        // Column order: id(1), user_id(2), project_id(3), memory_type(4), content(5),
-        // importance(6), access_count(7), last_accessed_at(8), vector_id(9),
-        // metadata(10), deleted_at(11), created_at(12), updated_at(13),
-        // source_memory_ids(14), tier(15)
-        let inserted: (
-            Uuid,
-            Uuid,
-            Option<Uuid>,
-            String,
-            String,
-            f32,
-            i32,
-            Option<chrono::DateTime<chrono::Utc>>,
-            Option<String>,
-            serde_json::Value,
-            Option<chrono::DateTime<chrono::Utc>>,
-            chrono::DateTime<chrono::Utc>,
-            chrono::DateTime<chrono::Utc>,
-            Vec<Uuid>,
-            String,
-        ) = sqlx::query_as(
+        let inserted: Memory = sqlx::query_as(
             "INSERT INTO memories \
-             (id, user_id, memory_type, content, importance, source_memory_ids, tier) \
-             VALUES ($1, $2, 'preference', 'test content', 0.75, $3, 'derived') \
-             RETURNING id, user_id, project_id, memory_type, content, importance, \
-             access_count, last_accessed_at, vector_id, \
-             metadata, deleted_at, created_at, updated_at, \
-             source_memory_ids, tier",
+             (id, user_id, memory_type, content, importance, source_memory_ids, tier, memory_layer, fact_key, fact_value) \
+             VALUES ($1, $2, 'preference', 'test content', 0.75, $3, 'derived', 'experience', 'preference.test', 'test') \
+             RETURNING *",
         )
         .bind(memory_id)
         .bind(user_id)
@@ -896,53 +873,26 @@ mod memories {
         .await
         .unwrap();
 
-        // Verify RETURNING * columns (position-based)
-        assert_eq!(inserted.0, memory_id); // 1: id
-        assert_eq!(inserted.1, user_id); // 2: user_id
-        assert_eq!(inserted.2, None); // 3: project_id
-        assert_eq!(inserted.3, "preference"); // 4: memory_type
-        assert_eq!(inserted.4, "test content"); // 5: content
-        assert!((inserted.5 - 0.75).abs() < f32::EPSILON); // 6: importance
-        assert_eq!(inserted.6, 0); // 7: access_count
-        assert_eq!(inserted.7, None); // 8: last_accessed_at
-        assert_eq!(inserted.8, None); // 9: vector_id
-        assert_eq!(inserted.9, serde_json::json!({})); // 10: metadata
-        assert_eq!(inserted.10, None); // 11: deleted_at
-        assert_eq!(inserted.13, source_ids); // 14: source_memory_ids
-        assert_eq!(inserted.14, "derived"); // 15: tier
+        assert_eq!(inserted.id, memory_id);
+        assert_eq!(inserted.user_id, user_id);
+        assert_eq!(inserted.content, "test content");
+        assert_eq!(inserted.source_memory_ids, source_ids);
+        assert_eq!(inserted.tier, "derived");
+        assert_eq!(inserted.memory_layer, "experience");
+        assert_eq!(inserted.fact_key.as_deref(), Some("preference.test"));
 
-        // SELECT * must match RETURNING * (same column order)
-        let selected = sqlx::query_as::<
-            _,
-            (
-                Uuid,
-                Uuid,
-                Option<Uuid>,
-                String,
-                String,
-                f32,
-                i32,
-                Option<chrono::DateTime<chrono::Utc>>,
-                Option<String>,
-                serde_json::Value,
-                Option<chrono::DateTime<chrono::Utc>>,
-                chrono::DateTime<chrono::Utc>,
-                chrono::DateTime<chrono::Utc>,
-                Vec<Uuid>,
-                String,
-            ),
-        >("SELECT * FROM memories WHERE id = $1 AND user_id = $2")
-        .bind(memory_id)
-        .bind(user_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let selected: Memory =
+            sqlx::query_as("SELECT * FROM memories WHERE id = $1 AND user_id = $2")
+                .bind(memory_id)
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
-        // Key columns match between INSERT...RETURNING * and SELECT *
-        assert_eq!(selected.0, inserted.0); // id
-        assert_eq!(selected.4, inserted.4); // content
-        assert_eq!(selected.13, inserted.13); // source_memory_ids (col 14)
-        assert_eq!(selected.14, inserted.14); // tier (col 15)
+        assert_eq!(selected.id, inserted.id);
+        assert_eq!(selected.content, inserted.content);
+        assert_eq!(selected.source_memory_ids, inserted.source_memory_ids);
+        assert_eq!(selected.memory_layer, inserted.memory_layer);
 
         cleanup_user(&pool, user_id).await;
     }

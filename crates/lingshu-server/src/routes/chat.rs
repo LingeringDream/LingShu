@@ -2146,7 +2146,7 @@ async fn fetch_memory_context(
     let rows = match rows {
         Some(ids) if !ids.is_empty() => {
             // Load the specific rows from PG, preserving Qdrant rank order
-            load_memories_by_ids(db, user_id, &ids).await
+            load_memories_by_ids(db, user_id, &ids, user_message).await
         }
         _ => {
             // No semantic results — use legacy importance+recency query
@@ -2231,35 +2231,83 @@ async fn try_semantic_fetch(
 
 /// Load memories from PG by a set of IDs, preserving the given ID order and
 /// enforcing the `user_id` / `deleted_at IS NULL` / `importance >= 0.5` gates.
+#[derive(sqlx::FromRow)]
+struct AdaptiveMemoryContextRow {
+    id: Uuid,
+    memory_type: String,
+    content: String,
+    created_at: DateTime<Utc>,
+    importance: f32,
+    access_count: i32,
+    occurred_at: DateTime<Utc>,
+    valid_to: Option<DateTime<Utc>>,
+    source_trust: f32,
+    conflict_status: String,
+    retention_status: String,
+}
+
 async fn load_memories_by_ids(
     db: &sqlx::PgPool,
     user_id: Uuid,
     ids: &[Uuid],
+    query: &str,
 ) -> Vec<(Uuid, String, String, DateTime<Utc>)> {
-    match sqlx::query_as(
-        "SELECT id, memory_type, content, created_at FROM memories \
-         WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL AND importance >= 0.5",
+    let rows: Vec<AdaptiveMemoryContextRow> = match sqlx::query_as(
+        "SELECT id, memory_type, content, created_at, importance, access_count, occurred_at, valid_to, \
+                source_trust, conflict_status, retention_status \
+         FROM memories WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL AND importance >= 0.5 \
+           AND (owner_agent_id = 'lingshu' OR memory_scope = 'global' OR EXISTS ( \
+               SELECT 1 FROM memory_access_grants g WHERE g.memory_id = memories.id \
+               AND g.grantee_agent_id = 'lingshu' AND g.can_read))",
     )
     .bind(ids)
     .bind(user_id)
     .fetch_all(db)
     .await
     {
-        Ok(rows) => {
-            // Reorder rows to match the original Qdrant rank order
-            let mut row_map: std::collections::HashMap<Uuid, (String, String, DateTime<Utc>)> =
-                rows.into_iter()
-                    .map(|(id, mt, c, ts)| (id, (mt, c, ts)))
-                    .collect();
-            ids.iter()
-                .filter_map(|id| row_map.remove(id).map(|(mt, c, ts)| (*id, mt, c, ts)))
-                .collect()
-        }
+        Ok(rows) => rows,
         Err(error) => {
             tracing::warn!(%user_id, %error, "Failed to load memories by IDs from semantic search");
-            Vec::new()
+            return Vec::new();
         }
+    };
+
+    let rank_by_id: std::collections::HashMap<Uuid, usize> = ids
+        .iter()
+        .enumerate()
+        .map(|(rank, id)| (*id, rank))
+        .collect();
+    let weights = crate::llm::evolutionary_memory::RetrievalWeights::for_query(query);
+    let now = Utc::now();
+    let mut ranked = Vec::new();
+    for row in rows {
+        let vector_rank = rank_by_id.get(&row.id).copied().unwrap_or(ids.len());
+        let semantic_score = 1.0 - vector_rank as f32 / ids.len().max(1) as f32;
+        let candidate = crate::llm::evolutionary_memory::RankableMemory {
+            id: row.id,
+            content: row.content.clone(),
+            importance: row.importance,
+            access_count: row.access_count,
+            occurred_at: row.occurred_at,
+            valid_to: row.valid_to,
+            source_trust: row.source_trust,
+            conflict_status: row.conflict_status,
+            retention_status: row.retention_status,
+            semantic_score,
+        };
+        if !crate::llm::evolutionary_memory::is_retrieval_eligible(&candidate, now) {
+            continue;
+        }
+        let score =
+            crate::llm::evolutionary_memory::score_memory(query, &candidate, &weights, now).total;
+        ranked.push((score, row.id, row.memory_type, row.content, row.created_at));
     }
+    ranked.sort_by(|left, right| right.0.total_cmp(&left.0));
+    ranked
+        .into_iter()
+        .take(5)
+        .map(|(_, id, memory_type, content, created_at)| (id, memory_type, content, created_at))
+        .collect()
 }
 
 /// Legacy fallback: top-N memories by importance + recency.
@@ -2270,7 +2318,14 @@ async fn legacy_fetch_memories(
     match sqlx::query_as(
         "SELECT id, memory_type, content, created_at FROM memories \
          WHERE user_id = $1 AND deleted_at IS NULL AND importance >= 0.5 \
-         ORDER BY importance DESC, updated_at DESC LIMIT 5",
+           AND conflict_status = 'active' AND retention_status = 'active' \
+           AND (valid_to IS NULL OR valid_to >= NOW()) \
+           AND (owner_agent_id = 'lingshu' OR memory_scope = 'global' OR EXISTS ( \
+               SELECT 1 FROM memory_access_grants g WHERE g.memory_id = memories.id \
+               AND g.grantee_agent_id = 'lingshu' AND g.can_read)) \
+         ORDER BY (importance * 0.45 + source_trust * 0.25 + \
+                  EXP(-EXTRACT(EPOCH FROM (NOW() - occurred_at)) / 2592000) * 0.30) DESC \
+         LIMIT 5",
     )
     .bind(user_id)
     .fetch_all(db)

@@ -1,6 +1,7 @@
 pub mod client;
 pub mod consolidation;
 pub mod dedup;
+pub mod evolutionary_memory;
 pub mod forgetting;
 pub mod memory;
 pub mod ollama;
