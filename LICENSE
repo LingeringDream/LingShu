@@ -1,21 +1,130 @@
-MIT License
+LingShu Commercial Software License
+Version 1.0, 2026
 
-Copyright (c) 2026 LingShu contributors
+Copyright (c) 2026 LingShu contributors. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This Commercial Software License (the "License") governs use of the LingShu
+software and its associated source code, object code, documentation, assets,
+and other materials (collectively, the "Software"). The Software is
+proprietary and is licensed, not sold.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. AUTHORIZATION REQUIRED
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+You may use the Software only if you have a valid written commercial license,
+order form, subscription, or other agreement issued or approved by the
+copyright holders (an "Authorization"). Possession of, or access to, the
+Software does not by itself grant any right to use, copy, modify, or distribute
+it. If you do not have an Authorization, no license is granted.
+
+2. LIMITED LICENSE GRANT
+
+Subject to your payment of all applicable fees and continued compliance with
+this License and your Authorization, you are granted a limited, non-exclusive,
+non-transferable, non-sublicensable, and revocable right, during the term of
+the Authorization, to install and use the Software solely for your internal
+business purposes and only within the users, devices, environments, features,
+and other limits stated in the Authorization.
+
+Any right to access source code, make modifications, operate the Software for
+third parties, or use it for evaluation, development, testing, backup, disaster
+recovery, or production purposes must be expressly stated in the
+Authorization.
+
+3. RESTRICTIONS
+
+Except where expressly permitted by an Authorization or by non-waivable law,
+you must not, and must not allow any third party to:
+
+  a. copy, reproduce, modify, adapt, translate, or create derivative works of
+     the Software;
+  b. distribute, publish, sell, resell, rent, lease, sublicense, assign,
+     transfer, disclose, or otherwise make the Software available to any third
+     party;
+  c. provide the Software, or substantially similar functionality derived from
+     it, as a hosted, managed, service-bureau, outsourcing, or software-as-a-
+     service offering;
+  d. reverse engineer, decompile, disassemble, or otherwise attempt to derive
+     source code, trade secrets, algorithms, or underlying ideas from the
+     Software;
+  e. bypass or interfere with license keys, access controls, usage limits,
+     security controls, telemetry required for license enforcement, or other
+     technical protection measures;
+  f. remove, obscure, or alter copyright, trademark, attribution,
+     confidentiality, or other proprietary notices; or
+  g. use the Software in violation of applicable law or the scope of the
+     Authorization.
+
+4. OWNERSHIP
+
+The copyright holders and their licensors retain all right, title, and
+interest in and to the Software, including all intellectual property rights.
+No rights are granted except those expressly stated in this License and the
+Authorization. All rights not expressly granted are reserved.
+
+5. THIRD-PARTY COMPONENTS
+
+The Software may include or depend on third-party components. Those components
+remain governed by their respective license terms. This License does not
+restrict rights granted directly to you under a third-party license.
+
+6. CONFIDENTIALITY
+
+Non-public source code, documentation, credentials, product plans, and other
+materials identified as confidential, or that reasonably should be understood
+to be confidential, must be protected using at least reasonable care and may
+be used or disclosed only as necessary to exercise rights expressly granted by
+the Authorization.
+
+7. SUPPORT, UPDATES, AND AVAILABILITY
+
+Support, maintenance, updates, upgrades, service levels, hosted services, and
+continued availability are provided only if and to the extent stated in the
+Authorization. The copyright holders have no obligation to provide any of them
+under this License alone.
+
+8. TERMINATION
+
+This License and the rights granted under it terminate automatically if the
+Authorization expires or if you breach this License or the Authorization. On
+termination, you must immediately stop using the Software and delete or return
+all copies in your possession or control, except copies that applicable law
+requires you to retain. Sections 3 through 6, 9, 10, and 12 survive
+termination.
+
+9. DISCLAIMER OF WARRANTIES
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SOFTWARE IS PROVIDED "AS IS" AND
+"AS AVAILABLE," WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EXPRESS,
+IMPLIED, OR STATUTORY, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, SECURITY, OR
+UNINTERRUPTED OPERATION. ANY WARRANTIES EXPRESSLY PROVIDED IN AN AUTHORIZATION
+ARE THE ONLY WARRANTIES THAT APPLY.
+
+10. LIMITATION OF LIABILITY
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDERS, CONTRIBUTORS,
+AND LICENSORS WILL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, PUNITIVE, OR CONSEQUENTIAL DAMAGES, OR FOR ANY LOSS OF PROFITS,
+REVENUE, DATA, GOODWILL, OR BUSINESS INTERRUPTION, ARISING OUT OF OR RELATED TO
+THE SOFTWARE OR THIS LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGES. EXCEPT FOR LIABILITY THAT CANNOT LAWFULLY BE LIMITED, THEIR AGGREGATE
+LIABILITY WILL NOT EXCEED THE FEES YOU PAID FOR THE SOFTWARE DURING THE TWELVE
+MONTHS BEFORE THE EVENT GIVING RISE TO THE CLAIM.
+
+11. EXPORT AND LEGAL COMPLIANCE
+
+You are responsible for complying with applicable export-control, sanctions,
+privacy, data-protection, and other laws in connection with your use of the
+Software.
+
+12. ORDER OF PRECEDENCE AND GENERAL TERMS
+
+If this License conflicts with a signed commercial agreement or order form,
+the signed agreement or order form controls to the extent of the conflict. If
+any provision of this License is unenforceable, it will be limited to the
+minimum extent necessary, and the remaining provisions will remain in effect.
+Failure to enforce a provision is not a waiver. Governing law, venue, notices,
+and any negotiated commercial terms are those stated in the Authorization.
+
+To obtain commercial authorization, contact the LingShu copyright holders or
+their authorized representative.

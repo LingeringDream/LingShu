@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-31
+
+### Licensing
+
+- Replaced the MIT License with the proprietary LingShu Commercial Software License.
+- Updated Cargo package metadata, contribution terms, and Chinese and English README license notices.
+
 ## 2026-07-26
 
 ### Version 1.4.1

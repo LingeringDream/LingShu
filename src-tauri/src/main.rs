@@ -3,7 +3,8 @@
 // opens main (control panel) + pet (floating avatar) windows, and
 // kills the backend when the app exits.
 //
-// Build:  ./scripts/build-sidecar.sh
+// Build:  ./scripts/build-sidecar.sh (macOS/Linux)
+//         ./scripts/build-sidecar.ps1 (Windows standalone bundle)
 //         cd frontend && npm run tauri build
 // → src-tauri/target/release/bundle/macos/LingShu.app
 
@@ -67,7 +68,12 @@ struct PetWindowPosition {
 impl Drop for SidecarGuard {
     fn drop(&mut self) {
         if let Ok(mut guard) = self.0.lock() {
-            if let Some(child) = guard.take() {
+            if let Some(mut child) = guard.take() {
+                // Let the sidecar stop its embedded database cleanly before
+                // terminating the process. The follow-up kill is a bounded
+                // safety net for shutdowns where the child is unresponsive.
+                let _ = child.write(b"shutdown\n");
+                std::thread::sleep(std::time::Duration::from_secs(3));
                 if let Err(e) = child.kill() {
                     eprintln!("[lingshu-tauri] failed to kill sidecar: {e}");
                 }
@@ -546,7 +552,7 @@ fn main() {
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let ready =
-                    wait_for_backend(BACKEND_PORT, std::time::Duration::from_secs(15)).await;
+                    wait_for_backend(BACKEND_PORT, std::time::Duration::from_secs(90)).await;
                 if ready {
                     println!("[lingshu-tauri] backend ready, showing windows");
                 } else {

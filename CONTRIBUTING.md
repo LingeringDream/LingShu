@@ -150,4 +150,9 @@ docs/                  Design decisions, MVP status
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [MIT License](./LICENSE).
+By submitting a contribution, you represent that you have the right to do so
+and grant the LingShu copyright holders a perpetual, worldwide, non-exclusive,
+irrevocable, royalty-free license to use, reproduce, modify, distribute,
+sublicense, and commercialize that contribution as part of LingShu.
+Contributions included in LingShu are distributed under the
+[LingShu Commercial Software License](./LICENSE).

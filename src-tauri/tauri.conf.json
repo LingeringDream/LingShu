@@ -48,6 +48,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "useLocalToolsDir": true,
     "externalBin": [
       "binaries/lingshu-server"
     ],

@@ -2,6 +2,15 @@
 name = "lingshu-server"
 version.workspace = true
 edition.workspace = true
+license-file.workspace = true
+build = "build.rs"
+
+[features]
+default = []
+# Packages a PostgreSQL runtime inside the Windows desktop sidecar. The
+# archive is downloaded while building and embedded into lingshu-server.exe;
+# end users never need to install or download a database.
+desktop-embedded-db = ["dep:postgresql_embedded", "dep:postgresql_archive"]
 
 [[bin]]
 name = "lingshu-server"
@@ -39,6 +48,9 @@ bytes = { workspace = true }
 scraper = { workspace = true }
 pdf-extract = { workspace = true }
 
+postgresql_embedded = { version = "0.19.0", default-features = false, features = ["tokio", "rustls", "zonky"], optional = true }
+postgresql_archive = { version = "0.19.0", default-features = false, features = ["github", "rustls", "zonky"], optional = true }
+
 dotenvy = "0.15"
 # getppid() for the "exit when the Tauri parent dies" sidecar watchdog (unix
 # only; the call site is #[cfg(unix)]-gated).
@@ -46,6 +58,9 @@ libc = "0.2"
 
 # Internal crates
 lingshu-vector = { path = "../lingshu-vector" }
+
+[build-dependencies]
+postgresql_archive = { version = "0.19.0", default-features = false, features = ["blocking", "github", "rustls", "zonky"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
