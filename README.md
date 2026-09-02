@@ -1,6 +1,6 @@
 # 灵枢 · LingShu
 
-> 中国国际大学生创新大赛（2026）中兴 1529 命题原型与可复现实验见 [竞赛交付索引](docs/competition/README.md)。
+> 中国国际大学生创新大赛（2026）产业赛道 · 中兴通讯第 1529 题可运行原型。完整源码、部署说明、架构、创新点、数据集与可复现实验见 [竞赛交付索引](docs/competition/README.md)。
 
 [![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FLingeringDream%2FLingShu%2Fmain%2FCargo.toml&query=%24.workspace.package.version&label=version&prefix=v&color=blue)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Commercial-red)](./LICENSE)
@@ -9,9 +9,45 @@
 
 [English](./README.en.md)
 
-macOS 桌面宠物式 AI 个人助理：常驻桌面的悬浮形象，具备长期记忆（SoulLedger）、可控人格、主动建议（Thought Queue）、分级系统权限，以及 Apple Calendar 日程同步。
+桌面宠物式 AI 个人助理：常驻桌面的悬浮形象，具备长期记忆（SoulLedger）、可控人格、主动建议（Thought Queue）、分级系统权限，以及 Apple Calendar 日程同步。在此基础上，项目已扩展出面向多智能体协同的动态记忆沉淀、冲突治理与自适应检索原型。
 
 ---
+
+## 产业赛道作品
+
+| 项目 | 内容 |
+|------|------|
+| 企业 | 中兴通讯股份有限公司 |
+| 正式命题 | **面向智能体自主进化的动态记忆沉淀与自适应检索系统** |
+| 命题编号 | 1529 |
+| 原型名称 | **灵枢 · Memory Evolution Lab** |
+| 作品形态 | Rust/Axum 后端 + React/Tauri 可视化原型 + PostgreSQL/Qdrant 数据层 |
+
+原型已经打通赛题要求的核心链路：
+
+- **三层异构记忆**：`episode` 原始交互片段、`fact` 结构化事实、`experience` 通用经验，支持时序索引、场景标签与来源追溯。
+- **多 Agent Memory Gateway**：提供私有、定向共享、全局公共空间，以及按记忆授权、权限隔离和访问审计。
+- **动态冲突治理**：结合有效时间、来源可信度、交互频次和重要性识别新旧事实，自动标记过期或被替代记忆并保留裁决记录。
+- **自适应检索**：融合语义、词法、时序、可信度、频次和重要性进行重排，支持与传统静态 RAG 使用同一数据和接口对照。
+- **可运行评测**：内置 60 轮记忆、12 个时序查询的标准化自建回归集，并输出完整模型、静态基线、消融实验和阈值判定结果。
+- **可视化演示**：在侧栏进入“记忆进化实验台”，可查看分层记忆、权限空间、冲突事件、检索评分和基线对比。
+
+当前自建回归集 v1 的可复现结果：
+
+| 指标 | 静态 RAG 基线 | 自适应检索 | 变化 |
+|------|--------------:|-----------:|-----:|
+| Top-1 长时序准确率 | 50.00% | 91.67% | +41.67 个百分点 |
+| Hit@5 | 91.67% | 91.67% | 0 |
+| 冲突/过期记忆过滤率 | 0.00% | 100.00% | +100.00 个百分点 |
+| 检索任务完成度代理 | 50.00% | 91.67% | +41.67 个百分点 |
+| 估算上下文 Token | 2717 | 1159 | -57.34% |
+
+```bash
+# 无需启动数据库，现场重算静态基线、自适应检索与消融结果
+cargo test -p lingshu-server benchmark_reports_static_baseline_and_adaptive_gain -- --nocapture
+```
+
+> **证据边界：**以上数据来自自建回归集和当前指标口径，不等同于企业最终验收结果。公开长记忆数据集、端到端开放域任务完成度、正式 Top-K Precision 口径、多次重复实验及端侧峰值内存对照仍需补齐。详见[实验报告](docs/competition/experiment-report.md)。
 
 ## 功能概览
 
@@ -19,6 +55,7 @@ macOS 桌面宠物式 AI 个人助理：常驻桌面的悬浮形象，具备长�
 |------|------|------|
 | 桌面宠物 | 透明浮层、可拖拽、贴边浮窗；Tauri `startDragging` 原生拖动 | ✅ Tauri 2 壳就位 |
 | SoulLedger | 分层记忆、去重、遗忘衰减（含来源护栏）、人格演化、离线 LLM 语义合并、向量检索 | ✅ 后端完成 |
+| Memory Evolution Lab | 三层异构记忆、多 Agent 权限空间、冲突治理、自适应检索、静态 RAG 基线与消融评测 | ✅ 全链路原型完成 |
 | Apple Calendar | 自然语言排程、L1 权限确认流、事件 CRUD、EventKit 写入/删除系统日历、external_event_id 回写 | ✅ 后端 + 桥接完成 |
 | 权限分级 | L0–L4 逐级系统权限 + 审计日志，权限设置持久化至 PostgreSQL | ✅ 后端完成 |
 | 思考队列 | 状态机 + 防打扰抑制 + 生命周期守卫 + 每日维护 + 可解释置信度 | ✅ 后端完成 |
@@ -32,12 +69,13 @@ macOS 桌面宠物式 AI 个人助理：常驻桌面的悬浮形象，具备长�
 
 ## 项目状态
 
-**核心功能完成，进入桌面/原生集成收尾阶段。** SoulLedger 记忆系统、人格、思考队列、权限分级、向量检索、信号埋点、工具调用、日历 EventKit 写入/删除等均已实现。后端含 **300+ 测试函数（16 项 DB 门控 ignored）**，前端新增 Vitest 套件（stores / lib / 组件，18 项）。
+**核心功能完成，进入竞赛证据完善与桌面/原生集成收尾阶段。** SoulLedger 记忆系统、Memory Gateway、冲突治理、自适应检索、人格、思考队列、权限分级、工具调用、日历 EventKit 写入/删除等均已实现。当前后端测试结果为 **381 passed、17 ignored**，前端为 **24 个测试文件、98 项测试通过**。
 
-- ✅ Rust + Axum 后端（API、WebSocket、数据库迁移 001–0022）
+- ✅ Rust + Axum 后端（API、WebSocket、26 个数据库迁移）
 - ✅ React + TypeScript + Vite 前端（聊天 + 记忆/人格/日历/思绪中心 + 设置 + 角色提示词 + 工作区）
 - ✅ PostgreSQL + Redis + Qdrant 开发环境
 - ✅ SoulLedger：记忆提取/去重、遗忘衰减 + 来源护栏、人格演化、离线 LLM 语义合并
+- ✅ Memory Evolution Lab：三层记忆协议、多 Agent Gateway、冲突治理、自适应检索、静态基线与消融评测
 - ✅ 语义记忆检索（Ollama 嵌入 + Qdrant，带 SQL 回退）
 - ✅ 思考队列状态机 + 防打扰 + 生命周期守卫 + 每日维护
 - ✅ 权限分级 L0–L4 + 审计日志，权限设置持久化至 PostgreSQL（migration 0022）
@@ -173,7 +211,7 @@ frontend/              React + TypeScript + Vite 单页应用（含 pet 窗口�
     avatar/            桌面宠物（PetWindow、AvatarPlaceholder、AvatarControlPanel）
     chat/              聊天窗口（ChatWindow、ChatInput、MessageBubble、ChatSettings、RolePromptSettings）
     layout/            应用布局（AppLayout）
-    memory/            记忆中心（MemoryCenter）
+    memory/            记忆中心（MemoryCenter）与记忆进化实验台（MemoryEvolutionLab）
     personality/       人格中心（PersonalityCenter）
     projects/          项目管理（ProjectManager）
     settings/          权限设置（PermissionSettings）
@@ -187,9 +225,9 @@ docs/                  设计决策、MVP 状态等文档
 poc/                   技术验证（AGE 图、LLM 流式、Qdrant）
 ```
 
-SoulLedger 关键模块（`crates/lingshu-server/src/llm/`）：`memory.rs`（抽取/去重）、`forgetting.rs`（衰减 + 来源护栏）、`personality.rs`（人格演化）、`consolidation.rs`（离线语义合并）、`thoughts.rs`（主动建议）、`dedup.rs`、`prompts.rs`、`semantic.rs`（语义检索）、`ollama.rs`（Ollama 适配）、`client.rs`（Ollama/OpenAI + 嵌入 + 工具调用）。
+SoulLedger 关键模块（`crates/lingshu-server/src/llm/`）：`memory.rs`（抽取/去重）、`evolutionary_memory.rs`（记忆协议、权限判定、冲突评分与自适应重排）、`forgetting.rs`（衰减 + 来源护栏）、`personality.rs`（人格演化）、`consolidation.rs`（离线语义合并）、`thoughts.rs`（主动建议）、`dedup.rs`、`prompts.rs`、`semantic.rs`（语义检索）、`client.rs`（Ollama/OpenAI + 嵌入 + 工具调用）。
 
-后端路由（`crates/lingshu-server/src/routes/`）：`chat.rs`（对话 + 工具调用）、`calendar.rs`、`memories.rs`、`personality.rs`、`thoughts.rs`、`permissions.rs`、`settings.rs`（LLM 设置 + 角色提示词）、`integrations.rs`、`signals.rs`、`audit.rs`、`conversations.rs`、`projects.rs`、`tasks.rs`、`users.rs`、`auth.rs`、`system.rs`、`sessions.rs`、`project_members.rs`、`task_dependencies.rs`。
+后端路由（`crates/lingshu-server/src/routes/`）：`chat.rs`（对话 + 工具调用）、`memories.rs`、`memory_gateway.rs`（Agent、分层空间、权限、冲突与检索）、`memory_benchmark.rs`（基线、完整模型与消融评测）、`calendar.rs`、`personality.rs`、`thoughts.rs`、`permissions.rs`、`settings.rs`（LLM 设置 + 角色提示词）、`integrations.rs`、`signals.rs`、`audit.rs`、`conversations.rs`、`projects.rs`、`tasks.rs`、`users.rs`、`auth.rs`、`system.rs`、`sessions.rs`、`project_members.rs`、`task_dependencies.rs`。
 
 ## Tauri 桌面应用
 
@@ -228,10 +266,10 @@ cd frontend && ./node_modules/.bin/tauri dev
 ## 测试
 
 ```bash
-# 后端测试（300+ 测试函数，16 项 DB 门控 ignored）
+# 后端测试（当前 381 passed、17 ignored）
 cargo test --workspace
 
-# 前端单测（Vitest）+ 类型检查 + 构建
+# 前端单测（当前 24 个测试文件、98 项测试）+ 类型检查 + 构建
 cd frontend && npm run test && npm run type-check && npm run build
 
 # Tauri 构建（macOS）
@@ -247,17 +285,20 @@ CI（GitHub Actions）：Rust fmt/clippy/test、前端 type-check/build、Docker
 
 ## API 文档
 
-OpenAPI 3.0 由 [utoipa](https://github.com/juhaku/utoipa) 生成，覆盖全部 **65 个已注册接口**（系统、认证、用户、LLM 设置、对话、会话、记忆、人格、思绪、日历、权限、集成、信号、审计、项目管理等）。后端运行时访问 `/swagger-ui`。
+OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，当前覆盖 **57 条路径、89 个操作**（系统、认证、用户、LLM 设置、对话、会话、记忆网关、评测、人格、思绪、日历、权限、集成、信号、审计、项目管理等）。后端运行时访问 `/swagger-ui`。
 
 ## 已知局限
 
 - WebSocket 仍为回声桩，主动建议的实时推送待实现。
 - Thought Queue 的「跨会话实体计数」触发器为后续增强。
+- 竞赛实验当前仍以自建回归集为主，公开数据集、端到端开放域任务、正式 Top-K Precision、多次重复实验和端侧内存对照尚待补齐。
 - 前端 ESLint（ESLint 9 flat config）与 OpenAPI 契约门禁（committed spec + 生成客户端 + diff gate）仍待 Phase 1。
 
 ## 文档索引
 
 - [产品需求文档](./AI-PersonalAssistant-PRD.md) — 完整产品规格
+- [中兴 1529 竞赛交付索引](./docs/competition/README.md) — 命题映射、部署演示、架构、创新点与实验报告
+- [竞赛实验报告](./docs/competition/experiment-report.md) — 静态基线、自适应检索、消融实验与证据边界
 - [SoulLedger 设计决策](./docs/soulledger-design-decisions.md)
 - [MVP 完成度](./docs/mvp-status.md)
 - [贡献指南](./CONTRIBUTING.md) · [更新日志](./CHANGELOG.md)
