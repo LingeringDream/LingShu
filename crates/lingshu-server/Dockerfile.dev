@@ -17,8 +17,11 @@ RUN mkdir -p crates/lingshu-server/src crates/lingshu-vector/src && \
     cargo build --workspace 2>/dev/null || true && \
     rm -rf crates/*/src
 
-# Copy actual source (will be overridden by volume mount in dev)
+# Copy actual source and compile-time benchmark fixtures. The source directory
+# is overridden by a volume in dev, while datasets stays available to
+# include_str! during container-side compilation.
 COPY crates/ crates/
+COPY datasets/ datasets/
 
 ENV RUST_LOG=info,lingshu_server=debug
 ENV SQLX_OFFLINE=false

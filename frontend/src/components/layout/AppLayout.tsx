@@ -20,10 +20,10 @@ interface AppLayoutProps {
 
 const navItems: { key: AppSectionKey; label: string }[] = [
   { key: 'home', label: '首页' },
+  { key: 'memory-lab', label: '动态记忆引擎' },
   { key: 'chat', label: '聊天' },
   { key: 'workspace', label: '工作台' },
   { key: 'memory', label: '记忆中心' },
-  { key: 'memory-lab', label: '记忆进化实验台' },
   { key: 'personality', label: '人格中心' },
   { key: 'thoughts', label: '思维队列' },
   { key: 'preferences', label: '偏好设置' },
@@ -31,13 +31,23 @@ const navItems: { key: AppSectionKey; label: string }[] = [
   { key: 'settings', label: '模型配置' },
 ];
 
+const competitionNavItems: { key: AppSectionKey; label: string }[] = [
+  { key: 'memory-lab', label: '动态记忆引擎' },
+  { key: 'chat', label: '对话演示' },
+  { key: 'settings', label: '模型配置' },
+  { key: 'home', label: '返回个人助理' },
+];
+
 export function AppLayout({ children, activeSection = 'home', onNavigate }: AppLayoutProps) {
+  const isMemoryLab = activeSection === 'memory-lab';
+  const displayedNavItems = isMemoryLab ? competitionNavItems : navItems;
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${isMemoryLab ? 'app-shell--memory-lab' : ''}`}>
       <header className="app-topbar">
         <div className="topbar-brand">
           <img className="topbar-logo" src="/icon.png" alt="灵枢" />
-          <h1>个人助理本地控制台</h1>
+          <h1>{isMemoryLab ? 'Agent 动态记忆基础设施' : '个人助理本地控制台'}</h1>
         </div>
         <div className="topbar-actions">
           <button type="button" className="user-menu-button">
@@ -52,12 +62,14 @@ export function AppLayout({ children, activeSection = 'home', onNavigate }: AppL
             <img className="brand-mark" src="/icon.png" alt="" aria-hidden="true" />
             <div>
               <div className="brand-title">灵枢</div>
-              <div className="brand-subtitle">跨平台 AI 个人助理</div>
+              <div className="brand-subtitle">
+                {isMemoryLab ? 'Agent Memory Infrastructure' : '跨平台 AI 个人助理'}
+              </div>
             </div>
           </div>
 
           <nav className="app-nav">
-            {navItems.map(({ key, label }) => (
+            {displayedNavItems.map(({ key, label }) => (
               <button
                 key={key}
                 className={`nav-button ${activeSection === key ? 'nav-button-active' : ''}`}

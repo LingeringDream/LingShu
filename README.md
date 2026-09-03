@@ -111,6 +111,20 @@ cargo test -p lingshu-server benchmark_reports_static_baseline_and_adaptive_gain
 
 ## 快速开始
 
+### Windows 一键启动（推荐用于演示）
+
+安装并启动 Docker Desktop 后，直接双击仓库根目录的：
+
+```text
+启动灵枢竞赛版.cmd
+```
+
+启动器会自动构建并启动 PostgreSQL、Redis、Qdrant、Rust 后端和 React 前端，待服务就绪后直接打开“动态记忆引擎”控制台。首次构建可能需要几分钟，后续会复用 Docker 缓存。
+
+如果系统没有自动唤起默认浏览器，可双击 `打开灵枢控制台.cmd`，或访问 `http://127.0.0.1:5173/?section=memory-lab`。
+
+演示结束后双击 `停止灵枢开发版.cmd`。停止操作只关闭开发容器，不会删除数据库卷和已有记忆数据。
+
 ### 1. 启动基础设施
 
 ```bash

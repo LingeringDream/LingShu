@@ -75,7 +75,11 @@ function getErrorMessage(error: unknown, fallback: string): string {
 export default function App() {
   const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<AppSectionKey>('home');
+  const [activeSection, setActiveSection] = useState<AppSectionKey>(() =>
+    new URLSearchParams(window.location.search).get('section') === 'memory-lab'
+      ? 'memory-lab'
+      : 'home',
+  );
   const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>(() => loadAvatarControlSettings());
 
   // Dashboard state
@@ -569,7 +573,10 @@ export default function App() {
   return (
     <AppLayout activeSection={activeSection} onNavigate={setActiveSection}>
       <div className="workspace dashboard-workspace">
-        <div id={`section-${activeSection}`} className="dashboard-scroll">
+        <div
+          id={`section-${activeSection}`}
+          className={`dashboard-scroll ${activeSection === 'memory-lab' ? 'dashboard-scroll--memory-lab' : ''}`}
+        >
           {renderActivePanel()}
         </div>
       </div>

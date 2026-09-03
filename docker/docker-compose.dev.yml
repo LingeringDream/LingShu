@@ -57,6 +57,7 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - ../crates:/app/crates
+      - ../datasets:/app/datasets:ro
       - cargo_cache:/usr/local/cargo/registry
     environment:
       DATABASE_URL: postgres://lingshu:lingshu@postgres:5432/lingshu
