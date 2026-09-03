@@ -24,6 +24,7 @@ use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
 const BACKEND_PORT: u16 = 8080;
+const BACKEND_STARTUP_TIMEOUT_SECS: u64 = 120;
 const SIDECAR_BINARY_NAME: &str = "lingshu-server";
 const SIDECAR_EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
 const SIDECAR_EXIT_WITH_PARENT_VALUE: &str = "1";
@@ -551,8 +552,11 @@ fn main() {
             // Wait for the backend port before showing windows.
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let ready =
-                    wait_for_backend(BACKEND_PORT, std::time::Duration::from_secs(90)).await;
+                let ready = wait_for_backend(
+                    BACKEND_PORT,
+                    std::time::Duration::from_secs(BACKEND_STARTUP_TIMEOUT_SECS),
+                )
+                .await;
                 if ready {
                     println!("[lingshu-tauri] backend ready, showing windows");
                 } else {

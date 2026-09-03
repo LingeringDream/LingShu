@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-09-03
+
+### Version 1.5.1
+
+- `fix(desktop)`: keep the Windows first-launch session handshake alive while the embedded database is extracted and initialized.
+- `ux(desktop)`: explain that the first local database initialization can take one to two minutes.
 ## 2026-09-02
 
 ### Version 1.5.0

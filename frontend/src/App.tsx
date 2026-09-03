@@ -19,6 +19,11 @@ import {
 } from './components/avatar/avatarControls';
 import { ensureLocalSession, apiFetch } from './lib/api';
 import { isTauri, MAIN_NAVIGATE_EVENT } from './lib/tauri';
+import {
+  DESKTOP_BACKEND_STARTUP_TIMEOUT_MS,
+  WEB_BACKEND_STARTUP_TIMEOUT_MS,
+  retryLocalSession,
+} from './lib/localSessionBoot';
 import { installChatSessionSync, useChatStore } from './stores/chatStore';
 import { useProjectStore } from './stores/projectStore';
 import {
@@ -96,29 +101,22 @@ export default function App() {
   const bootLocalSession = useCallback(async () => {
     setSessionState('loading');
     setSessionError(null);
-    // The bundled backend sidecar needs a few seconds to boot on launch
-    // (connect to Postgres, run migrations, bind :8080). A single attempt that
-    // fires the instant the window opens loses the race and strands the UI in
-    // the error state even though the backend comes up moments later. Retry
-    // with light backoff for up to ~30 s, staying in the 'loading' state so the
-    // user sees "connecting" rather than "failed" during a normal cold start.
-    const deadlineMs = Date.now() + 30_000;
-    let lastError: unknown;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await ensureLocalSession(true);
-        setSessionState('ready');
-        return;
-      } catch (e) {
-        lastError = e;
-        if (Date.now() >= deadlineMs) break;
-        await new Promise((resolve) =>
-          setTimeout(resolve, Math.min(500 + attempt * 250, 2000)),
-        );
-      }
+    try {
+      // A packaged Windows first launch may need well over 30 seconds to
+      // extract and initialise the embedded PostgreSQL runtime. The desktop
+      // shell waits before showing this window, so the frontend must not enter
+      // a stale error state while that startup wait is still in progress.
+      await retryLocalSession({
+        request: () => ensureLocalSession(true),
+        timeoutMs: isTauri()
+          ? DESKTOP_BACKEND_STARTUP_TIMEOUT_MS
+          : WEB_BACKEND_STARTUP_TIMEOUT_MS,
+      });
+      setSessionState('ready');
+    } catch (error) {
+      setSessionError(getErrorMessage(error, '本地会话启动失败'));
+      setSessionState('error');
     }
-    setSessionError(getErrorMessage(lastError, '本地会话启动失败'));
-    setSessionState('error');
   }, []);
 
   useEffect(() => {
@@ -306,7 +304,11 @@ export default function App() {
               <h3>{sessionState === 'loading' ? '正在打开本地控制台' : '本地控制台启动失败'}</h3>
             </div>
             {sessionState === 'loading' ? (
-              <p>正在连接本地服务...</p>
+              <p>
+                {isTauri()
+                  ? '正在启动本地服务；首次运行需要初始化内置数据库，可能需要 1–2 分钟...'
+                  : '正在连接本地服务...'}
+              </p>
             ) : (
               <>
                 <p>{sessionError}</p>
