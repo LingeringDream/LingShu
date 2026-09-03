@@ -5,6 +5,7 @@
 ### Version 1.5.1
 
 - `fix(desktop)`: keep the Windows first-launch session handshake alive while the embedded database is extracted and initialized.
+- `fix(windows)`: reliably hide the main control-panel window when its close button is clicked while keeping LingShu and the desktop pet running.
 - `ux(desktop)`: explain that the first local database initialization can take one to two minutes.
 ## 2026-09-02
 

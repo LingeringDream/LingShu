@@ -228,6 +228,26 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+fn hide_main_window(window: &tauri::Window) {
+    if let Err(error) = window.hide() {
+        eprintln!("[lingshu-tauri] failed to hide main window: {error}");
+    }
+
+    // On Windows/WebView2, hiding synchronously from WM_CLOSE can
+    // occasionally be undone while the native close event is still being
+    // dispatched. Check again shortly afterwards and repeat the hide if the
+    // control panel is still visible.
+    let window = window.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+        if window.is_visible().unwrap_or(false) {
+            if let Err(error) = window.hide() {
+                eprintln!("[lingshu-tauri] failed to hide main window after close: {error}");
+            }
+        }
+    });
+}
+
 fn install_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show_main = MenuItem::with_id(app, TRAY_SHOW_MAIN_ID, "打开控制台", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "退出灵枢", true, None::<&str>)?;
@@ -446,7 +466,7 @@ fn main() {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    let _ = window.hide();
+                    hide_main_window(window);
                 }
             }
             if window.label() == "pet" {
