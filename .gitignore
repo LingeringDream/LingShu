@@ -63,6 +63,9 @@ tarpaulin-report.html
 *.tar.gz
 *.zip
 
+# Root release and development packages
+/dist/
+
 # Benchmark artifacts
 .criterion/
 
