@@ -94,9 +94,18 @@ interface Benchmark {
 interface Conflict {
   id: string;
   fact_key: string;
+  incumbent_memory_id: string;
+  challenger_memory_id: string;
   resolution: string;
   reason: string;
   score_delta: number;
+  incumbent_value: string | null;
+  challenger_value: string | null;
+  review_status: 'not_required' | 'pending' | 'resolved';
+  reviewer_agent_id: string | null;
+  review_note: string | null;
+  reviewed_at: string | null;
+  experience_memory_id: string | null;
   created_at: string;
 }
 
@@ -176,6 +185,7 @@ const API_ENDPOINTS = [
   ['POST', '/api/v1/memory-gateway/memories', '写入分层记忆'],
   ['POST', '/api/v1/memory-gateway/search', '静态或自适应检索'],
   ['POST', '/api/v1/memory-gateway/memories/{id}/grants', '定向授权'],
+  ['POST', '/api/v1/memory-gateway/conflicts/{id}/resolve', '裁决争议并沉淀经验'],
   ['POST', '/api/v1/memory-gateway/maintenance', '执行生命周期维护'],
   ['GET', '/api/v1/memory-gateway/benchmark', '重算基线与消融'],
 ] as const;
@@ -439,6 +449,33 @@ export function MemoryEvolutionLab() {
     }
   };
 
+  const resolveConflict = async (conflictId: string, winner: 'incumbent' | 'challenger') => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const result = await readJson<{ experience_memory_id: string | null }>(
+        `/api/v1/memory-gateway/conflicts/${conflictId}/resolve`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            winner,
+            reviewer_agent_id: agentId,
+            promote_to_experience: true,
+          }),
+        },
+      );
+      setMessage(result.experience_memory_id
+        ? '冲突已裁决，并沉淀为可追溯的经验记忆。'
+        : '冲突已裁决。');
+      await loadOverview();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '冲突裁决失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="evolution-lab">
       <header className="lab-header">
@@ -506,6 +543,7 @@ export function MemoryEvolutionLab() {
           onCreateMemory={createMemory}
           onShare={shareLastMemory}
           onMaintenance={runMaintenance}
+          onResolveConflict={resolveConflict}
         />
       ) : null}
 
@@ -596,9 +634,18 @@ interface GovernanceViewProps {
   onCreateMemory: () => void;
   onShare: () => void;
   onMaintenance: () => void;
+  onResolveConflict: (conflictId: string, winner: 'incumbent' | 'challenger') => void;
 }
 
-function GovernanceView({ agents, agentId, setAgentId, stats, conflicts, loading, newAgent, setNewAgent, newMemory, setNewMemory, shareTarget, setShareTarget, lastCreatedId, onCreateAgent, onCreateMemory, onShare, onMaintenance }: GovernanceViewProps) {
+function GovernanceView({ agents, agentId, setAgentId, stats, conflicts, loading, newAgent, setNewAgent, newMemory, setNewMemory, shareTarget, setShareTarget, lastCreatedId, onCreateAgent, onCreateMemory, onShare, onMaintenance, onResolveConflict }: GovernanceViewProps) {
+  const confirmResolution = (item: Conflict, winner: 'incumbent' | 'challenger') => {
+    const selectedValue = winner === 'incumbent' ? item.incumbent_value : item.challenger_value;
+    const accepted = window.confirm(
+      `确认将“${selectedValue ?? '未记录值'}”设为 ${item.fact_key} 的有效事实？另一候选将被过滤，并生成可追溯经验。`,
+    );
+    if (accepted) onResolveConflict(item.id, winner);
+  };
+
   return (
     <main className="lab-view governance-view">
       <section className="governance-overview lab-surface">
@@ -652,8 +699,24 @@ function GovernanceView({ agents, agentId, setAgentId, stats, conflicts, loading
         <div className="section-heading"><div><h3>冲突与生命周期账本</h3><p>旧事实不直接删除，而是保留裁决理由和历史状态。</p></div><button type="button" className="lab-button lab-button-quiet" onClick={onMaintenance} disabled={loading}>执行生命周期维护</button></div>
         {conflicts.length ? (
           <div className="conflict-table">
-            <div className="conflict-table-head"><span>事实键</span><span>裁决</span><span>证据</span><span>时间</span></div>
-            {conflicts.slice(0, 8).map((item) => <div className="conflict-table-row" key={item.id}><strong>{item.fact_key}</strong><span>{item.resolution}</span><p>{item.reason}</p><time>{new Date(item.created_at).toLocaleString('zh-CN')}</time></div>)}
+            <div className="conflict-table-head"><span>事实键</span><span>候选值</span><span>状态</span><span>证据</span><span>操作</span></div>
+            {conflicts.slice(0, 8).map((item) => (
+              <div className="conflict-table-row" key={item.id}>
+                <strong>{item.fact_key}</strong>
+                <div className="conflict-values">
+                  <span title={item.incumbent_value ?? ''}>原：{item.incumbent_value ?? '未记录'}</span>
+                  <span title={item.challenger_value ?? ''}>新：{item.challenger_value ?? '未记录'}</span>
+                </div>
+                <span>{item.review_status === 'pending' ? '待人工裁决' : item.resolution}</span>
+                <p>{item.reason}</p>
+                <div className="conflict-actions">
+                  {item.review_status === 'pending' ? <>
+                    <button type="button" className="lab-button lab-button-quiet" disabled={loading} onClick={() => confirmResolution(item, 'incumbent')}>保留原值</button>
+                    <button type="button" className="lab-button lab-button-primary" disabled={loading} onClick={() => confirmResolution(item, 'challenger')}>采用新值</button>
+                  </> : <time>{new Date(item.reviewed_at ?? item.created_at).toLocaleString('zh-CN')}</time>}
+                </div>
+              </div>
+            ))}
           </div>
         ) : <EmptyState title="暂无冲突记录" description="在上方使用同一事实键写入不同值，即可生成可审计的冲突裁决。" />}
       </section>

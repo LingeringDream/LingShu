@@ -38,6 +38,8 @@ pub enum SignalEventType {
     MemoryReferenced,
     MemoryCopied,
     MemoryDisputed,
+    /// Service-side only: a pending memory conflict was resolved by review.
+    MemoryConflictResolved,
     /// Service-side only: the offline consolidation engine produced a
     /// derived memory that summarises multiple raw source memories.
     MemoryConsolidated,
@@ -69,6 +71,7 @@ impl SignalEventType {
             Self::MemoryReferenced => "memory_referenced",
             Self::MemoryCopied => "memory_copied",
             Self::MemoryDisputed => "memory_disputed",
+            Self::MemoryConflictResolved => "memory_conflict_resolved",
             Self::MemoryConsolidated => "memory_consolidated",
             Self::ReplyThumbUp => "reply_thumb_up",
             Self::ReplyThumbDown => "reply_thumb_down",
@@ -92,6 +95,7 @@ impl SignalEventType {
             "memory_referenced" => Some(Self::MemoryReferenced),
             "memory_copied" => Some(Self::MemoryCopied),
             "memory_disputed" => Some(Self::MemoryDisputed),
+            "memory_conflict_resolved" => Some(Self::MemoryConflictResolved),
             "memory_consolidated" => Some(Self::MemoryConsolidated),
             "reply_thumb_up" => Some(Self::ReplyThumbUp),
             "reply_thumb_down" => Some(Self::ReplyThumbDown),
@@ -247,6 +251,8 @@ mod tests {
             SignalEventType::MemoryReferenced,
             SignalEventType::MemoryCopied,
             SignalEventType::MemoryDisputed,
+            SignalEventType::MemoryConflictResolved,
+            SignalEventType::MemoryConsolidated,
             SignalEventType::ReplyThumbUp,
             SignalEventType::ReplyThumbDown,
             SignalEventType::ReplyStyleTag,
@@ -290,6 +296,7 @@ mod tests {
         assert!(SignalEventType::allowed_from_client("thought_snoozed").is_none());
         assert!(SignalEventType::allowed_from_client("memory_referenced").is_none());
         assert!(SignalEventType::allowed_from_client("memory_forgotten").is_none());
+        assert!(SignalEventType::allowed_from_client("memory_conflict_resolved").is_none());
     }
 
     #[test]

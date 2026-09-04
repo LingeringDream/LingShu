@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DESKTOP_BACKEND_STARTUP_TIMEOUT_MS,
   WEB_BACKEND_STARTUP_TIMEOUT_MS,
+  localSessionStartupErrorMessage,
   retryLocalSession,
 } from '../localSessionBoot';
 
@@ -35,5 +36,18 @@ describe('retryLocalSession', () => {
       }),
     ).rejects.toBe(lastError);
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('turns the opaque desktop fetch failure into an actionable message', () => {
+    expect(localSessionStartupErrorMessage(new TypeError('Failed to fetch'), true)).toContain(
+      '本地服务未能启动或已经退出',
+    );
+  });
+
+  it('preserves useful backend errors and web fetch errors', () => {
+    expect(localSessionStartupErrorMessage(new Error('HTTP 500'), true)).toBe('HTTP 500');
+    expect(localSessionStartupErrorMessage(new TypeError('Failed to fetch'), false)).toBe(
+      'Failed to fetch',
+    );
   });
 });

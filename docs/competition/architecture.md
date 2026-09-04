@@ -50,10 +50,12 @@ stateDiagram-v2
     [*] --> active
     active --> superseded: 挑战事实证据占优
     active --> disputed: 两侧证据差小于阈值
-    disputed --> active: 人工确认或后续高可信事实
+    disputed --> active: 人工确认获胜事实
     superseded --> filtered: 动态维护
     active --> stale: valid_to 已过期
 ```
 
 综合证据分数：`0.55 × 来源可信度 + 0.25 × 时间新鲜度 + 0.10 × 访问频次 + 0.10 × 重要性`。分差绝对值不超过 `0.08` 时进入争议队列，避免低证据更新直接覆盖。
+
+冲突仅在同一 `owner_agent_id` 的事实域内比较，避免不同 Agent 的私有事实互相覆盖。争议事实可通过治理界面选择保留原值或采用新值；裁决事务会恢复获胜事实、过滤落败事实，并将包含双方 `source_memory_ids` 的裁决经验写入 `experience` 层。裁决经验采用不宽于任一来源的权限空间；两侧均为定向共享时，只保留共有授权。
 

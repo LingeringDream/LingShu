@@ -23,6 +23,8 @@
 - [系统架构](architecture.md)
 - [创新点说明](innovation.md)
 - [实验报告](experiment-report.md)
+- [相关工作](related-work.md)
+- [相关研究与前沿技术索引](related-work-index.md)
 
 ## 尚未完成的赛题证据
 

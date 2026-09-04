@@ -28,9 +28,11 @@ const BACKEND_STARTUP_TIMEOUT_SECS: u64 = 120;
 const SIDECAR_BINARY_NAME: &str = "lingshu-server";
 const SIDECAR_EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
 const SIDECAR_EXIT_WITH_PARENT_VALUE: &str = "1";
+const SIDECAR_JWT_SECRET_ENV: &str = "JWT_SECRET";
+const SIDECAR_JWT_SECRET_FILE: &str = "sidecar-jwt-secret";
 const SIDECAR_ENCRYPTION_KEY_ENV: &str = "ENCRYPTION_KEY";
 const SIDECAR_ENCRYPTION_KEY_FILE: &str = "sidecar-encryption-key";
-const SIDECAR_ENCRYPTION_KEY_LEN: usize = 32;
+const SIDECAR_SECRET_LEN: usize = 32;
 
 #[path = "eventkit.rs"]
 mod eventkit;
@@ -222,9 +224,15 @@ fn terminate_stale_bundled_sidecars(_port: u16) {}
 
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
-        let _ = main.show();
-        let _ = main.unminimize();
-        let _ = main.set_focus();
+        if let Err(error) = main.show() {
+            eprintln!("[lingshu-tauri] failed to show main window: {error}");
+        }
+        if let Err(error) = main.unminimize() {
+            eprintln!("[lingshu-tauri] failed to unminimize main window: {error}");
+        }
+        if let Err(error) = main.set_focus() {
+            eprintln!("[lingshu-tauri] failed to focus main window: {error}");
+        }
     }
 }
 
@@ -307,14 +315,14 @@ fn save_pet_window_position(app: &tauri::AppHandle, position: PetWindowPosition)
     }
 }
 
-fn sidecar_encryption_key_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+fn sidecar_secret_path(app: &tauri::AppHandle, file_name: &str) -> Option<PathBuf> {
     app.path()
         .app_config_dir()
         .ok()
-        .map(|dir| dir.join(SIDECAR_ENCRYPTION_KEY_FILE))
+        .map(|dir| dir.join(file_name))
 }
 
-fn normalize_encryption_key(value: &str) -> Option<String> {
+fn normalize_secret(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
@@ -325,7 +333,7 @@ fn normalize_config_assignment_value(value: &str) -> Option<String> {
         .strip_prefix('"')
         .and_then(|v| v.strip_suffix('"'))
         .unwrap_or(without_inline_comment);
-    normalize_encryption_key(unquoted)
+    normalize_secret(unquoted)
 }
 
 fn file_has_non_empty_assignment(path: &Path, key: &str) -> bool {
@@ -345,9 +353,9 @@ fn file_has_non_empty_assignment(path: &Path, key: &str) -> bool {
     })
 }
 
-fn backend_config_has_encryption_key(cwd: &Path) -> bool {
-    file_has_non_empty_assignment(&cwd.join(".env"), SIDECAR_ENCRYPTION_KEY_ENV)
-        || file_has_non_empty_assignment(&cwd.join("config.toml"), "encryption_key")
+fn backend_config_has_secret(cwd: &Path, env_key: &str, config_key: &str) -> bool {
+    file_has_non_empty_assignment(&cwd.join(".env"), env_key)
+        || file_has_non_empty_assignment(&cwd.join("config.toml"), config_key)
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -360,8 +368,8 @@ fn encode_hex(bytes: &[u8]) -> String {
     out
 }
 
-fn generate_sidecar_encryption_key() -> Option<String> {
-    let mut bytes = [0u8; SIDECAR_ENCRYPTION_KEY_LEN];
+fn generate_sidecar_secret() -> Option<String> {
+    let mut bytes = [0u8; SIDECAR_SECRET_LEN];
     getrandom::getrandom(&mut bytes).ok()?;
     Some(encode_hex(&bytes))
 }
@@ -381,12 +389,12 @@ fn write_secret_file(path: &Path, value: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn load_or_create_sidecar_encryption_key_at(
+fn load_or_create_sidecar_secret_at(
     path: &Path,
     generate: impl FnOnce() -> Option<String>,
 ) -> Option<String> {
     if let Ok(existing) = fs::read_to_string(path) {
-        if let Some(key) = normalize_encryption_key(&existing) {
+        if let Some(key) = normalize_secret(&existing) {
             return Some(key);
         }
     }
@@ -399,22 +407,45 @@ fn load_or_create_sidecar_encryption_key_at(
     Some(key)
 }
 
-fn sidecar_encryption_key(app: &tauri::AppHandle) -> Option<String> {
-    if let Ok(value) = std::env::var(SIDECAR_ENCRYPTION_KEY_ENV) {
-        if let Some(key) = normalize_encryption_key(&value) {
+fn sidecar_secret(
+    app: &tauri::AppHandle,
+    env_key: &str,
+    config_key: &str,
+    file_name: &str,
+) -> Option<String> {
+    if let Ok(value) = std::env::var(env_key) {
+        if let Some(key) = normalize_secret(&value) {
             return Some(key);
         }
     }
     if std::env::current_dir()
         .ok()
         .as_deref()
-        .is_some_and(backend_config_has_encryption_key)
+        .is_some_and(|cwd| backend_config_has_secret(cwd, env_key, config_key))
     {
         return None;
     }
 
-    let path = sidecar_encryption_key_path(app)?;
-    load_or_create_sidecar_encryption_key_at(&path, generate_sidecar_encryption_key)
+    let path = sidecar_secret_path(app, file_name)?;
+    load_or_create_sidecar_secret_at(&path, generate_sidecar_secret)
+}
+
+fn sidecar_jwt_secret(app: &tauri::AppHandle) -> Option<String> {
+    sidecar_secret(
+        app,
+        SIDECAR_JWT_SECRET_ENV,
+        "jwt_secret",
+        SIDECAR_JWT_SECRET_FILE,
+    )
+}
+
+fn sidecar_encryption_key(app: &tauri::AppHandle) -> Option<String> {
+    sidecar_secret(
+        app,
+        SIDECAR_ENCRYPTION_KEY_ENV,
+        "encryption_key",
+        SIDECAR_ENCRYPTION_KEY_FILE,
+    )
 }
 
 fn default_pet_position(
@@ -462,6 +493,12 @@ fn pet_start_position(
 
 fn main() {
     tauri::Builder::default()
+        // Register this first: a second launch should only reveal/focus the
+        // existing control panel. It must never create another sidecar or a
+        // second tray/pet window.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -521,6 +558,11 @@ fn main() {
                         SIDECAR_EXIT_WITH_PARENT_ENV,
                         SIDECAR_EXIT_WITH_PARENT_VALUE,
                     );
+                    let sidecar = if let Some(jwt_secret) = sidecar_jwt_secret(app.handle()) {
+                        sidecar.env(SIDECAR_JWT_SECRET_ENV, jwt_secret)
+                    } else {
+                        sidecar
+                    };
                     let sidecar = if let Some(encryption_key) = sidecar_encryption_key(app.handle())
                     {
                         sidecar.env(SIDECAR_ENCRYPTION_KEY_ENV, encryption_key)
@@ -686,6 +728,19 @@ mod tests {
     }
 
     #[test]
+    fn main_control_panel_is_visible_during_backend_startup() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let windows = config["app"]["windows"].as_array().unwrap();
+        let main = windows
+            .iter()
+            .find(|window| window["label"].as_str() == Some("main"))
+            .unwrap();
+
+        assert_eq!(main["visible"].as_bool(), Some(true));
+    }
+
+    #[test]
     fn parse_lsof_pids_ignores_invalid_lines() {
         assert_eq!(parse_lsof_pids("62622\nnot-a-pid\n42\n"), vec![62622, 42]);
     }
@@ -723,14 +778,21 @@ mod tests {
     }
 
     #[test]
-    fn load_or_create_sidecar_encryption_key_reuses_existing_key_file() {
+    fn sidecar_secret_contracts_are_distinct_and_stable() {
+        assert_eq!(SIDECAR_JWT_SECRET_ENV, "JWT_SECRET");
+        assert_eq!(SIDECAR_ENCRYPTION_KEY_ENV, "ENCRYPTION_KEY");
+        assert_ne!(SIDECAR_JWT_SECRET_FILE, SIDECAR_ENCRYPTION_KEY_FILE);
+    }
+
+    #[test]
+    fn load_or_create_sidecar_secret_reuses_existing_key_file() {
         let path = unique_temp_path("existing-sidecar-key");
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(&path, "  existing-key  \n").unwrap();
 
-        let key = load_or_create_sidecar_encryption_key_at(&path, || {
+        let key = load_or_create_sidecar_secret_at(&path, || {
             panic!("existing key should not be regenerated")
         })
         .expect("existing key");
@@ -740,12 +802,12 @@ mod tests {
     }
 
     #[test]
-    fn load_or_create_sidecar_encryption_key_creates_missing_key_file() {
+    fn load_or_create_sidecar_secret_creates_missing_key_file() {
         let path = unique_temp_path("new-sidecar-key");
         let _ = fs::remove_file(&path);
 
         let key =
-            load_or_create_sidecar_encryption_key_at(&path, || Some("generated-key".to_string()))
+            load_or_create_sidecar_secret_at(&path, || Some("generated-key".to_string()))
                 .expect("generated key");
 
         assert_eq!(key, "generated-key");
@@ -754,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn backend_config_has_encryption_key_detects_existing_local_config() {
+    fn backend_config_has_secret_detects_existing_local_config() {
         let dir = unique_temp_path("config-with-key");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
@@ -763,14 +825,23 @@ mod tests {
         )
         .unwrap();
 
-        assert!(backend_config_has_encryption_key(&dir));
+        assert!(backend_config_has_secret(
+            &dir,
+            SIDECAR_ENCRYPTION_KEY_ENV,
+            "encryption_key"
+        ));
+        assert!(backend_config_has_secret(
+            &dir,
+            SIDECAR_JWT_SECRET_ENV,
+            "jwt_secret"
+        ));
 
         let _ = fs::remove_file(dir.join(".env"));
         let _ = fs::remove_dir(dir);
     }
 
     #[test]
-    fn backend_config_has_encryption_key_ignores_empty_and_commented_values() {
+    fn backend_config_has_secret_ignores_empty_and_commented_values() {
         let dir = unique_temp_path("config-without-key");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
@@ -779,17 +850,32 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!backend_config_has_encryption_key(&dir));
+        assert!(!backend_config_has_secret(
+            &dir,
+            SIDECAR_ENCRYPTION_KEY_ENV,
+            "encryption_key"
+        ));
 
         let _ = fs::remove_file(dir.join("config.toml"));
         let _ = fs::remove_dir(dir);
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {
+        let thread_name = std::thread::current().name().unwrap_or("test").to_string();
+        let safe_thread_name: String = thread_name
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect();
         std::env::temp_dir().join(format!(
             "lingshu-tauri-{name}-{}-{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            safe_thread_name
         ))
     }
 }

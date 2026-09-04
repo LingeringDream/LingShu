@@ -490,13 +490,18 @@
 
 .conflict-table { margin-top: 14px; border: 1px solid var(--lab-border); overflow: hidden; }
 .conflict-table-head,
-.conflict-table-row { display: grid; grid-template-columns: 180px 140px minmax(260px, 1fr) 150px; gap: 12px; align-items: center; padding: 10px 12px; }
+.conflict-table-row { display: grid; grid-template-columns: 150px minmax(180px, 0.8fr) 110px minmax(220px, 1fr) 180px; gap: 12px; align-items: center; padding: 10px 12px; }
 .conflict-table-head { background: var(--lab-surface-raised); color: var(--lab-muted); font-size: 8px; }
 .conflict-table-row { border-top: 1px solid var(--lab-border); font-size: 9px; }
 .conflict-table-row strong { color: var(--lab-text); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .conflict-table-row > span { color: var(--lab-amber); }
 .conflict-table-row p { margin: 0; color: var(--lab-muted); line-height: 1.45; }
 .conflict-table-row time { color: var(--lab-muted); text-align: right; font-size: 8px; }
+.conflict-values { display: grid; gap: 4px; min-width: 0; color: var(--lab-muted); }
+.conflict-values span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conflict-values span:last-child { color: var(--lab-text); }
+.conflict-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.conflict-actions .lab-button { min-height: 28px; padding: 5px 8px; font-size: 8px; }
 
 .benchmark-header { min-height: 92px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-color: rgba(90, 216, 232, 0.22); background: linear-gradient(110deg, rgba(90, 216, 232, 0.075), rgba(11, 23, 34, 0.94) 46%); }
 .benchmark-summary { display: grid; grid-template-columns: minmax(250px, 0.75fr) minmax(500px, 1.5fr); gap: 20px; }

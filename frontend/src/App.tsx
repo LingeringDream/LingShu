@@ -22,6 +22,7 @@ import { isTauri, MAIN_NAVIGATE_EVENT } from './lib/tauri';
 import {
   DESKTOP_BACKEND_STARTUP_TIMEOUT_MS,
   WEB_BACKEND_STARTUP_TIMEOUT_MS,
+  localSessionStartupErrorMessage,
   retryLocalSession,
 } from './lib/localSessionBoot';
 import { installChatSessionSync, useChatStore } from './stores/chatStore';
@@ -66,10 +67,6 @@ interface MemoryItem {
   memory_type: string;
   content: string;
   importance: number;
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
 }
 
 export default function App() {
@@ -118,7 +115,7 @@ export default function App() {
       });
       setSessionState('ready');
     } catch (error) {
-      setSessionError(getErrorMessage(error, '本地会话启动失败'));
+      setSessionError(localSessionStartupErrorMessage(error, isTauri()));
       setSessionState('error');
     }
   }, []);

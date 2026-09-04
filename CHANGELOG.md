@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-09-04
+
+### Version 1.5.2
+
+- `fix(desktop)`: show the control panel immediately on launch and make LingShu single-instance; reopening the app now reveals and focuses the existing panel instead of spawning duplicate windows and sidecars.
+- `fix(desktop)`: generate persistent per-install JWT and encryption secrets for the bundled backend.
+- `fix(windows)`: recover automatically when a crashed embedded PostgreSQL process leaves a stale `postmaster.pid` file behind.
+- `ux(desktop)`: replace the opaque `Failed to fetch` startup error with an actionable local-service message.
+
 ## 2026-09-03
 
 ### Version 1.5.1

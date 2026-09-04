@@ -42,6 +42,10 @@ pub fn router() -> Router<AppState> {
             routing::get(list_conflicts),
         )
         .route(
+            "/api/v1/memory-gateway/conflicts/:id/resolve",
+            routing::post(resolve_conflict_review),
+        )
+        .route(
             "/api/v1/memory-gateway/maintenance",
             routing::post(run_maintenance),
         )
@@ -265,7 +269,53 @@ pub struct ConflictEventResponse {
     pub resolution: String,
     pub reason: String,
     pub score_delta: f32,
+    pub incumbent_value: Option<String>,
+    pub challenger_value: Option<String>,
+    pub review_status: String,
+    pub reviewer_agent_id: Option<String>,
+    pub review_note: Option<String>,
+    pub reviewed_at: Option<DateTime<Utc>>,
+    pub experience_memory_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ResolveConflictRequest {
+    /// Which candidate becomes active: `incumbent` or `challenger`.
+    pub winner: String,
+    pub reviewer_agent_id: String,
+    pub note: Option<String>,
+    #[serde(default = "default_true")]
+    pub promote_to_experience: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ResolveConflictResponse {
+    pub conflict: ConflictEventResponse,
+    pub winner_memory_id: Uuid,
+    pub loser_memory_id: Uuid,
+    pub experience_memory_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct ConflictReviewMemoryRow {
+    id: Uuid,
+    content: String,
+    memory_type: String,
+    importance: f32,
+    owner_agent_id: String,
+    memory_scope: String,
+    scene_tags: Vec<String>,
+    fact_value: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ConflictReviewEventRow {
+    fact_key: String,
+    incumbent_memory_id: Uuid,
+    challenger_memory_id: Uuid,
+    resolution: String,
+    review_status: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -418,7 +468,15 @@ async fn accessible_rows(
     agent_id: &str,
     limit: i64,
 ) -> Result<Vec<GatewayMemoryRow>, sqlx::Error> {
-    let sql = format!("{MEMORY_SELECT} ORDER BY m.occurred_at DESC LIMIT $3");
+    // Apply the ACL inside PostgreSQL before LIMIT. Filtering after truncation
+    // could hide an older granted memory merely because newer inaccessible rows
+    // occupied the first page.
+    let sql = format!(
+        "{MEMORY_SELECT} AND (m.owner_agent_id = $2 OR m.memory_scope = 'global' OR \
+         (m.memory_scope = 'shared' AND EXISTS(SELECT 1 FROM memory_access_grants acl \
+          WHERE acl.memory_id = m.id AND acl.grantee_agent_id = $2 AND acl.can_read))) \
+         ORDER BY m.occurred_at DESC LIMIT $3"
+    );
     sqlx::query_as(&sql)
         .bind(user_id)
         .bind(agent_id)
@@ -527,14 +585,21 @@ async fn resolve_new_fact_conflicts(
     challenger_id: Uuid,
     fact_key: &str,
 ) -> Result<(), sqlx::Error> {
-    let challenger: (Option<String>, f32, i32, f32, DateTime<Utc>) = sqlx::query_as(
-        "SELECT fact_value, source_trust, access_count, importance, occurred_at FROM memories WHERE id = $1",
+    let challenger: (Option<String>, f32, i32, f32, DateTime<Utc>, String) = sqlx::query_as(
+        "SELECT fact_value, source_trust, access_count, importance, occurred_at, owner_agent_id FROM memories WHERE id = $1",
     ).bind(challenger_id).fetch_one(&mut **tx).await?;
     let incumbent: Option<ConflictMemoryRow> = sqlx::query_as(
         "SELECT id, fact_value, source_trust, access_count, importance, occurred_at FROM memories \
-         WHERE user_id = $1 AND fact_key = $2 AND id <> $3 AND conflict_status = 'active' AND retention_status = 'active' AND deleted_at IS NULL \
+         WHERE user_id = $1 AND fact_key = $2 AND id <> $3 AND owner_agent_id = $4 \
+         AND conflict_status = 'active' AND retention_status = 'active' AND deleted_at IS NULL \
          ORDER BY valid_from DESC LIMIT 1 FOR UPDATE",
-    ).bind(user_id).bind(fact_key).bind(challenger_id).fetch_optional(&mut **tx).await?;
+    )
+    .bind(user_id)
+    .bind(fact_key)
+    .bind(challenger_id)
+    .bind(&challenger.5)
+    .fetch_optional(&mut **tx)
+    .await?;
     let Some(incumbent) = incumbent else {
         return Ok(());
     };
@@ -580,7 +645,8 @@ async fn resolve_new_fact_conflicts(
         }
     };
     sqlx::query(
-        "INSERT INTO memory_conflict_events (user_id, fact_key, incumbent_memory_id, challenger_memory_id, resolution, reason, score_delta) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        "INSERT INTO memory_conflict_events (user_id, fact_key, incumbent_memory_id, challenger_memory_id, resolution, reason, score_delta, review_status) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,CASE WHEN $5 = 'disputed' THEN 'pending' ELSE 'not_required' END)",
     ).bind(user_id).bind(fact_key).bind(incumbent.id).bind(challenger_id).bind(resolution_name).bind(reason).bind(delta).execute(&mut **tx).await?;
     Ok(())
 }
@@ -773,16 +839,279 @@ pub async fn gateway_search(
     }))
 }
 
+const CONFLICT_EVENT_SELECT: &str = "SELECT e.id, e.fact_key, e.incumbent_memory_id, e.challenger_memory_id, \
+    e.resolution, e.reason, e.score_delta, incumbent.fact_value AS incumbent_value, \
+    challenger.fact_value AS challenger_value, e.review_status, e.reviewer_agent_id, e.review_note, \
+    e.reviewed_at, e.experience_memory_id, e.created_at \
+    FROM memory_conflict_events e \
+    JOIN memories incumbent ON incumbent.id = e.incumbent_memory_id \
+    JOIN memories challenger ON challenger.id = e.challenger_memory_id";
+
+async fn conflict_event_by_id(
+    db: &PgPool,
+    user_id: Uuid,
+    conflict_id: Uuid,
+) -> Result<ConflictEventResponse, AppError> {
+    let sql = format!("{CONFLICT_EVENT_SELECT} WHERE e.user_id = $1 AND e.id = $2");
+    sqlx::query_as(&sql)
+        .bind(user_id)
+        .bind(conflict_id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("冲突记录不存在".into()))
+}
+
+fn reviewed_experience_content(
+    fact_key: &str,
+    winner: &ConflictReviewMemoryRow,
+    loser: &ConflictReviewMemoryRow,
+    note: Option<&str>,
+) -> String {
+    let winner_value = winner.fact_value.as_deref().unwrap_or(&winner.content);
+    let loser_value = loser.fact_value.as_deref().unwrap_or(&loser.content);
+    let rationale = note
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("人工复核确认");
+    format!(
+        "事实「{fact_key}」的冲突已裁决：后续采用「{winner_value}」，不采用「{loser_value}」。依据：{rationale}。"
+    )
+}
+
+fn conservative_experience_scope(left: &str, right: &str) -> &'static str {
+    match (left, right) {
+        ("global", "global") => "global",
+        ("shared", "shared") => "shared",
+        _ => "private",
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/v1/memory-gateway/conflicts/{id}/resolve",
+    params(("id" = Uuid, Path)),
+    request_body = ResolveConflictRequest,
+    responses((status = 200, body = ResolveConflictResponse))
+)]
+pub async fn resolve_conflict_review(
+    State(state): State<AppState>,
+    auth: Option<AuthUser>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ResolveConflictRequest>,
+) -> Result<Json<ResolveConflictResponse>, AppError> {
+    let user_id = auth::require_user(auth).await?;
+    validate_identifier(&req.reviewer_agent_id, "reviewer_agent_id")?;
+    ensure_agent(&state.db, user_id, &req.reviewer_agent_id).await?;
+    if !["incumbent", "challenger"].contains(&req.winner.as_str()) {
+        return Err(AppError::Validation(
+            "winner 必须是 incumbent 或 challenger".into(),
+        ));
+    }
+
+    let mut tx = state.db.begin().await?;
+    let event: ConflictReviewEventRow = sqlx::query_as(
+        "SELECT fact_key, incumbent_memory_id, challenger_memory_id, resolution, review_status \
+         FROM memory_conflict_events WHERE id = $1 AND user_id = $2 FOR UPDATE",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("冲突记录不存在".into()))?;
+
+    if event.resolution != "disputed" || event.review_status != "pending" {
+        return Err(AppError::Conflict("该冲突已完成裁决或无需人工裁决".into()));
+    }
+
+    let (winner_id, loser_id, resolution) = if req.winner == "incumbent" {
+        (
+            event.incumbent_memory_id,
+            event.challenger_memory_id,
+            "incumbent_wins",
+        )
+    } else {
+        (
+            event.challenger_memory_id,
+            event.incumbent_memory_id,
+            "challenger_wins",
+        )
+    };
+    let winner: ConflictReviewMemoryRow = sqlx::query_as(
+        "SELECT id, content, memory_type, importance, owner_agent_id, memory_scope, scene_tags, fact_value \
+         FROM memories WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE",
+    )
+    .bind(winner_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("获胜候选记忆不存在".into()))?;
+    let loser: ConflictReviewMemoryRow = sqlx::query_as(
+        "SELECT id, content, memory_type, importance, owner_agent_id, memory_scope, scene_tags, fact_value \
+         FROM memories WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE",
+    )
+    .bind(loser_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("落败候选记忆不存在".into()))?;
+
+    if winner.owner_agent_id != loser.owner_agent_id {
+        return Err(AppError::Conflict(
+            "不同记忆所有者的历史冲突不能合并，请分别处理各 Agent 的私有事实".into(),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE memories SET conflict_status='active', retention_status='active', superseded_by=NULL, updated_at=NOW() \
+         WHERE id=$1 AND user_id=$2",
+    )
+    .bind(winner.id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE memories SET conflict_status='superseded', retention_status='filtered', \
+         valid_to=LEAST(COALESCE(valid_to, NOW()), NOW()), superseded_by=$1, updated_at=NOW() \
+         WHERE id=$2 AND user_id=$3",
+    )
+    .bind(winner.id)
+    .bind(loser.id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    let normalized_note = req
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut experience_to_index: Option<(Uuid, String)> = None;
+    let experience_memory_id = if req.promote_to_experience {
+        let content =
+            reviewed_experience_content(&event.fact_key, &winner, &loser, normalized_note);
+        // A derived record contains values from both sides, so it must never be
+        // more visible than either source. Mixed scopes fall back to private;
+        // shared sources retain only grants present on both memories.
+        let experience_scope =
+            conservative_experience_scope(&winner.memory_scope, &loser.memory_scope);
+        let mut scene_tags = winner.scene_tags.clone();
+        if !scene_tags.iter().any(|tag| tag == "conflict-resolution") {
+            scene_tags.push("conflict-resolution".into());
+        }
+        let source_ids = vec![winner.id, loser.id];
+        let experience_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO memories (user_id, memory_type, content, importance, source_memory_ids, tier, \
+             memory_layer, owner_agent_id, memory_scope, scene_tags, source_type, source_trust) \
+             VALUES ($1,$2,$3,$4,$5,'derived','experience',$6,$7,$8,'conflict_resolution',1.0) RETURNING id",
+        )
+        .bind(user_id)
+        .bind(&winner.memory_type)
+        .bind(&content)
+        .bind(winner.importance.max(0.8).min(1.0))
+        .bind(&source_ids)
+        .bind(&winner.owner_agent_id)
+        .bind(experience_scope)
+        .bind(&scene_tags)
+        .fetch_one(&mut *tx)
+        .await?;
+        if experience_scope == "shared" {
+            sqlx::query(
+                "INSERT INTO memory_access_grants (memory_id, grantee_agent_id, can_read, can_write, can_share) \
+                 SELECT $1, winner_grant.grantee_agent_id, \
+                        winner_grant.can_read AND loser_grant.can_read, \
+                        winner_grant.can_write AND loser_grant.can_write, \
+                        winner_grant.can_share AND loser_grant.can_share \
+                 FROM memory_access_grants winner_grant \
+                 JOIN memory_access_grants loser_grant \
+                   ON loser_grant.grantee_agent_id = winner_grant.grantee_agent_id \
+                  AND loser_grant.memory_id = $3 \
+                 WHERE winner_grant.memory_id = $2 \
+                   AND winner_grant.can_read AND loser_grant.can_read \
+                 ON CONFLICT (memory_id, grantee_agent_id) DO NOTHING",
+            )
+            .bind(experience_id)
+            .bind(winner.id)
+            .bind(loser.id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        experience_to_index = Some((experience_id, content));
+        Some(experience_id)
+    } else {
+        None
+    };
+
+    let reason = match normalized_note {
+        Some(note) => format!("人工裁决：{note}"),
+        None => "人工裁决：用户确认有效事实".into(),
+    };
+    sqlx::query(
+        "UPDATE memory_conflict_events SET resolution=$1, reason=$2, review_status='resolved', \
+         reviewer_agent_id=$3, review_note=$4, reviewed_at=NOW(), experience_memory_id=$5 WHERE id=$6 AND user_id=$7",
+    )
+    .bind(resolution)
+    .bind(reason)
+    .bind(&req.reviewer_agent_id)
+    .bind(normalized_note)
+    .bind(experience_memory_id)
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    crate::telemetry::record(
+        &state.db,
+        user_id,
+        crate::telemetry::SignalEventType::MemoryConflictResolved,
+        Some("memory_conflict"),
+        Some(id),
+        serde_json::json!({
+            "winner_memory_id": winner.id,
+            "loser_memory_id": loser.id,
+            "reviewer_agent_id": req.reviewer_agent_id,
+            "experience_memory_id": experience_memory_id,
+        }),
+    )
+    .await;
+
+    if let (Some(qdrant), Some((memory_id, content))) = (state.vector.clone(), experience_to_index)
+    {
+        let db = state.db.clone();
+        let llm = state.llm.clone();
+        let model = state.config.llm.embed_model.clone();
+        tokio::spawn(async move {
+            if let Err(error) = crate::llm::memory::upsert_memory_vector(
+                &db, &qdrant, &llm, &model, user_id, memory_id, &content,
+            )
+            .await
+            {
+                tracing::warn!(%memory_id, %error, "reviewed conflict experience indexing failed (non-fatal)");
+            }
+        });
+    }
+
+    let conflict = conflict_event_by_id(&state.db, user_id, id).await?;
+    Ok(Json(ResolveConflictResponse {
+        conflict,
+        winner_memory_id: winner.id,
+        loser_memory_id: loser.id,
+        experience_memory_id,
+    }))
+}
+
 #[utoipa::path(get, path = "/api/v1/memory-gateway/conflicts", responses((status = 200, body = Vec<ConflictEventResponse>)))]
 pub async fn list_conflicts(
     State(state): State<AppState>,
     auth: Option<AuthUser>,
 ) -> Result<Json<Vec<ConflictEventResponse>>, AppError> {
     let user_id = auth::require_user(auth).await?;
-    let rows = sqlx::query_as(
-        "SELECT id, fact_key, incumbent_memory_id, challenger_memory_id, resolution, reason, score_delta, created_at \
-         FROM memory_conflict_events WHERE user_id=$1 ORDER BY created_at DESC LIMIT 200",
-    ).bind(user_id).fetch_all(&state.db).await?;
+    let sql =
+        format!("{CONFLICT_EVENT_SELECT} WHERE e.user_id=$1 ORDER BY e.created_at DESC LIMIT 200");
+    let rows = sqlx::query_as(&sql)
+        .bind(user_id)
+        .fetch_all(&state.db)
+        .await?;
     Ok(Json(rows))
 }
 
@@ -861,5 +1190,55 @@ mod tests {
         assert!(validate_identifier("writer_agent", "agent_id").is_ok());
         assert!(validate_identifier("writer agent", "agent_id").is_err());
         assert!(validate_identifier("x';drop", "agent_id").is_err());
+    }
+
+    #[test]
+    fn conflict_review_defaults_to_promoting_experience() {
+        let request: ResolveConflictRequest = serde_json::from_value(serde_json::json!({
+            "winner": "challenger",
+            "reviewer_agent_id": "lingshu"
+        }))
+        .unwrap();
+        assert!(request.promote_to_experience);
+    }
+
+    #[test]
+    fn reviewed_experience_keeps_both_sides_and_reason() {
+        let winner = ConflictReviewMemoryRow {
+            id: Uuid::new_v4(),
+            content: "用户目前在深圳".into(),
+            memory_type: "fact".into(),
+            importance: 0.8,
+            owner_agent_id: "lingshu".into(),
+            memory_scope: "private".into(),
+            scene_tags: vec!["profile".into()],
+            fact_value: Some("深圳".into()),
+        };
+        let loser = ConflictReviewMemoryRow {
+            id: Uuid::new_v4(),
+            content: "用户目前在广州".into(),
+            fact_value: Some("广州".into()),
+            ..winner.clone()
+        };
+        let content =
+            reviewed_experience_content("profile.city", &winner, &loser, Some("用户明确确认"));
+        assert!(content.contains("采用「深圳」"));
+        assert!(content.contains("不采用「广州」"));
+        assert!(content.contains("用户明确确认"));
+    }
+
+    #[test]
+    fn conflict_experience_never_broadens_source_scope() {
+        assert_eq!(conservative_experience_scope("global", "global"), "global");
+        assert_eq!(conservative_experience_scope("shared", "shared"), "shared");
+        assert_eq!(conservative_experience_scope("global", "shared"), "private");
+        assert_eq!(
+            conservative_experience_scope("shared", "private"),
+            "private"
+        );
+        assert_eq!(
+            conservative_experience_scope("private", "private"),
+            "private"
+        );
     }
 }

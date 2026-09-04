@@ -35,3 +35,10 @@ export async function retryLocalSession<T>({
     }
   }
 }
+
+export function localSessionStartupErrorMessage(error: unknown, desktop: boolean): string {
+  if (desktop && error instanceof TypeError && error.message === 'Failed to fetch') {
+    return '本地服务未能启动或已经退出。请重新打开灵枢；如果仍然失败，请安装最新版。';
+  }
+  return error instanceof Error ? error.message : '本地会话启动失败';
+}
