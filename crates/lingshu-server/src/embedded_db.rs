@@ -1,8 +1,12 @@
 //! Self-contained PostgreSQL runtime for the packaged desktop sidecar.
 //!
-//! The compressed Windows runtime is embedded into `lingshu-server.exe` at
-//! build time. On first launch it is extracted and initialized under the
-//! user's application-data directory, then reused on later launches.
+//! The compressed PostgreSQL runtime is embedded into the `lingshu-server`
+//! binary at build time (feature `desktop-embedded-db`). On first launch it is
+//! extracted and initialized under the user's application-data directory, then
+//! reused on later launches — end users never install or configure a database.
+//!
+//! Supported on Windows, macOS and Linux; see [`application_data_base`] for
+//! the per-platform location.
 
 use anyhow::Context;
 use postgresql_archive::{ExactVersion, VersionReq};
@@ -171,19 +175,66 @@ fn remove_stale_postmaster_pid(installation_dir: &Path, data_dir: &Path) -> anyh
     Ok(())
 }
 
+/// Root of the bundled PostgreSQL runtime and its data directory.
+///
+/// A packaged desktop app has no writable install directory and its working
+/// directory is undefined (a double-clicked `.app` inherits `/`), so the
+/// location must be derived from the platform's per-user data directory —
+/// never from the current directory.
 fn application_data_root() -> anyhow::Result<PathBuf> {
-    let base = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .unwrap_or(std::env::current_dir()?);
-    Ok(base
+    Ok(application_data_base()?
         .join(Path::new("com.lingshu.desktop"))
         .join("embedded-postgresql"))
+}
+
+/// Per-user application-data directory for the current platform.
+///
+/// * Windows: `%APPDATA%` (falling back to `%LOCALAPPDATA%`)
+/// * macOS:   `~/Library/Application Support`
+/// * Linux/other: `$XDG_DATA_HOME`, else `~/.local/share`
+#[cfg(target_os = "windows")]
+fn application_data_base() -> anyhow::Result<PathBuf> {
+    std::env::var_os("APPDATA")
+        .or_else(|| std::env::var_os("LOCALAPPDATA"))
+        .map(PathBuf::from)
+        .context("neither APPDATA nor LOCALAPPDATA is set; cannot locate the embedded database directory")
+}
+
+#[cfg(target_os = "macos")]
+fn application_data_base() -> anyhow::Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set; cannot locate the embedded database directory")?;
+    Ok(home.join("Library").join("Application Support"))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn application_data_base() -> anyhow::Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set; cannot locate the embedded database directory")?;
+    Ok(home.join(".local").join("share"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A packaged app is launched by double-clicking, so its working directory
+    /// is "/". The embedded database must never be placed relative to it.
+    #[test]
+    fn application_data_root_is_not_cwd_relative() {
+        let root = application_data_root().expect("application data root resolves");
+        assert!(root.is_absolute(), "root must be absolute: {}", root.display());
+        assert!(
+            root.ends_with("com.lingshu.desktop/embedded-postgresql"),
+            "unexpected root layout: {}",
+            root.display()
+        );
+    }
 
     #[test]
     fn pg_ctl_path_uses_platform_binary_name() {

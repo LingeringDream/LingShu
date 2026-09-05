@@ -27,6 +27,7 @@ const BACKEND_PORT: u16 = 8080;
 const BACKEND_STARTUP_TIMEOUT_SECS: u64 = 120;
 const SIDECAR_BINARY_NAME: &str = "lingshu-server";
 const SIDECAR_LOG_FILE: &str = "sidecar.log";
+#[cfg(target_os = "windows")]
 const WINDOWS_VC_RUNTIME_FILE: &str = "vcruntime140.dll";
 const SIDECAR_EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
 const SIDECAR_EXIT_WITH_PARENT_VALUE: &str = "1";
@@ -472,17 +473,30 @@ fn append_sidecar_log(app: &tauri::AppHandle, message: &str) {
     let _ = writeln!(file, "{message}");
 }
 
+/// Prepends the app's resource directory to `PATH` so the sidecar can find the
+/// Microsoft C runtime bundled on Windows (see `scripts/build-sidecar.ps1`).
+///
+/// Only meaningful on Windows; other platforms have nothing to prepend.
 fn sidecar_path_with_runtime(app: &tauri::AppHandle) -> Option<std::ffi::OsString> {
-    let resource_dir = app.path().resource_dir().ok()?;
-    let runtime_path = resource_dir.join(WINDOWS_VC_RUNTIME_FILE);
-    if !runtime_path.is_file() {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
         return None;
     }
 
-    let current_path = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![resource_dir];
-    paths.extend(std::env::split_paths(&current_path));
-    std::env::join_paths(paths).ok()
+    #[cfg(target_os = "windows")]
+    {
+        let resource_dir = app.path().resource_dir().ok()?;
+        let runtime_path = resource_dir.join(WINDOWS_VC_RUNTIME_FILE);
+        if !runtime_path.is_file() {
+            return None;
+        }
+
+        let current_path = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![resource_dir];
+        paths.extend(std::env::split_paths(&current_path));
+        std::env::join_paths(paths).ok()
+    }
 }
 
 fn default_pet_position(

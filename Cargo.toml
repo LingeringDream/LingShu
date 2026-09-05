@@ -72,3 +72,11 @@ bytes = "1"
 pin-project-lite = "0.2"
 scraper = "0.27"
 pdf-extract = "0.12"
+
+# The desktop bundle embeds this binary as a sidecar, so keep it lean.
+# `strip` removes symbols, and `codegen-units = 1` stops the compiler from
+# duplicating the ~30 MB embedded PostgreSQL archive once per codegen unit
+# (measured: 123 MB → ~60 MB), which is the single biggest win for the .dmg.
+[profile.release]
+strip = true
+codegen-units = 1

@@ -60,7 +60,7 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "signingIdentity": "LingShu Dev"
+      "minimumSystemVersion": "11.0"
     }
   },
   "plugins": {
