@@ -576,7 +576,9 @@ function renderDownloads() {
   });
   document.querySelectorAll("[data-access-code-platform]").forEach((codeElement) => {
     const entry = downloads[codeElement.dataset.accessCodePlatform] || {};
-    const code = typeof manifest.access_code === "string" ? manifest.access_code.trim() : "";
+    const code = (typeof entry.access_code === "string" && entry.access_code.trim())
+      ? entry.access_code.trim()
+      : (typeof manifest.access_code === "string" ? manifest.access_code.trim() : "");
     if (validDriveUrl(entry.url) && code) {
       codeElement.textContent = `网盘提取码：${code}`;
       codeElement.hidden = false;
