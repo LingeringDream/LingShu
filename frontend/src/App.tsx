@@ -6,6 +6,8 @@ import { MemoryCenter } from './components/memory/MemoryCenter';
 import { MemoryEvolutionLab } from './components/memory/MemoryEvolutionLab';
 import { WorkspacePage } from './components/workspace/WorkspacePage';
 import { PermissionSettings } from './components/settings/PermissionSettings';
+import { CloudAccountPanel } from './components/settings/CloudAccountPanel';
+import { useCloudAccountStore } from './stores/cloudAccountStore';
 import { PersonalityCenter } from './components/personality/PersonalityCenter';
 import { ThoughtQueue } from './components/thoughts/ThoughtQueue';
 
@@ -70,6 +72,7 @@ interface MemoryItem {
 }
 
 export default function App() {
+  const cloudAccountName = useCloudAccountStore((state) => state.account?.user.display_name);
   const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<AppSectionKey>(() =>
@@ -125,6 +128,22 @@ export default function App() {
   }, [bootLocalSession]);
 
   useEffect(() => installChatSessionSync(), []);
+
+  useEffect(() => {
+    void useCloudAccountStore.getState().initialize();
+    const refresh = () => {
+      const state = useCloudAccountStore.getState();
+      if (state.account && document.visibilityState === 'visible') void state.reload();
+    };
+    const timer = window.setInterval(refresh, 60_000);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+    };
+  }, []);
 
   const updateAvatarSettings = useCallback((settings: AvatarControlSettings) => {
     setAvatarSettings(settings);
@@ -508,6 +527,8 @@ export default function App() {
 
   const renderActivePanel = () => {
     switch (activeSection) {
+      case 'account':
+        return <CloudAccountPanel />;
       case 'home':
         return renderHome();
       case 'chat':
@@ -568,7 +589,7 @@ export default function App() {
   };
 
   return (
-    <AppLayout activeSection={activeSection} onNavigate={setActiveSection}>
+    <AppLayout activeSection={activeSection} onNavigate={setActiveSection} accountName={cloudAccountName}>
       <div className="workspace dashboard-workspace">
         <div
           id={`section-${activeSection}`}

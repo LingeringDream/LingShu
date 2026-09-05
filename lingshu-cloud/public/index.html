@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="zh-CN" class="is-booting">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f4f7fb">
+    <meta name="description" content="灵枢云账户中心">
+    <title>灵枢账户中心</title>
+    <link rel="icon" href="/lingshu-icon.png" type="image/png">
+    <link rel="stylesheet" href="/styles.css?v=20260905-browser-login-v1">
+    <script type="module" src="/app.js?v=20260905-browser-login-v1"></script>
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <section id="desktop-login-view" class="desktop-login-card" hidden aria-labelledby="desktop-login-title">
+        <img src="/lingshu-icon.png" alt="" width="56" height="56">
+        <h1 id="desktop-login-title">正在登录灵枢软件</h1>
+        <p id="desktop-login-status" role="status">正在验证网页登录状态…</p>
+        <button id="desktop-login-retry" class="primary-button" type="button" hidden>重试网页验证</button>
+        <a href="/account">返回账户中心</a>
+      </section>
+      <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
+        <header class="auth-topbar">
+          <a class="brand" href="/account" aria-label="灵枢账户首页">
+            <img src="/lingshu-icon.png" alt="" width="40" height="40">
+            <span><strong>灵枢</strong><small>LingShu</small></span>
+          </a>
+        </header>
+
+        <main class="auth-stage">
+          <aside class="brand-story">
+            <img class="memory-thread" src="/memory-thread.svg" alt="" aria-hidden="true">
+            <div class="story-copy">
+              <h1 id="auth-title">连接你的灵枢账户</h1>
+              <p>在设备之间安全同步账户与记忆。<br>离线时，本地功能仍然可用。</p>
+            </div>
+            <ul class="trust-list" aria-label="云账户能力">
+              <li>
+                <span class="trust-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="M7.5 18.5h9.2a4.3 4.3 0 0 0 .8-8.5 6 6 0 0 0-11.4 1.3A3.7 3.7 0 0 0 7.5 18.5Z"/></svg>
+                </span>
+                <span><strong>安全同步</strong><small>端到端加密传输</small></span>
+              </li>
+              <li>
+                <span class="trust-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="3" y="5" width="13" height="10" rx="1.5"/><rect x="14" y="10" width="7" height="10" rx="1.5"/><path d="M8 19h4M9.5 15v4"/></svg>
+                </span>
+                <span><strong>多设备访问</strong><small>随时随地无缝衔接</small></span>
+              </li>
+              <li>
+                <span class="trust-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg>
+                </span>
+                <span><strong>隐私优先</strong><small>你的数据由你掌控</small></span>
+              </li>
+            </ul>
+          </aside>
+
+          <section class="auth-workspace" aria-label="账户操作">
+            <div class="auth-card">
+              <div class="auth-tabs" role="tablist" aria-label="账户操作方式">
+                <button id="login-tab" class="auth-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="login-form">登录</button>
+                <button id="register-tab" class="auth-tab" type="button" role="tab" aria-selected="false" aria-controls="register-form">注册账户</button>
+              </div>
+
+              <div id="auth-notice" class="notice" role="status" aria-live="polite" hidden>
+                <span class="notice-icon" aria-hidden="true"></span>
+                <div><strong id="auth-notice-title"></strong><p id="auth-notice-text"></p></div>
+                <button id="dismiss-notice" class="icon-button" type="button" aria-label="关闭提示">
+                  <svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg>
+                </button>
+              </div>
+
+              <form id="login-form" class="auth-form" novalidate>
+                <label class="field">
+                  <span>邮箱</span>
+                  <span class="input-wrap">
+                    <input id="login-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="请输入邮箱" required maxlength="254">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg>
+                  </span>
+                </label>
+                <label class="field">
+                  <span>密码</span>
+                  <span class="input-wrap">
+                    <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required maxlength="128">
+                    <button class="password-toggle" type="button" data-target="login-password" aria-label="显示密码">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>
+                    </button>
+                  </span>
+                </label>
+                <p id="login-error" class="form-error" role="alert" hidden></p>
+                <button class="primary-button" type="submit"><span>登录</span><span class="button-loader" aria-hidden="true"></span></button>
+                <p class="form-switch">还没有账户？<button type="button" data-switch="register">创建一个</button></p>
+              </form>
+
+              <form id="register-form" class="auth-form" novalidate hidden>
+                <label class="field">
+                  <span>显示名称</span>
+                  <span class="input-wrap">
+                    <input id="register-name" name="display_name" type="text" autocomplete="name" placeholder="你的称呼" required maxlength="100">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
+                  </span>
+                </label>
+                <label class="field">
+                  <span>邮箱</span>
+                  <span class="input-wrap">
+                    <input id="register-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="请输入邮箱" required maxlength="254">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg>
+                  </span>
+                </label>
+                <label class="field">
+                  <span>密码 <small>至少 12 个字符</small></span>
+                  <span class="input-wrap">
+                    <input id="register-password" name="password" type="password" autocomplete="new-password" placeholder="创建安全密码" required minlength="12" maxlength="128">
+                    <button class="password-toggle" type="button" data-target="register-password" aria-label="显示密码">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>
+                    </button>
+                  </span>
+                </label>
+                <p id="register-error" class="form-error" role="alert" hidden></p>
+                <button class="primary-button" type="submit"><span>创建账户</span><span class="button-loader" aria-hidden="true"></span></button>
+                <p class="form-switch">已有账户？<button type="button" data-switch="login">返回登录</button></p>
+              </form>
+
+              <section id="registration-sent" class="registration-sent" hidden>
+                <span class="success-mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="m6.5 12.5 3.2 3.2 7.8-8"/></svg>
+                </span>
+                <h2>请查收验证邮件</h2>
+                <p>验证链接已发送至 <strong id="registration-email"></strong>。完成验证后即可登录。</p>
+                <button id="back-to-login" class="secondary-button" type="button">返回登录</button>
+              </section>
+            </div>
+          </section>
+        </main>
+        <footer class="auth-footer">LingShu Cloud <span>·</span> 隐私优先</footer>
+      </section>
+
+      <section id="account-view" class="account-view" aria-labelledby="account-title" hidden>
+        <aside class="account-sidebar">
+          <a class="brand" href="/" aria-label="灵枢账户首页">
+            <img src="/lingshu-icon.png" alt="" width="40" height="40">
+            <span><strong>灵枢</strong><small>LingShu</small></span>
+          </a>
+          <nav aria-label="账户中心导航">
+            <a class="sidebar-link" href="/account" data-page="account">
+              <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
+              账户概览
+            </a>
+            <a class="sidebar-link" href="/billing" data-page="billing">
+              <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 15h4"/></svg>
+              订阅与账单
+            </a>
+            <a class="sidebar-link" href="/devices" data-page="devices">
+              <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><rect x="3" y="5" width="13" height="10" rx="1.5"/><rect x="14" y="10" width="7" height="10" rx="1.5"/><path d="M8 19h4M9.5 15v4"/></svg>
+              设备与会话
+            </a>
+            <a class="sidebar-link" href="/docs" data-page="docs">
+              <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><path d="M5 3h10l4 4v14H5Z"/><path d="M15 3v5h5M8 12h8M8 16h8"/></svg>
+              使用文档
+            </a>
+            <a class="sidebar-link" href="/download" data-page="download">
+              <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 20h16"/></svg>
+              下载中心
+            </a>
+          </nav>
+          <p>LingShu Cloud <span>·</span> 隐私优先</p>
+        </aside>
+
+        <main class="account-main">
+          <header class="account-header">
+            <h1 id="account-title">账户中心</h1>
+            <button id="logout-button" class="logout-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5M14 8l4 4-4 4M8 12h10"/></svg>
+              退出登录
+            </button>
+          </header>
+
+          <section id="profile-section" class="account-page profile-page" data-page-panel="account" aria-labelledby="profile-name">
+            <div class="profile-section">
+            <div class="avatar" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="64" height="64"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
+            </div>
+            <div>
+              <h2 id="profile-name">—</h2>
+              <p id="profile-email">—</p>
+              <span class="verified-status">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 2.6 2.6L16.5 9"/></svg>
+                邮箱已验证
+              </span>
+            </div>
+            </div>
+            <div class="overview-list" aria-label="账户快捷入口">
+              <a href="/billing">
+                <span class="overview-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M7 15h4"/></svg></span>
+                <span><strong>订阅与账单</strong><small>查看当前方案与管理付款</small></span>
+                <svg class="overview-arrow" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+              </a>
+              <a href="/devices">
+                <span class="overview-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><rect x="3" y="5" width="13" height="10" rx="1.5"/><rect x="14" y="10" width="7" height="10" rx="1.5"/></svg></span>
+                <span><strong>设备与会话</strong><small>检查登录设备并撤销访问</small></span>
+                <svg class="overview-arrow" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+              </a>
+            </div>
+          </section>
+
+          <section id="billing-section" class="account-page billing-section" data-page-panel="billing" aria-labelledby="billing-title" hidden>
+            <div class="section-heading">
+              <div><h2 id="billing-title">订阅与账单</h2><p>管理云端权益、付费时长和付款方式</p></div>
+              <button id="manage-billing" class="icon-text-button" type="button" hidden>
+                <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9"/><path d="M20 13v5a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h5"/></svg>
+                管理账单
+              </button>
+            </div>
+
+            <div class="subscription-summary">
+              <div class="plan-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="27" height="27"><path d="m12 3 2.6 5.3 5.9.9-4.3 4.2 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.2 5.9-.9L12 3Z"/></svg>
+              </div>
+              <div class="subscription-copy">
+                <span>当前方案</span>
+                <h3 id="current-plan-name">正在读取…</h3>
+                <p id="current-plan-detail">正在同步订阅状态</p>
+              </div>
+              <span id="subscription-status" class="subscription-status">—</span>
+            </div>
+
+            <div class="plan-grid" aria-label="可用套餐">
+              <article class="plan-card">
+                <div class="plan-labels"><span class="plan-kicker">基础</span><span class="plan-state is-live">当前可用</span></div>
+                <h3>免费版</h3>
+                <p>适合单机使用、初次体验和不需要云同步的个人用户。</p>
+                <ul>
+                  <li>完整本地会话与离线使用</li>
+                  <li>本地基础动态记忆</li>
+                  <li>多模型自由接入（本地模型 / 自备 API Key）</li>
+                  <li>云账户与设备会话管理</li>
+                  <li>本地数据自主备份</li>
+                  <li>产品更新与基础支持</li>
+                </ul>
+                <span class="plan-price">永久免费</span>
+              </article>
+
+              <article class="plan-card is-featured">
+                <div class="plan-labels"><span class="plan-kicker">进阶</span><span class="plan-state is-upcoming">随同步开放</span></div>
+                <h3>开发者版</h3>
+                <p>适合个人开发者、研究者和需要多设备记忆工作流的重度用户。</p>
+                <ul>
+                  <li>包含全部免费版权益</li>
+                  <li>加密云端记忆同步</li>
+                  <li>多设备增量同步与冲突历史</li>
+                  <li>高级经验沉淀与记忆参数自定义</li>
+                  <li>优先获得云端新能力</li>
+                </ul>
+                <div class="checkout-actions">
+                  <button id="subscribe-monthly" class="primary-button compact-button" type="button" disabled>购买 1 个月</button>
+                  <button id="subscribe-month3" class="secondary-button compact-button" type="button" disabled>购买 3 个月</button>
+                  <button id="subscribe-halfyear" class="secondary-button compact-button" type="button" disabled>购买 6 个月</button>
+                  <button id="subscribe-yearly" class="primary-button compact-button" type="button" disabled>购买 1 年</button>
+                </div>
+                <p id="billing-availability" class="billing-availability">支付通道正在准备中</p>
+              </article>
+
+              <article class="plan-card is-planned">
+                <div class="plan-labels"><span class="plan-kicker">协作</span><span class="plan-state">规划中</span></div>
+                <h3>团队版</h3>
+                <p>适合小型团队、实验室和需要共享记忆边界的组织。</p>
+                <ul>
+                  <li>包含全部开发者版权益</li>
+                  <li>团队工作区与共享记忆空间</li>
+                  <li>成员角色和细粒度访问权限</li>
+                  <li>团队审计记录与设备治理</li>
+                  <li>按席位统一管理订阅与账单</li>
+                </ul>
+                <span class="plan-price is-muted">价格与开放时间待公布</span>
+              </article>
+            </div>
+            <div class="plan-principles" aria-label="订阅分级原则">
+              <p><strong>本地能力不设付费墙</strong><span>免费版始终保留桌面端本地核心功能、离线使用和多模型自由接入。</span></p>
+              <p><strong>付费只扩展云端能力</strong><span>开发者版的云同步权益将在功能正式开放后生效。</span></p>
+              <p><strong>结账前显示真实价格</strong><span>各档时长与金额以微信支付 / 支付宝收银台最终确认内容为准。</span></p>
+            </div>
+            <p class="billing-note">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+              付款由微信支付 / 支付宝处理；灵枢不会保存支付密码或银行卡信息。套餐权益以已验证的支付结果为准。
+            </p>
+          </section>
+
+          <section id="devices-section" class="account-page devices-section" data-page-panel="devices" aria-labelledby="current-device-title" hidden>
+            <div class="section-heading">
+              <div><h2 id="current-device-title">当前设备</h2><p>你正在使用的浏览器会话</p></div>
+              <button id="refresh-devices" class="icon-text-button" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+                刷新
+              </button>
+            </div>
+            <div id="current-device" class="current-device">
+              <span class="device-icon" aria-hidden="true"></span>
+              <div><strong>正在加载…</strong><small>正在读取当前会话</small></div>
+              <span class="current-label">此设备</span>
+            </div>
+
+            <div class="other-devices-heading">
+              <div><h2>其他设备</h2><p>撤销不再使用的设备访问权限</p></div>
+              <span id="device-count">0 台设备</span>
+            </div>
+            <div class="device-table" role="table" aria-label="其他设备会话">
+              <div class="device-table-head" role="row">
+                <span role="columnheader">设备</span><span role="columnheader">最近活动</span><span role="columnheader">操作</span>
+              </div>
+              <div id="device-list" class="device-list"></div>
+              <div id="empty-devices" class="empty-devices" hidden>没有其他已登录设备</div>
+            </div>
+            <p class="device-note">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+              撤销设备后，该设备上的所有云会话都将失效。
+            </p>
+          </section>
+
+          <section id="docs-section" class="account-page docs-section" data-page-panel="docs" aria-labelledby="docs-title" hidden>
+            <div class="page-intro">
+              <h2 id="docs-title">使用文档</h2>
+              <p>安装、账户、设备与订阅的完整操作说明。标注为“尚未开放”的能力不会影响本地使用。</p>
+            </div>
+            <div class="docs-layout">
+              <nav class="docs-index" aria-label="文档目录">
+                <a href="#getting-started"><strong>安装与首次启动</strong><small>选择版本、安装与离线使用</small></a>
+                <a href="#cloud-account"><strong>注册与邮箱验证</strong><small>字段要求、验证期限与排查</small></a>
+                <a href="#login-session"><strong>登录与会话</strong><small>登录限制、自动续期与退出</small></a>
+                <a href="#device-security"><strong>设备管理</strong><small>识别设备与远程撤销</small></a>
+                <a href="#local-features"><strong>本地功能与模型接入</strong><small>本地会话、多模型与联网搜索</small></a>
+                <a href="#system-capabilities"><strong>记忆、人格与系统能力</strong><small>SoulLedger、权限分级与日历</small></a>
+                <a href="#memory-sync"><strong>记忆同步</strong><small>当前状态与本地数据边界</small></a>
+                <a href="#billing-guide"><strong>订阅与账单</strong><small>升级、管理与付款安全</small></a>
+                <a href="#download-verification"><strong>下载与校验</strong><small>网盘、GitHub 与 SHA-256</small></a>
+                <a href="#dev-edition"><strong>开发版与竞赛演示</strong><small>Docker 一键启动与故障排查</small></a>
+                <a href="#troubleshooting"><strong>常见问题</strong><small>启动、模型、权限与数据备份</small></a>
+              </nav>
+              <article class="docs-article">
+                <section id="getting-started">
+                  <span class="doc-number">01</span>
+                  <div class="doc-content">
+                    <h3>安装与首次启动</h3>
+                    <p>灵枢桌面端采用本地优先模式。安装完成后无需注册云账户，也可以创建本地会话并使用本地核心功能。Windows 安装包已内置 PostgreSQL 数据库与运行库，无需单独安装数据库。</p>
+                    <ol class="doc-steps">
+                      <li><strong>选择安装包。</strong>Windows 10/11 x64 使用 <code>.exe</code>；Apple Silicon Mac 使用 macOS 14+ 的 <code>.dmg</code>。</li>
+                      <li><strong>完成文件校验。</strong>下载后先核对下载中心公布的文件名和 SHA-256，再运行安装程序。</li>
+                      <li><strong>启动灵枢。</strong>首次启动会初始化内置数据库并创建本地会话。<strong>数据库初始化需要 1–2 分钟</strong>，期间界面保持等待属正常现象，请勿强制结束进程。</li>
+                      <li><strong>按需登录云账户。</strong>只有需要账户、设备或未来跨设备同步能力时，才需要登录本页面的云账户。</li>
+                    </ol>
+                    <ul class="doc-list">
+                      <li><strong>重复打开只会聚焦已有窗口：</strong>灵枢为单实例应用，再次启动会显示并聚焦已打开的控制面板，不会产生第二个实例。</li>
+                      <li><strong>关闭主窗口不等于退出：</strong>点击主窗口关闭按钮只是隐藏窗口，灵枢与桌面宠物会继续在托盘运行；从托盘图标选择“退出”才会完全退出。</li>
+                      <li><strong>macOS 首次打开：</strong>若提示无法验证开发者，请在“系统设置 → 隐私与安全性”中允许，或右键应用选择“打开”。</li>
+                    </ul>
+                    <p class="doc-note"><strong>数据边界：</strong>网页云账户和桌面端本地会话彼此独立。退出云账户不会删除桌面端本地数据。</p>
+                    <a class="doc-link" href="/download">前往下载中心</a>
+                  </div>
+                </section>
+                <section id="cloud-account">
+                  <span class="doc-number">02</span>
+                  <div class="doc-content">
+                    <h3>注册与邮箱验证</h3>
+                    <p>未验证的注册记录不会成为正式账户。验证链接为一次性链接，默认在发送后 24 小时失效。</p>
+                    <ol class="doc-steps">
+                      <li>退出当前账户，在登录页选择“注册账户”。</li>
+                      <li>填写显示名称、可接收邮件的邮箱，以及 12–128 个字符的密码。</li>
+                      <li>提交后打开主题为 LingShu 账户验证的邮件，点击其中的验证链接。</li>
+                      <li>页面显示“邮箱验证成功”后返回登录，使用注册邮箱和密码登录。</li>
+                    </ol>
+                    <div class="doc-callout">
+                      <strong>没有收到邮件？</strong>
+                      <p>先检查垃圾邮件、推广邮件和邮箱地址。仍在有效期内的待验证注册不会重复发送第二封邮件；超过 24 小时后可重新提交注册以生成新链接。</p>
+                    </div>
+                  </div>
+                </section>
+                <section id="login-session">
+                  <span class="doc-number">03</span>
+                  <div class="doc-content">
+                    <h3>登录、续期与退出</h3>
+                    <p><strong>通过网页登录软件：</strong>在软件“云账户”页点击“通过网页登录”。本浏览器已有登录状态时会自动验证；未登录时先在此登录，成功后软件自动登录同一账号。无需复制验证码。若等待超过 5 分钟或已关闭软件，请从软件重新发起。旧版已打开的账户网页刷新一次即可迁移登录状态。</p>
+                    <p>在带有“云账户”入口的软件版本中，点击侧栏“云账户”或右上角“登录云账户”，输入与本站相同的邮箱、密码和设备名称。登录后可以查看订阅，并从软件打开网页账户中心。网页与软件分别保持登录会话；软件会安全保存登录状态，重启后自动恢复。若安装的软件尚无此入口，请等待包含此功能的更新版本。</p>
+                    <p>每次在新浏览器或新设备登录都会创建独立设备会话。短期访问凭证默认有效 15 分钟，页面会使用可轮换的设备凭证自动续期，最长有效期默认 30 天。</p>
+                    <ul class="doc-list">
+                      <li><strong>登录失败限制：</strong>15 分钟内连续失败 5 次后，会按 IP、邮箱和设备暂时限制约 15 分钟。</li>
+                      <li><strong>设备复用：</strong>同一浏览器首次登录会创建设备记录，之后的登录会复用该记录，不会重复创建设备。</li>
+                      <li><strong>正常退出：</strong>点击右上角“退出登录”，当前浏览器保存的云会话会被注销。</li>
+                      <li><strong>软件退出：</strong>在软件“云账户”页点击“退出云账户”。退出需要联网撤销本机云会话；断网时会提示重试，本地聊天和记忆仍可使用。</li>
+                      <li><strong>会话失效：</strong>长时间未使用、设备被撤销或检测到旧刷新凭证重复使用时，需要重新登录。</li>
+                      <li><strong>本地影响：</strong>云会话失效只影响账户网页与云服务，不会使桌面端本地会话失效。</li>
+                    </ul>
+                  </div>
+                </section>
+                <section id="device-security">
+                  <span class="doc-number">04</span>
+                  <div class="doc-content">
+                    <h3>设备管理与远程撤销</h3>
+                    <p>“设备与会话”页面会显示当前设备和其他已登录设备，并记录设备名称、平台及最近活动时间。设备名称按浏览器与系统自动生成，例如“Windows 浏览器”“Mac 浏览器”。</p>
+                    <ol class="doc-steps">
+                      <li>打开“设备与会话”，先确认标有“当前设备”的条目。</li>
+                      <li>发现不认识、遗失或不再使用的设备时，点击该设备旁的“撤销”。</li>
+                      <li>确认后，该设备下的全部云会话立即失效；设备再次访问云账户时必须重新登录。</li>
+                    </ol>
+                    <p class="doc-note"><strong>出现多台同类设备？</strong>首次登录或清理浏览器站点数据后，灵枢无法识别原有设备，会新建一条设备记录。同一浏览器之后的登录会复用设备，不会再增加记录；多余的旧记录可直接撤销。</p>
+                    <p class="doc-warning"><strong>安全建议：</strong>若怀疑密码泄露，请先撤销可疑设备。当前版本尚未提供网页修改密码，请不要在多个服务重复使用同一密码。</p>
+                    <a class="doc-link" href="/devices">管理已登录设备</a>
+                  </div>
+                </section>
+                <section id="local-features">
+                  <span class="doc-number">05</span>
+                  <div class="doc-content">
+                    <h3>本地功能与模型接入</h3>
+                    <p>灵枢的本地核心能力不依赖云账户，也不设付费墙。安装后即可创建本地会话，自由接入本地模型或自备 API Key，配置保存在本机，重启后保留。</p>
+                    <ul class="doc-list">
+                      <li><strong>本地会话：</strong>不登录云账户也能完整使用对话、记忆、人格、日历与项目管理等本地功能。</li>
+                      <li><strong>多模型接入：</strong>支持 Ollama 本地模型（默认）或任意 OpenAI 兼容端点（如 DeepSeek）。在聊天设置中选择模型、最大 Token 与上下文轮数，修改后自动保存。</li>
+                      <li><strong>嵌入模型：</strong>语义记忆检索需要 Ollama 嵌入模型 <code>nomic-embed-text</code>（<code>ollama pull nomic-embed-text</code>）；未配置时记忆检索自动回退为 SQL 匹配。</li>
+                      <li><strong>联网搜索：</strong>对话内可搜索公开网页并返回标题、摘要与来源链接。该能力由独立权限开关控制，默认关闭。</li>
+                      <li><strong>角色提示词：</strong>可自定义系统角色提示词，集成进对话工作区；消息支持 Markdown 渲染。</li>
+                    </ul>
+                    <p class="doc-note"><strong>费用口径：</strong>本地模型与自备 API Key 不产生订阅费用；官方托管模型按量计费，与订阅费分开结算。</p>
+                  </div>
+                </section>
+                <section id="system-capabilities">
+                  <span class="doc-number">06</span>
+                  <div class="doc-content">
+                    <h3>记忆、人格与系统能力</h3>
+                    <p>灵枢内置长期记忆（SoulLedger）、可控人格与主动建议（Thought Queue），并对系统权限实行分级管理，全部默认保存在本地。</p>
+                    <ul class="doc-list">
+                      <li><strong>分层记忆（SoulLedger）：</strong>记忆分为原始片段、结构化事实与通用经验三层，支持去重、遗忘衰减、语义检索与来源追溯。</li>
+                      <li><strong>人格演化：</strong>人格特征随对话持续演化，可在人格中心查看与调整。</li>
+                      <li><strong>主动建议（Thought Queue）：</strong>基于状态机生成带可解释置信度的建议，并具备防打扰抑制，不会频繁打断。</li>
+                      <li><strong>权限分级 L0–L4：</strong>默认权限为 L0。日历、联网搜索等敏感能力需要先开启 <strong>L1</strong> 权限；所有权限操作都会写入审计日志。</li>
+                      <li><strong>日历：</strong>macOS 14+ 可通过系统日历（EventKit）创建、修改与删除事件，需在系统设置中授予日历权限；Windows 与网页版通过导出 <code>.ics</code> 日历文件完成交付。</li>
+                      <li><strong>平台能力边界：</strong>屏幕读取、应用自动化等为 macOS 原生能力；Windows 与网页版会自动隐藏或降级不可用的入口，不会出现误导性按钮。</li>
+                    </ul>
+                    <p class="doc-note"><strong>安全：</strong>集成令牌使用 AES-256-GCM 静态加密；本机服务默认只绑定 127.0.0.1，不对外网开放。</p>
+                  </div>
+                </section>
+                <section id="memory-sync">
+                  <span class="doc-number">07</span>
+                  <div class="doc-content">
+                    <h3>记忆同步：当前尚未开放</h3>
+                    <p>云端已经预留独立的加密记忆存储，但当前账户服务还没有启用记忆上传、下载或冲突合并接口。</p>
+                    <ul class="doc-list">
+                      <li>登录云账户后，现有本地记忆<strong>不会自动上传</strong>。</li>
+                      <li>卸载、换机或重装前，仍需按桌面端现有方式自行备份本地数据。</li>
+                      <li>未来同步只处理加密后的增量数据与同步游标，不会接管本地核心功能。</li>
+                      <li>网络中断时，本地会话和本地数据仍可继续使用。</li>
+                    </ul>
+                    <p class="doc-note"><strong>本地数据位置（Windows）：</strong>桌面端数据保存在 <code>%APPDATA%\com.lingshu.desktop\embedded-postgresql</code> 目录。重装系统、更换电脑前，请备份整个 <code>com.lingshu.desktop</code> 目录；恢复时放回相同位置即可。</p>
+                    <p class="doc-note"><strong>开放前提：</strong>页面出现明确的“启用同步”入口并展示同步状态后，才表示该能力已正式可用。</p>
+                  </div>
+                </section>
+                <section id="billing-guide">
+                  <span class="doc-number">08</span>
+                  <div class="doc-content">
+                    <h3>订阅与账单</h3>
+                    <p>订阅采用免费版、开发者版和团队版三级结构。本地核心能力不设付费墙，付费方案只扩展云同步、高级记忆和团队治理能力。</p>
+                    <p class="doc-note"><strong>模型接入不设付费墙：</strong>免费版即可自由接入本地模型（如 Ollama）或自备第三方 API Key，不产生订阅费用；官方托管模型按量计费，与订阅费分开结算。</p>
+                    <ul class="doc-list">
+                      <li><strong>免费版（当前可用）：</strong>完整本地会话、离线使用、本地基础动态记忆、多模型自由接入（本地模型或自备 API Key）、云账户和设备会话管理。</li>
+                      <li><strong>开发者版（随同步开放）：</strong>在免费版基础上增加加密增量同步、多设备冲突历史、高级经验沉淀、记忆参数自定义。</li>
+                      <li><strong>团队版（规划中）：</strong>增加团队工作区、共享记忆空间、成员权限、审计记录、设备治理和按席位统一账单。</li>
+                    </ul>
+                    <p class="doc-note"><strong>开放状态：</strong>只有“订阅与账单”页面显示可用价格和可点击的升级按钮时，在线付款才已开放；团队版当前不接受购买。</p>
+                    <ol class="doc-steps">
+                      <li><strong>购买：</strong>选择权益时长（1 个月 / 3 个月 / 6 个月 / 1 年）后进入微信支付或支付宝收银台，确认金额再付款。</li>
+                      <li><strong>续费：</strong>权益到期前会在账户中心与注册邮箱提醒。当前不提供自动续费，需手动再次购买以延续权益。</li>
+                      <li><strong>退款：</strong>按退款政策处理，退款以原支付渠道退回，到账时间以微信支付 / 支付宝的处理结果为准。</li>
+                      <li><strong>状态同步：</strong>付款完成后返回本页，权益状态可能需要短暂等待支付结果同步，再刷新查看。</li>
+                    </ol>
+                    <p class="doc-note"><strong>付款安全：</strong>支付由微信支付 / 支付宝处理，LingShu 仅保存订单号、支付状态与权益周期，不保存支付密码或完整卡号。</p>
+                    <a class="doc-link" href="/billing">查看当前套餐</a>
+                  </div>
+                </section>
+                <section id="download-verification">
+                  <span class="doc-number">09</span>
+                  <div class="doc-content">
+                    <h3>下载来源与文件校验</h3>
+                    <p>普通用户优先使用网盘下载；GitHub Release 作为备用来源。当前 GitHub 仓库为私有仓库，因此必须登录并拥有仓库权限。当前版本 <strong>1.5.2</strong> 的校验值如下：</p>
+                    <h4>Windows（LingShu_1.5.2_x64-setup.exe）</h4>
+                    <pre><code>e3746f98c87faea366cb01aca915bf73909f1d090b56c4152d866c618f0a7461</code></pre>
+                    <h4>macOS（LingShu_1.5.2_aarch64.dmg）</h4>
+                    <pre><code>d455a89d670b9552130bc067eb8cc7c8fa8369aa3b06ee2efa829f084b19c4f3</code></pre>
+                    <h4>Windows 校验命令</h4>
+                    <pre><code>Get-FileHash -Algorithm SHA256 -LiteralPath ".\LingShu_1.5.2_x64-setup.exe"</code></pre>
+                    <h4>macOS 校验命令</h4>
+                    <pre><code>shasum -a 256 "LingShu_1.5.2_aarch64.dmg"</code></pre>
+                    <p>命令输出应与上方公布的 SHA-256 完全一致。若文件名、大小或校验值不一致，请删除文件并重新下载，不要继续安装。</p>
+                    <ul class="doc-list">
+                      <li><strong>Windows：</strong>安装包为自包含版本，已内置数据库与运行库，无需预装 PostgreSQL。</li>
+                      <li><strong>macOS：</strong>需在安装完成后使用 Docker Desktop 提供本地数据库，并可选安装 Ollama 提供本地模型。</li>
+                    </ul>
+                    <a class="doc-link" href="/download">查看文件名与校验值</a>
+                  </div>
+                </section>
+                <section id="dev-edition">
+                  <span class="doc-number">10</span>
+                  <div class="doc-content">
+                    <h3>开发版与竞赛演示</h3>
+                    <p>灵枢提供面向演示与竞赛的 Windows 开发版：基于 Docker 一键启动完整的“动态记忆引擎”控制台，无需手动安装数据库、向量库或编译环境。</p>
+                    <ol class="doc-steps">
+                      <li><strong>准备环境：</strong>安装 Docker Desktop 并完成 WSL 2 初始化，预留至少 8 GB 可用磁盘空间；首次构建需要联网下载基础镜像。</li>
+                      <li><strong>解压开发包：</strong>将整个开发包解压到本地目录，不要只打开 ZIP 内的文件。</li>
+                      <li><strong>一键启动：</strong>双击根目录 <code>启动灵枢竞赛版.cmd</code>，等待所有检查显示 <code>[OK]</code>，浏览器会自动打开 Memory Console；若未自动打开，双击 <code>打开灵枢控制台.cmd</code> 或访问 <code>http://127.0.0.1:5173/?section=memory-lab</code>。</li>
+                      <li><strong>停止服务：</strong>双击 <code>停止灵枢开发版.cmd</code>。停止操作只关闭容器，会保留 PostgreSQL、Redis 和 Qdrant 数据卷与已有记忆数据。</li>
+                    </ol>
+                    <ul class="doc-list">
+                      <li><strong>Ollama 为可选：</strong>未安装 Ollama 时启动器显示 <code>[WARN]</code>，记忆控制台与演示数据仍可使用；本地聊天和向量嵌入需要启动 Ollama，或在设置中配置兼容的模型 API。</li>
+                      <li><strong>常用地址：</strong>Memory Console <code>http://127.0.0.1:5173/?section=memory-lab</code> · Swagger API <code>http://127.0.0.1:8080/swagger-ui</code> · Qdrant <code>http://127.0.0.1:6333/dashboard</code>。</li>
+                      <li><strong>首次构建较慢：</strong>首次构建 Rust 后端需要数分钟，后续启动会复用 Docker 缓存。</li>
+                    </ul>
+                    <p class="doc-note"><strong>故障排查：</strong>启动器会检查项目文件、Docker CLI、Docker Compose、Docker Engine、端口占用和服务健康状态。失败时按窗口中的 <code>Missing or unavailable</code> 与 <code>How to fix</code> 提示处理；后端或前端启动失败时，窗口底部会显示容器状态与最近日志。</p>
+                  </div>
+                </section>
+                <section id="troubleshooting">
+                  <span class="doc-number">11</span>
+                  <div class="doc-content">
+                    <h3>常见问题</h3>
+                    <dl class="doc-faq">
+                      <div><dt>首次启动很久没有反应</dt><dd>首次启动需要初始化内置数据库，等待 1–2 分钟属正常现象，请勿强制结束进程。超过 5 分钟仍无窗口时，关闭后重新打开应用。</dd></div>
+                      <div><dt>提示本地服务启动失败 / 无法连接本地服务</dt><dd>桌面端启动时会拉起本地后端服务，若被安全软件拦截、端口被占用或安装文件不完整会提示失败。先重启应用；仍失败时查看应用数据目录下的 <code>sidecar.log</code> 日志内容（Windows 位于 <code>%APPDATA%\com.lingshu.desktop\sidecar.log</code>），并据此反馈或排查。</dd></div>
+                      <div><dt>重复打开安装程序后出现多个窗口</dt><dd>灵枢为单实例应用：再次启动会显示并聚焦已打开的控制面板，不会创建第二个实例。若看到多个窗口，可能是旧版本残留，请完全退出托盘程序后重新打开。</dd></div>
+                      <div><dt>Windows 崩溃或强制结束后无法启动</dt><dd>新版会自动检测并清理崩溃遗留的数据库进程记录（postmaster.pid），正常重启应用即可，不会删除数据。</dd></div>
+                      <div><dt>关闭主窗口后程序还在运行</dt><dd>关闭主窗口只是隐藏窗口，灵枢与桌面宠物会继续在托盘运行。需要完全退出时，右键托盘图标选择退出。</dd></div>
+                      <div><dt>安装被安全软件拦截或提示缺少运行库</dt><dd>安装包已内置 Microsoft C 运行库与数据库，无需预装。若被安全软件拦截，请对安装包或安装目录添加信任后重试，并从官网或 GitHub Release 重新下载校验。</dd></div>
+                      <div><dt>聊天没有响应或提示模型错误</dt><dd>本地聊天依赖 Ollama 或已配置的模型 API。请确认已安装并启动 Ollama（<code>ollama serve</code>），且“聊天设置”中选择了本机已安装的模型；语义记忆检索还需 <code>ollama pull nomic-embed-text</code>。</dd></div>
+                      <div><dt>联网搜索不可用</dt><dd>联网搜索由独立权限开关控制，默认关闭。请在桌面端“权限”面板开启「L1 · 联网搜索」后重试。</dd></div>
+                      <div><dt>macOS 日历事件写入失败</dt><dd>日历写入通过系统日历（EventKit）完成，仅支持 macOS 14+，且需要在“系统设置 → 隐私与安全性 → 日历”中允许灵枢访问。Windows 与网页版请使用日历导出（.ics 文件）。</dd></div>
+                      <div><dt>macOS 无法打开应用</dt><dd>若提示“无法验证开发者”，请在“系统设置 → 隐私与安全性”中允许，或右键应用选择“打开”。macOS 版需要 Docker Desktop 提供本地数据库。</dd></div>
+                      <div><dt>设备列表出现多台“浏览器”设备</dt><dd>首次登录或清理浏览器站点数据后会新建一条设备记录；同一浏览器之后的登录会复用设备。多余的旧记录可在“设备与会话”中撤销，不影响当前使用。</dd></div>
+                      <div><dt>如何备份本地数据</dt><dd>Windows 版数据保存在 <code>%APPDATA%\com.lingshu.desktop\embedded-postgresql</code>。重装或换机前备份整个 <code>com.lingshu.desktop</code> 目录，恢复时放回相同位置。</dd></div>
+                      <div><dt>验证链接提示无效或已过期</dt><dd>链接可能超过 24 小时、已经使用过，或复制时不完整。重新提交注册即可在旧记录过期后生成新验证链接。</dd></div>
+                      <div><dt>登录后又回到登录页</dt><dd>会话可能已过期或被其他设备撤销。刷新页面并重新登录；若仍失败，确认浏览器未阻止该站点的本地存储。</dd></div>
+                      <div><dt>收不到验证邮件</dt><dd>检查垃圾邮件和邮箱拼写。有效期内重复提交不会再次发送；请使用首次收到的邮件，或等待旧链接过期后重新注册。</dd></div>
+                      <div><dt>断网后还能使用吗</dt><dd>桌面端本地核心功能可以继续使用；账户网页、设备管理、订阅查询和未来云同步需要联网。</dd></div>
+                      <div><dt>撤销设备会删除记忆吗</dt><dd>不会。撤销只让该设备的云会话失效，不会删除桌面端本地数据，也不会删除账户。</dd></div>
+                      <div><dt>网页目前不能做什么</dt><dd>当前尚不提供忘记密码、修改密码、删除账户和记忆同步。这些能力开放后会在账户中心提供明确入口。</dd></div>
+                    </dl>
+                  </div>
+                </section>
+              </article>
+            </div>
+          </section>
+
+          <section id="download-section" class="account-page download-section" data-page-panel="download" aria-labelledby="download-title" hidden>
+            <div class="page-intro download-intro">
+              <div><h2 id="download-title">下载中心</h2><p>安装包暂通过网盘统一分发，避免浏览器直接下载大文件。</p></div>
+              <span class="release-version">当前版本 <strong>1.5.2</strong></span>
+            </div>
+            <div class="download-list" aria-label="平台安装包">
+              <article class="download-row">
+                <span class="platform-mark windows-mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="28" height="28"><path d="M3 5.5 10.5 4v7H3Zm9-1.8L21 2v9h-9ZM3 12.5h7.5v7L3 18Zm9 0h9V22l-9-1.7Z"/></svg>
+                </span>
+                <div class="download-copy"><h3>Windows</h3><p>Windows 10 / 11 · x64 · EXE 安装程序</p><small>文件：LingShu_1.5.2_x64-setup.exe · 约 77 MB</small><span class="download-sha" data-sha-platform="windows" hidden></span><span class="download-access-code" data-access-code-platform="windows" hidden></span></div>
+                <div class="download-actions">
+                  <button class="drive-download" type="button" data-download-platform="windows" disabled>网盘下载</button>
+                  <a class="github-download" data-github-platform="windows" href="https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_x64-setup.exe" target="_blank" rel="noopener noreferrer" title="需登录有仓库权限的 GitHub 账户">GitHub 下载</a>
+                </div>
+              </article>
+              <article class="download-row">
+                <span class="platform-mark apple-mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="28" height="28"><path d="M15.8 3.1c-.9.1-2 .7-2.6 1.5-.6.7-1.1 1.7-.9 2.7 1 .1 2-.5 2.7-1.2.7-.8 1.1-1.8.8-3ZM19.2 16.4c-.4 1-1 2-1.7 3-.9 1.2-1.8 2.4-3.2 2.4-1.2 0-1.6-.8-3-.8s-1.9.8-3.1.8c-1.3 0-2.3-1.1-3.2-2.3C2.5 16 2.2 12 3.8 9.6c1.1-1.7 2.9-2.7 4.7-2.7 1.3 0 2.5.9 3.1.9.6 0 2-.9 3.5-.9.6 0 2.6.2 3.9 2.1-3.4 1.9-2.9 6.7.2 7.4Z"/></svg>
+                </span>
+                <div class="download-copy"><h3>macOS</h3><p>macOS 14+ · Apple Silicon · DMG 镜像</p><small>文件：LingShu_1.5.2_aarch64.dmg · 约 17 MB</small><span class="download-sha" data-sha-platform="macos" hidden></span><span class="download-access-code" data-access-code-platform="macos" hidden></span></div>
+                <div class="download-actions">
+                  <button class="drive-download" type="button" data-download-platform="macos" disabled>网盘下载</button>
+                  <a class="github-download" data-github-platform="macos" href="https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_aarch64.dmg" target="_blank" rel="noopener noreferrer" title="需登录有仓库权限的 GitHub 账户">GitHub 下载</a>
+                </div>
+              </article>
+              <article class="download-row is-muted">
+                <span class="platform-mark" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="28" height="28"><circle cx="12" cy="12" r="8"/><path d="M8 16c1.2-1 2.5-1.5 4-1.5s2.8.5 4 1.5M9 9h.01M15 9h.01M9.5 12.5h5"/></svg>
+                </span>
+                <div class="download-copy"><h3>Linux</h3><p>安装包仍在准备中</p><small>开放后将在此页面更新。</small></div>
+                <div class="download-actions"><button class="drive-download" type="button" disabled>暂未开放</button></div>
+              </article>
+            </div>
+            <div id="download-status" class="download-status" role="status">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+              <p><strong>网盘链接整理中</strong><span>GitHub 下载需登录有仓库权限的账户；网盘地址配置后供普通用户使用。</span></p>
+            </div>
+          </section>
+        </main>
+      </section>
+
+      <dialog id="revoke-dialog" class="confirm-dialog" aria-labelledby="revoke-title">
+        <form method="dialog">
+          <span class="dialog-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 8v5M12 17h.01"/><path d="M10.3 3.8 2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z"/></svg>
+          </span>
+          <h2 id="revoke-title">退出此设备？</h2>
+          <p><strong id="revoke-device-name"></strong> 上的所有云会话都将立即失效。</p>
+          <div class="dialog-actions">
+            <button id="cancel-revoke" class="secondary-button" value="cancel">取消</button>
+            <button id="confirm-revoke" class="danger-button" value="default">退出此设备</button>
+          </div>
+        </form>
+      </dialog>
+
+      <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+        <span class="toast-icon" aria-hidden="true"></span>
+        <p></p>
+      </div>
+    </div>
+  </body>
+</html>

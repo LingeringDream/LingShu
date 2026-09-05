@@ -33,7 +33,19 @@ impl EmbeddedDatabase {
             .context("embedded PostgreSQL version must be exact")?;
         let installation_dir = root.join("runtime").join(exact_version.to_string());
 
-        if !installation_dir.exists() {
+        if !embedded_runtime_is_complete(&installation_dir) {
+            if installation_dir.exists() {
+                tracing::warn!(
+                    path = %installation_dir.display(),
+                    "Removing incomplete embedded PostgreSQL runtime before re-extracting"
+                );
+                std::fs::remove_dir_all(&installation_dir).with_context(|| {
+                    format!(
+                        "remove incomplete embedded PostgreSQL runtime {}",
+                        installation_dir.display()
+                    )
+                })?;
+            }
             tracing::info!(
                 path = %installation_dir.display(),
                 "Extracting bundled PostgreSQL runtime (first launch only)"
@@ -108,6 +120,20 @@ fn pg_ctl_path(installation_dir: &Path) -> PathBuf {
     const PG_CTL: &str = "pg_ctl";
 
     installation_dir.join("bin").join(PG_CTL)
+}
+
+#[cfg(target_os = "windows")]
+const EMBEDDED_BINARY_SUFFIX: &str = ".exe";
+#[cfg(not(target_os = "windows"))]
+const EMBEDDED_BINARY_SUFFIX: &str = "";
+
+fn embedded_runtime_is_complete(installation_dir: &Path) -> bool {
+    ["postgres", "pg_ctl", "initdb"].iter().all(|binary| {
+        installation_dir
+            .join("bin")
+            .join(format!("{binary}{EMBEDDED_BINARY_SUFFIX}"))
+            .is_file()
+    })
 }
 
 /// `postgresql_embedded::PostgreSQL::status()` considers the database started

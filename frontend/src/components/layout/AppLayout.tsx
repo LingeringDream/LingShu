@@ -10,12 +10,14 @@ export type AppSectionKey =
   | 'thoughts'
   | 'preferences'
   | 'privacy'
+  | 'account'
   | 'settings';
 
 interface AppLayoutProps {
   children: ReactNode;
   activeSection?: AppSectionKey;
   onNavigate?: (section: AppSectionKey) => void;
+  accountName?: string;
 }
 
 const navItems: { key: AppSectionKey; label: string }[] = [
@@ -29,6 +31,7 @@ const navItems: { key: AppSectionKey; label: string }[] = [
   { key: 'preferences', label: '偏好设置' },
   { key: 'privacy', label: '权限与隐私' },
   { key: 'settings', label: '模型配置' },
+  { key: 'account', label: '云账户' },
 ];
 
 const competitionNavItems: { key: AppSectionKey; label: string }[] = [
@@ -38,7 +41,7 @@ const competitionNavItems: { key: AppSectionKey; label: string }[] = [
   { key: 'home', label: '返回个人助理' },
 ];
 
-export function AppLayout({ children, activeSection = 'home', onNavigate }: AppLayoutProps) {
+export function AppLayout({ children, activeSection = 'home', onNavigate, accountName }: AppLayoutProps) {
   const isMemoryLab = activeSection === 'memory-lab';
   const displayedNavItems = isMemoryLab ? competitionNavItems : navItems;
 
@@ -50,8 +53,8 @@ export function AppLayout({ children, activeSection = 'home', onNavigate }: AppL
           <h1>{isMemoryLab ? 'Agent 动态记忆基础设施' : '个人助理本地控制台'}</h1>
         </div>
         <div className="topbar-actions">
-          <button type="button" className="user-menu-button">
-            <span>本地用户</span>
+          <button type="button" className="user-menu-button" onClick={() => onNavigate?.('account')} title="管理云账户">
+            <span>{accountName || '登录云账户'}</span>
           </button>
         </div>
       </header>

@@ -7,6 +7,8 @@
 - `fix(desktop)`: show the control panel immediately on launch and make LingShu single-instance; reopening the app now reveals and focuses the existing panel instead of spawning duplicate windows and sidecars.
 - `fix(desktop)`: generate persistent per-install JWT and encryption secrets for the bundled backend.
 - `fix(windows)`: recover automatically when a crashed embedded PostgreSQL process leaves a stale `postmaster.pid` file behind.
+- `fix(windows)`: bundle the x64 Microsoft C runtime in the installer, retry incomplete PostgreSQL runtime extraction, and persist sidecar startup output to `sidecar.log`.
+- `fix(desktop)`: preserve the packaged Tauri origins in sidecar CORS even when machine-level environment variables or a local config file override the normal origin list.
 - `ux(desktop)`: replace the opaque `Failed to fetch` startup error with an actionable local-service message.
 
 ## 2026-09-03

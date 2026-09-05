@@ -1,0 +1,20 @@
+{
+  "version": "1.5.2",
+  "provider_name": "网盘",
+  "access_code": "9jtk",
+  "github_requires_access": true,
+  "downloads": {
+    "windows": {
+      "file": "LingShu_1.5.2_x64-setup.exe",
+      "sha256": "1d879c55de0556513975f27b7b1e0ab2cbf5afff5a878dad275e692658a65583",
+      "github_url": "https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_x64-setup.exe",
+      "url": "https://wwbty.lanzouv.com/iXoAg46szc6h"
+    },
+    "macos": {
+      "file": "LingShu_1.5.2_aarch64.dmg",
+      "sha256": "d455a89d670b9552130bc067eb8cc7c8fa8369aa3b06ee2efa829f084b19c4f3",
+      "github_url": "https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_aarch64.dmg",
+      "url": ""
+    }
+  }
+}

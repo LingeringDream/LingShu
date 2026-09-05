@@ -74,10 +74,17 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/icons/icon.iconset/
 src-tauri/binaries/lingshu-server-*
+src-tauri/resources/vcruntime140.dll
 
 # Misc
 *.tmp
 *.bak
+
+# 工作文档归档（非产品代码：商业计划书、商业模式分析、测试报告等散落分析产物）
+工作文档归档/
+
+# 订阅分级成本测算报告（非产品代码：网页 HTML + DOCX 交付物）
+订阅分级成本测算报告/
 
 # Live2D model files (large, licensed separately)
 frontend/public/live2d/*

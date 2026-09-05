@@ -35,6 +35,7 @@ use crate::state::AppState;
 const EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
 const EXIT_WITH_PARENT_VALUE: &str = "1";
 const LOCAL_FRONTEND_ORIGIN: &str = "http://localhost:5173";
+const DESKTOP_FRONTEND_ORIGINS: [&str; 2] = ["tauri://localhost", "http://tauri.localhost"];
 
 fn sidecar_mode_requested(value: Option<&OsStr>) -> bool {
     value.is_some_and(|value| value == EXIT_WITH_PARENT_VALUE)
@@ -160,7 +161,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Build CORS layer from config (defaults to localhost origins)
     let cors = CorsLayer::new()
-        .allow_origin(allowed_cors_origins(&config.cors))
+        .allow_origin(allowed_cors_origins(&config.cors, is_sidecar))
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -238,16 +239,34 @@ async fn shutdown_signal(is_sidecar: bool) {
     }
 }
 
-fn allowed_cors_origins(config: &crate::config::CorsConfig) -> Vec<HeaderValue> {
-    if config.allowed_origins.iter().any(|origin| origin == "*") {
-        return vec![HeaderValue::from_static(LOCAL_FRONTEND_ORIGIN)];
+fn allowed_cors_origins(
+    config: &crate::config::CorsConfig,
+    is_sidecar: bool,
+) -> Vec<HeaderValue> {
+    let mut origins = if config.allowed_origins.iter().any(|origin| origin == "*") {
+        vec![HeaderValue::from_static(LOCAL_FRONTEND_ORIGIN)]
+    } else {
+        config
+            .allowed_origins
+            .iter()
+            .filter_map(|origin| origin.parse::<HeaderValue>().ok())
+            .collect()
+    };
+
+    // The packaged desktop app must always be able to call its loopback
+    // sidecar. A machine-level CORS_ALLOWED_ORIGINS value or a stray
+    // config.toml must not remove the Tauri webview origins and leave the UI
+    // stuck on "本地控制台启动失败" even though the backend is listening.
+    if is_sidecar {
+        for origin in DESKTOP_FRONTEND_ORIGINS {
+            let origin = HeaderValue::from_static(origin);
+            if !origins.contains(&origin) {
+                origins.push(origin);
+            }
+        }
     }
 
-    config
-        .allowed_origins
-        .iter()
-        .filter_map(|origin| origin.parse::<HeaderValue>().ok())
-        .collect()
+    origins
 }
 
 #[cfg(test)]
@@ -287,7 +306,7 @@ mod tests {
         };
 
         assert_eq!(
-            allowed_cors_origins(&config),
+            allowed_cors_origins(&config, false),
             vec![HeaderValue::from_static("http://localhost:5173")]
         );
     }
@@ -300,10 +319,23 @@ mod tests {
     #[test]
     fn default_cors_origins_include_tauri_webview_origins() {
         let config = crate::config::CorsConfig::default();
-        let origins = allowed_cors_origins(&config);
+        let origins = allowed_cors_origins(&config, false);
 
         // No entry was silently dropped by the filter_map parse.
         assert_eq!(origins.len(), config.allowed_origins.len());
+        assert!(origins.contains(&HeaderValue::from_static("tauri://localhost")));
+        assert!(origins.contains(&HeaderValue::from_static("http://tauri.localhost")));
+    }
+
+    #[test]
+    fn sidecar_mode_restores_desktop_origins_after_config_override() {
+        let config = crate::config::CorsConfig {
+            allowed_origins: vec!["http://example.invalid".to_string()],
+        };
+
+        let origins = allowed_cors_origins(&config, true);
+
+        assert!(origins.contains(&HeaderValue::from_static("http://example.invalid")));
         assert!(origins.contains(&HeaderValue::from_static("tauri://localhost")));
         assert!(origins.contains(&HeaderValue::from_static("http://tauri.localhost")));
     }

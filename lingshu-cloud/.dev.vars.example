@@ -1,0 +1,13 @@
+# Copy this file to .dev.vars for wrangler dev. Never commit .dev.vars.
+ENVIRONMENT=development
+JWT_SECRET=replace-with-a-random-value-at-least-32-characters-long
+
+# Optional for real local email delivery. Without it, development mode logs
+# the verification URL instead of sending an email.
+RESEND_API_KEY=
+
+# Optional Stripe sandbox configuration. Keep secret values out of wrangler.jsonc.
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+STRIPE_PRICE_DEVELOPER_MONTHLY=
+STRIPE_PRICE_DEVELOPER_YEARLY=

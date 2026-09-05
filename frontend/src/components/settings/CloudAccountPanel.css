@@ -1,0 +1,23 @@
+.dashboard-card.cloud-account-panel { display: grid; gap: 24px; max-width: 760px; padding: 26px; }
+.cloud-account-panel h2 { margin: 6px 0 10px; font-size: 26px; }
+.cloud-account-muted, .cloud-account-note p { color: var(--text-secondary); font-size: 13px; line-height: 1.8; }
+.cloud-account-profile { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.cloud-account-profile p { margin: 5px 0; overflow-wrap: anywhere; }
+.cloud-account-avatar { display: grid; place-items: center; flex-shrink: 0; width: 58px; height: 58px; border-radius: 18px; background: var(--accent-light); color: var(--accent); font-size: 25px; }
+.cloud-account-verified { color: #168243; font-size: 12px; }
+.cloud-account-form { display: grid; gap: 18px; }
+.cloud-account-form label { display: grid; gap: 8px; font-size: 14px; font-weight: 500; }
+.cloud-account-form label span { font-size: 12px; font-weight: 400; color: var(--text-secondary); }
+.cloud-account-form input { width: 100%; padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px; color: var(--text-primary); background: var(--surface-solid); }
+.cloud-account-form input:focus-visible, .cloud-account-panel button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.cloud-account-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.cloud-account-actions button { padding: 10px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-solid); color: var(--text-primary); cursor: pointer; }
+.cloud-account-actions button.cloud-account-primary { background: var(--accent); color: white; border-color: var(--accent); }
+.cloud-account-actions button:disabled { opacity: .55; cursor: wait; }
+.cloud-account-details { display: grid; gap: 15px; padding: 20px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 14px; }
+.cloud-account-details > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 16px; font-size: 14px; }
+.cloud-account-details dt { color: var(--text-secondary); }
+.cloud-account-details dd { margin: 0; overflow-wrap: anywhere; }
+.cloud-account-note { padding: 16px 20px; background: var(--accent-light); border-radius: 12px; }
+.cloud-account-note strong { display: block; margin-bottom: 5px; font-size: 13px; }
+.cloud-account-error { background: #fff2f0; color: #a82920; padding: 12px 16px; border-radius: 10px; line-height: 1.7; }

@@ -26,6 +26,8 @@ use tauri_plugin_shell::ShellExt;
 const BACKEND_PORT: u16 = 8080;
 const BACKEND_STARTUP_TIMEOUT_SECS: u64 = 120;
 const SIDECAR_BINARY_NAME: &str = "lingshu-server";
+const SIDECAR_LOG_FILE: &str = "sidecar.log";
+const WINDOWS_VC_RUNTIME_FILE: &str = "vcruntime140.dll";
 const SIDECAR_EXIT_WITH_PARENT_ENV: &str = "LINGSHU_EXIT_WITH_PARENT";
 const SIDECAR_EXIT_WITH_PARENT_VALUE: &str = "1";
 const SIDECAR_JWT_SECRET_ENV: &str = "JWT_SECRET";
@@ -51,6 +53,8 @@ mod platform;
 
 #[path = "calendar_export.rs"]
 mod calendar_export;
+
+mod cloud_account;
 
 /// Wrapper so we can shut down the sidecar when the app exits.
 /// `Mutex` is required by `app.manage()` (`T: Sync`). The lock is only
@@ -448,6 +452,39 @@ fn sidecar_encryption_key(app: &tauri::AppHandle) -> Option<String> {
     )
 }
 
+fn sidecar_log_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join(SIDECAR_LOG_FILE))
+}
+
+fn append_sidecar_log(app: &tauri::AppHandle, message: &str) {
+    let Some(path) = sidecar_log_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(file, "{message}");
+}
+
+fn sidecar_path_with_runtime(app: &tauri::AppHandle) -> Option<std::ffi::OsString> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    let runtime_path = resource_dir.join(WINDOWS_VC_RUNTIME_FILE);
+    if !runtime_path.is_file() {
+        return None;
+    }
+
+    let current_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![resource_dir];
+    paths.extend(std::env::split_paths(&current_path));
+    std::env::join_paths(paths).ok()
+}
+
 fn default_pet_position(
     monitor_width: u32,
     monitor_height: u32,
@@ -493,6 +530,7 @@ fn pet_start_position(
 
 fn main() {
     tauri::Builder::default()
+        .manage(cloud_account::BrowserLoginState::default())
         // Register this first: a second launch should only reveal/focus the
         // existing control panel. It must never create another sidecar or a
         // second tray/pet window.
@@ -527,6 +565,12 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
+            cloud_account::cloud_credential_load,
+            cloud_account::cloud_credential_save,
+            cloud_account::cloud_credential_clear,
+            cloud_account::cloud_browser_login_start,
+            cloud_account::cloud_browser_login_poll,
+            cloud_account::cloud_browser_login_cancel,
             eventkit::request_calendar_access,
             eventkit::create_calendar_event,
             eventkit::update_calendar_event,
@@ -569,44 +613,73 @@ fn main() {
                     } else {
                         sidecar
                     };
+                    let sidecar = if let Some(path) = sidecar_path_with_runtime(app.handle()) {
+                        sidecar.env("PATH", path)
+                    } else {
+                        append_sidecar_log(
+                            app.handle(),
+                            "[lingshu-tauri] bundled vcruntime140.dll was not found in the app resources",
+                        );
+                        sidecar
+                    };
                     match sidecar.spawn() {
                         Ok((mut rx, child)) => {
                             app.manage(SidecarGuard(Mutex::new(Some(child))));
+                            let log_app = app.handle().clone();
                             tauri::async_runtime::spawn(async move {
                                 while let Some(event) = rx.recv().await {
                                     match event {
                                         tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                                            println!(
-                                                "[lingshu-server] {}",
+                                            let message = format!(
+                                                "[lingshu-server][stdout] {}",
                                                 String::from_utf8_lossy(&line)
                                             );
+                                            println!("{message}");
+                                            append_sidecar_log(&log_app, &message);
                                         }
                                         tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                                            eprintln!(
-                                                "[lingshu-server] {}",
+                                            let message = format!(
+                                                "[lingshu-server][stderr] {}",
                                                 String::from_utf8_lossy(&line)
                                             );
+                                            eprintln!("{message}");
+                                            append_sidecar_log(&log_app, &message);
                                         }
                                         tauri_plugin_shell::process::CommandEvent::Terminated(
                                             status,
                                         ) => {
-                                            println!("[lingshu-server] exited with {status:?}");
+                                            let message = format!(
+                                                "[lingshu-server] exited with {status:?}"
+                                            );
+                                            println!("{message}");
+                                            append_sidecar_log(&log_app, &message);
                                         }
                                         tauri_plugin_shell::process::CommandEvent::Error(err) => {
-                                            eprintln!("[lingshu-server] error: {err}");
+                                            let message = format!("[lingshu-server] error: {err}");
+                                            eprintln!("{message}");
+                                            append_sidecar_log(&log_app, &message);
                                         }
                                         _ => {}
                                     }
                                 }
                             });
+                            append_sidecar_log(app.handle(), "[lingshu-tauri] sidecar launched");
                             println!("[lingshu-tauri] sidecar launched");
                         }
                         Err(e) => {
+                            append_sidecar_log(
+                                app.handle(),
+                                &format!("[lingshu-tauri] failed to spawn sidecar: {e}"),
+                            );
                             eprintln!("[lingshu-tauri] failed to spawn sidecar: {e}");
                         }
                     }
                 }
                 Err(e) => {
+                    append_sidecar_log(
+                        app.handle(),
+                        &format!("[lingshu-tauri] sidecar not found: {e}"),
+                    );
                     eprintln!("[lingshu-tauri] sidecar not found (dev mode?): {e}");
                 }
             }
