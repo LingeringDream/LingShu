@@ -1007,7 +1007,7 @@ pub async fn resolve_conflict_review(
         .bind(user_id)
         .bind(&winner.memory_type)
         .bind(&content)
-        .bind(winner.importance.max(0.8).min(1.0))
+        .bind(winner.importance.clamp(0.8, 1.0))
         .bind(&source_ids)
         .bind(&winner.owner_agent_id)
         .bind(experience_scope)

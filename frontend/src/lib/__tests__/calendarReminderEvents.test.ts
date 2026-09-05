@@ -1,4 +1,4 @@
-/* global CustomEvent, localStorage */
+/* global localStorage */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AVATAR_CONTROL_STORAGE_KEY } from '../../components/avatar/avatarControls';
 import {

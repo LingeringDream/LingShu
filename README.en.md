@@ -7,7 +7,7 @@
 
 [中文](./README.md)
 
-A macOS desktop-companion AI assistant — a floating desktop pet with long-term memory (SoulLedger), an adjustable personality, proactive suggestions (Thought Queue), tiered system permissions, and Apple Calendar scheduling.
+A cross-platform desktop-companion AI assistant — a floating desktop pet with long-term memory (SoulLedger), an adjustable personality, proactive suggestions (Thought Queue), tiered system permissions, and platform-adapted calendar scheduling.
 
 ---
 
@@ -27,12 +27,13 @@ A macOS desktop-companion AI assistant — a floating desktop pet with long-term
 | Role Prompts | User-customizable system role prompts, integrated into chat workspace | ✅ Implemented |
 | Markdown Rendering | MessageBubble supports formatted Markdown display | ✅ Implemented |
 | LLM Settings Persistence | LLM config (model, max_tokens, context_messages, etc.) stored in PostgreSQL, survives restarts | ✅ Implemented |
+| Cloud Account | Optional browser PKCE login, device sessions, subscription overview, and download center | ✅ Deployed; memory sync is not enabled |
 
 ## Project Status
 
-**Core features complete; finishing desktop/native integration.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and calendar EventKit write-back/delete are all implemented. Backend carries **300+ test functions (16 DB-gated ignored)**; the frontend adds a Vitest suite (stores / lib / components, 18 tests).
+**Core features and cross-platform desktop infrastructure are complete; the current work is evidence and cloud-account polish.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and platform-adapted calendar export are implemented. Backend carries **383 passed and 17 ignored tests**; the frontend has **28 test files and 124 passing tests**; the cloud Worker has **21 passing tests**.
 
-- ✅ Rust + Axum backend (API, WebSocket, DB migrations 001–0022)
+- ✅ Rust + Axum backend (API, WebSocket, DB migrations 001–0027)
 - ✅ React + TypeScript + Vite frontend (chat + memory/personality/calendar/thought centers + settings + role prompts + workspace)
 - ✅ PostgreSQL + Redis + Qdrant development environment
 - ✅ SoulLedger: memory extraction/dedup, forgetting decay + provenance guardrails, personality evolution, offline LLM semantic consolidation
@@ -42,7 +43,9 @@ A macOS desktop-companion AI assistant — a floating desktop pet with long-term
 - ✅ Integration token AES-256-GCM at-rest encryption
 - ✅ Signal telemetry event layer, wired into core business paths
 - ✅ Tauri 2 desktop shell (main + pet windows) + EventKit bridge (macOS 14+ `NSCalendarsFullAccessUsageDescription`)
-- ✅ Apple Calendar: NL parse + CRUD + L1 confirmation + EventKit write-back/delete + external_event_id sync
+- ✅ Calendar: EventKit write-back/delete on macOS, ICS export on Windows/Linux/Web, with NL parsing, CRUD, L1 confirmation, and external_event_id sync where applicable
+- ✅ Windows self-contained package with an embedded PostgreSQL runtime
+- ✅ Cloud account: browser PKCE login, device sessions, subscription overview, and download center; cloud memory sync is not enabled
 - ✅ Chat: tool-use loop, role prompts, Markdown rendering, streaming SSE responses
 - ✅ Web search: separate L1 permission, result parsing, source preservation, timeout and response-size limits
 - ✅ LLM settings persisted to PostgreSQL (model, max_tokens, context_messages, etc. — survives restarts)
@@ -58,7 +61,7 @@ Full product spec: [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) 
 | Frontend | React 18, TypeScript, Zustand, Vite 6 |
 | Data | PostgreSQL 16, Redis 7, Qdrant |
 | LLM | Ollama (local, default) or any OpenAI-compatible endpoint (DeepSeek, etc.) |
-| Desktop | Tauri 2 + macOS EventKit |
+| Desktop | Tauri 2 + macOS EventKit; platform fallback and ICS export elsewhere |
 | CI/CD | GitHub Actions, Docker Compose |
 
 ## Prerequisites
@@ -67,7 +70,7 @@ Full product spec: [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) 
 - [Node.js](https://nodejs.org) 22+ with npm
 - [Docker](https://docker.com) Desktop (infrastructure services)
 - [Ollama](https://ollama.com) (local LLM): pull a chat model and the `nomic-embed-text` embedding model
-- macOS recommended for desktop/EventKit; Linux works for CI and backend-only
+- macOS 14+ Apple Silicon supports EventKit; Windows 10/11 x64 has a self-contained package; Linux works for CI and backend-only
 
 ## Quick Start
 
@@ -218,16 +221,16 @@ cd frontend && ./node_modules/.bin/tauri dev
 ./node_modules/.bin/tauri build     # → src-tauri/target/release/bundle/macos/LingShu.app
 ```
 
-**Apple Calendar write-back**: After confirming an event (L1), the desktop app writes it to the system calendar via EventKit Tauri commands and syncs back the `external_event_id`. macOS 14+ is configured with `NSCalendarsFullAccessUsageDescription`; grant calendar permissions in System Settings.
+**Calendar write/export**: After confirming an event (L1), the macOS desktop app writes it to the system calendar via EventKit and syncs back the `external_event_id`; Windows, Linux, and Web export ICS files. macOS 14+ is configured with `NSCalendarsFullAccessUsageDescription`.
 
 ## Testing
 
 ```bash
-# Backend tests (300+ test functions, 16 DB-gated ignored)
+# Backend tests (383 passed, 17 DB-gated or network-gated ignored)
 cargo test --workspace
 
-# Frontend unit tests (Vitest) + type-check + build
-cd frontend && npm run test && npm run type-check && npm run build
+# Frontend unit tests (28 test files, 124 tests) + lint + type-check + build
+cd frontend && npm run test && npm run lint && npm run type-check && npm run build
 
 # Tauri build (macOS)
 cd src-tauri && cargo build
@@ -238,17 +241,16 @@ SQLX_OFFLINE=true cargo clippy --all-targets --all-features -- -D warnings
 DATABASE_URL=... REDIS_URL=... cargo test --all
 ```
 
-CI (GitHub Actions): Rust fmt/clippy/test, frontend type-check/build, Docker image build (GHCR).
+CI (GitHub Actions): Rust fmt/clippy/test, frontend lint/type-check/build, Windows package build, OpenAPI contract check, and Docker image build (GHCR).
 
 ## API Documentation
 
-OpenAPI 3.0 generated by [utoipa](https://github.com/juhaku/utoipa), covering all **65 registered operations** (system, auth, users, LLM settings, chat, sessions, memories, personality, thoughts, calendar, permissions, integrations, signals, audit, project management, etc.). Swagger UI available at `/swagger-ui` while the backend is running.
+OpenAPI 3.1 generated by [utoipa](https://github.com/juhaku/utoipa), covering **58 paths and 90 operations** (system, auth, users, LLM settings, chat, sessions, memories, personality, thoughts, calendar, permissions, integrations, signals, audit, project management, etc.). The committed `openapi.json` is checked by a contract test; Swagger UI is available at `/swagger-ui` while the backend is running.
 
 ## Known Limitations
 
-- WebSocket is still an echo stub; real-time push for proactive suggestions is pending.
 - Thought Queue "cross-session entity count" trigger is a future enhancement.
-- Frontend ESLint (ESLint 9 flat config) and an OpenAPI contract gate (committed spec + generated client + diff gate) are still pending for Phase 1.
+- A generated frontend API client is not included yet; the current OpenAPI gate checks the committed spec against the Rust-generated document.
 
 ## Documentation
 

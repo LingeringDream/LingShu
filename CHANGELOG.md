@@ -9,6 +9,8 @@
 - `fix(windows)`: recover automatically when a crashed embedded PostgreSQL process leaves a stale `postmaster.pid` file behind.
 - `fix(windows)`: bundle the x64 Microsoft C runtime in the installer, retry incomplete PostgreSQL runtime extraction, and persist sidecar startup output to `sidecar.log`.
 - `fix(desktop)`: preserve the packaged Tauri origins in sidecar CORS even when machine-level environment variables or a local config file override the normal origin list.
+- `feat(account)`: add the optional cloud-account panel, browser-based PKCE login, device-session management, subscription overview, and account-center links.
+- `feat(downloads)`: add the production account center's download hub with versioned SHA-256 metadata, Lanzou distribution, and private GitHub Release fallback.
 - `ux(desktop)`: replace the opaque `Failed to fetch` startup error with an actionable local-service message.
 
 ## 2026-09-03

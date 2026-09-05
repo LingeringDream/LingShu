@@ -239,10 +239,7 @@ async fn shutdown_signal(is_sidecar: bool) {
     }
 }
 
-fn allowed_cors_origins(
-    config: &crate::config::CorsConfig,
-    is_sidecar: bool,
-) -> Vec<HeaderValue> {
+fn allowed_cors_origins(config: &crate::config::CorsConfig, is_sidecar: bool) -> Vec<HeaderValue> {
     let mut origins = if config.allowed_origins.iter().any(|origin| origin == "*") {
         vec![HeaderValue::from_static(LOCAL_FRONTEND_ORIGIN)]
     } else {

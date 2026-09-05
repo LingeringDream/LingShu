@@ -340,7 +340,6 @@ export function TauriOriginalPet({
           <g className="tauri-original-pet-burst" aria-hidden="true">
             {frame.sparks.map((spark, index) => (
               <circle
-                // eslint-disable-next-line react/no-array-index-key
                 key={index}
                 className={`tauri-original-pet-spark tauri-original-pet-spark-${index + 1}`}
                 cx={spark.cx}

@@ -1,4 +1,3 @@
-/* global TextEncoder, btoa, URL */
 import { isTauri, getPlatformCapabilities } from './tauri';
 import { CLOUD_ACCOUNT_URL } from './cloudAccount';
 

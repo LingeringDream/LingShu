@@ -82,7 +82,6 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
-        continue-on-error: true
       - run: npm run type-check
       - run: npm run build
 
@@ -136,11 +135,4 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
       - name: Generate OpenAPI spec
-        run: cargo test generate_openapi -- --ignored 2>/dev/null || echo "OpenAPI generation test not yet implemented"
-      - name: Verify OpenAPI spec committed
-        run: |
-          if [ -f docs/api/openapi.json ]; then
-            echo "OpenAPI spec exists"
-          else
-            echo "OpenAPI spec not generated yet (expected in Phase 1)"
-          fi
+        run: cargo test -p lingshu-server openapi_spec_matches_committed_file

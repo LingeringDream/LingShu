@@ -1,4 +1,3 @@
-/* global CustomEvent */
 import { isTauri } from './tauri';
 
 export const CALENDAR_REMINDER_EVENT = 'lingshu:calendar-reminder';

@@ -66,12 +66,13 @@ cargo test -p lingshu-server benchmark_reports_static_baseline_and_adaptive_gain
 | 角色提示词 | 用户自定义系统角色提示词，集成进对话工作区 | ✅ 已实现 |
 | Markdown 渲染 | MessageBubble 支持 Markdown 格式化展示 | ✅ 已实现 |
 | LLM 设置持久化 | LLM 配置（模型、max_tokens、context_messages 等）存 PostgreSQL，重启保留 | ✅ 已实现 |
+| 云账户与设备会话 | 可选云账户、网页登录、设备撤销、订阅概览与下载中心 | ✅ 已部署；记忆同步暂未开放 |
 
 ## 项目状态
 
-**核心功能完成，进入竞赛证据完善与桌面/原生集成收尾阶段。** SoulLedger 记忆系统、Memory Gateway、冲突治理、自适应检索、人格、思考队列、权限分级、工具调用、日历 EventKit 写入/删除等均已实现。当前后端测试结果为 **381 passed、17 ignored**，前端为 **24 个测试文件、98 项测试通过**。
+**核心功能与跨平台桌面基础设施已完成，当前进入竞赛证据完善和云账户配套收尾阶段。** SoulLedger 记忆系统、Memory Gateway、冲突治理、自适应检索、人格、思考队列、权限分级、工具调用、日历平台适配等均已实现。当前后端测试结果为 **383 passed、17 ignored**，前端为 **28 个测试文件、124 项测试通过**，云账户 Worker 为 **21 项测试通过**。
 
-- ✅ Rust + Axum 后端（API、WebSocket、26 个数据库迁移）
+- ✅ Rust + Axum 后端（API、WebSocket、27 个数据库迁移）
 - ✅ React + TypeScript + Vite 前端（聊天 + 记忆/人格/日历/思绪中心 + 设置 + 角色提示词 + 工作区）
 - ✅ PostgreSQL + Redis + Qdrant 开发环境
 - ✅ SoulLedger：记忆提取/去重、遗忘衰减 + 来源护栏、人格演化、离线 LLM 语义合并
@@ -82,7 +83,9 @@ cargo test -p lingshu-server benchmark_reports_static_baseline_and_adaptive_gain
 - ✅ 集成令牌 AES-256-GCM 静态加密
 - ✅ 信号埋点事件层，已接入核心业务路径
 - ✅ Tauri 2 桌面壳（main + pet 窗口）+ EventKit 桥接（macOS 14+ `NSCalendarsFullAccessUsageDescription`）
-- ✅ Apple Calendar：自然语言解析 + CRUD + L1 确认 + EventKit 写入/删除 + external_event_id 回写
+- ✅ Apple Calendar：macOS 使用 EventKit；Windows、Linux 和 Web 使用 ICS 导出；均支持自然语言解析、CRUD 与 L1 确认
+- ✅ Windows 独立版：Sidecar 内置 PostgreSQL 运行时，安装包可独立启动，不依赖 Docker 或外部数据库
+- ✅ 云账户：网页登录 PKCE、设备会话、订阅概览和下载中心；云端记忆同步与账户管理暂未开放
 - ✅ Chat：工具调用（tool-use loop）、角色提示词、Markdown 渲染、流式 SSE 响应
 - ✅ 联网搜索：独立 L1 权限开关、网页结果解析、来源链接保留、超时与响应大小限制
 - ✅ LLM 设置持久化至 PostgreSQL（模型、max_tokens、context_messages 等，重启保留）
@@ -98,7 +101,7 @@ cargo test -p lingshu-server benchmark_reports_static_baseline_and_adaptive_gain
 | 前端 | React 18, TypeScript, Zustand, Vite 6 |
 | 数据 | PostgreSQL 16, Redis 7, Qdrant |
 | LLM | Ollama（本地，默认）或任意 OpenAI 兼容端点（DeepSeek 等） |
-| 桌面 | Tauri 2 + macOS EventKit |
+| 桌面 | Tauri 2 + macOS EventKit；Windows/Linux/Web 使用平台降级和 ICS 导出 |
 | CI/CD | GitHub Actions, Docker Compose |
 
 ## 环境要求
@@ -107,7 +110,7 @@ cargo test -p lingshu-server benchmark_reports_static_baseline_and_adaptive_gain
 - [Node.js](https://nodejs.org) 22+ 与 npm
 - [Docker](https://docker.com) Desktop（基础设施服务）
 - [Ollama](https://ollama.com)（本地 LLM）：需 pull 一个对话模型与嵌入模型 `nomic-embed-text`
-- 推荐 macOS 开发（桌面端 / EventKit）；Linux 可用于 CI 与纯后端
+- macOS 14+ Apple Silicon 可使用 EventKit；Windows 10/11 x64 支持独立安装包；Linux 可用于 CI 与纯后端
 
 ## 快速开始
 
@@ -275,16 +278,16 @@ cd frontend && ./node_modules/.bin/tauri dev
 ./node_modules/.bin/tauri build     # → src-tauri/target/release/bundle/macos/LingShu.app
 ```
 
-**Apple Calendar 写入**：确认事件（L1）后，桌面端通过 EventKit Tauri 命令写入系统日历并回写 `external_event_id`；macOS 14+ 已配置 `NSCalendarsFullAccessUsageDescription`，需在系统设置授予日历权限。
+**日历写入/导出**：确认事件（L1）后，macOS 桌面端通过 EventKit 写入系统日历并回写 `external_event_id`；Windows、Linux 和 Web 通过 ICS 导出。macOS 14+ 已配置 `NSCalendarsFullAccessUsageDescription`。
 
 ## 测试
 
 ```bash
-# 后端测试（当前 381 passed、17 ignored）
+# 后端测试（当前 383 passed、17 ignored）
 cargo test --workspace
 
-# 前端单测（当前 24 个测试文件、98 项测试）+ 类型检查 + 构建
-cd frontend && npm run test && npm run type-check && npm run build
+# 前端单测（当前 28 个测试文件、124 项测试）+ lint + 类型检查 + 构建
+cd frontend && npm run test && npm run lint && npm run type-check && npm run build
 
 # Tauri 构建（macOS）
 cd src-tauri && cargo build
@@ -295,18 +298,17 @@ SQLX_OFFLINE=true cargo clippy --all-targets --all-features -- -D warnings
 DATABASE_URL=... REDIS_URL=... cargo test --all
 ```
 
-CI（GitHub Actions）：Rust fmt/clippy/test、前端 type-check/build、Docker 镜像构建（GHCR）。
+CI（GitHub Actions）：Rust fmt/clippy/test、前端 lint/type-check/build、Windows 安装包构建、OpenAPI 契约检查和 Docker 镜像构建（GHCR）。
 
 ## API 文档
 
-OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，当前覆盖 **57 条路径、89 个操作**（系统、认证、用户、LLM 设置、对话、会话、记忆网关、评测、人格、思绪、日历、权限、集成、信号、审计、项目管理等）。后端运行时访问 `/swagger-ui`。
+OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，当前覆盖 **58 条路径、90 个操作**（系统、认证、用户、LLM 设置、对话、会话、记忆网关、评测、人格、思绪、日历、权限、集成、信号、审计、项目管理等）。后端运行时访问 `/swagger-ui`；提交的 `openapi.json` 由契约测试校验。
 
 ## 已知局限
 
-- WebSocket 仍为回声桩，主动建议的实时推送待实现。
 - Thought Queue 的「跨会话实体计数」触发器为后续增强。
 - 竞赛实验当前仍以自建回归集为主，公开数据集、端到端开放域任务、正式 Top-K Precision、多次重复实验和端侧内存对照尚待补齐。
-- 前端 ESLint（ESLint 9 flat config）与 OpenAPI 契约门禁（committed spec + 生成客户端 + diff gate）仍待 Phase 1。
+- 前端暂未提供生成式 API 客户端；当前 OpenAPI 门禁校验代码生成结果与提交的 `openapi.json` 一致性。
 
 ## 文档索引
 
