@@ -1,4 +1,3 @@
-/* global CustomEvent, TextEncoder, ReadableStream */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   CHAT_SESSION_SYNC_DEBOUNCE_MS,

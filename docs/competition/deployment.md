@@ -3,14 +3,14 @@
 ## 环境
 
 - Rust stable（仓库提供 `rust-toolchain.toml`）
-- Node.js 20+
+- Node.js 22+
 - PostgreSQL 16
 - 可选：Redis 7、Qdrant
 
 ## 本地启动
 
 ```bash
-cd /Users/ymqz/projects/PA
+cd <repository-root>
 ./scripts/dev.sh
 ```
 
@@ -23,6 +23,10 @@ docker compose -f docker/docker-compose.dev.yml up -d
 cargo run -p lingshu-server
 cd frontend && npm run dev
 ```
+
+Windows 演示可在 Docker Desktop 启动后双击仓库根目录的 `启动灵枢竞赛版.cmd`；停止时使用
+`停止灵枢开发版.cmd`。Windows 独立安装包不需要 Docker 或外部 PostgreSQL，云账户网页登录和
+下载中心说明见 [`lingshu-cloud/README.md`](../../lingshu-cloud/README.md)。
 
 ## 演示顺序（3–5 分钟）
 
@@ -39,6 +43,7 @@ cd frontend && npm run dev
 cargo test --workspace
 cd frontend
 npm run test
+npm run lint
 npm run type-check
 npm run build
 ```

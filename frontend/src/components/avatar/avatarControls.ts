@@ -1,4 +1,4 @@
-/* global CustomEvent, StorageEvent */
+/* global StorageEvent */
 import { isTauri } from '../../lib/tauri';
 
 export type AvatarMood = 'idle' | 'thinking' | 'speaking' | 'reminder';

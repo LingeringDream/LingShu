@@ -1,4 +1,4 @@
-/* global CustomEvent, localStorage */
+/* global localStorage */
 import { describe, expect, it, beforeEach } from 'vitest';
 
 import {

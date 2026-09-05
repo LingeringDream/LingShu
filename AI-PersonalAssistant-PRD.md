@@ -5,7 +5,10 @@
 ## 日期：2026-06-04
 ## 作者：PM Office
 
-> **说明**：本文档版本号独立于代码版本（`Cargo.toml` 当前为 `0.1.0`，跟随 Phase 0 脚手架）。PRD 版本号按产品需求迭代次数递增，代码版本号在 Phase 1 首个可运行桌面壳交付时同步至 `0.4.0`。
+> **文档状态**：这是 2026-06-04 的 v0.4 历史产品设计稿。代码当前版本为 1.5.2，
+> 已扩展至 Windows、Web/ICS 降级、Memory Evolution Lab 和可选云账户；本文中的 Phase 0/1
+> 路线图、macOS 单平台假设和“待实现”描述不应当作为当前实现状态。当前状态请以根目录
+> [README](./README.md)、[CHANGELOG](./CHANGELOG.md) 和 [竞赛交付索引](./docs/competition/README.md) 为准。
 
 ---
 

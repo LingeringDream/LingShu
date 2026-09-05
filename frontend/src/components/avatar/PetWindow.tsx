@@ -1,4 +1,3 @@
-/* global WebSocket, HTMLFormElement, requestAnimationFrame, cancelAnimationFrame */
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { Application, Graphics, Text, Container, BlurFilter } from 'pixi.js';
 import { getPlatformCapabilities, isTauri, showMainWindow } from '../../lib/tauri';

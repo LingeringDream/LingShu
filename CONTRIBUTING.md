@@ -1,6 +1,6 @@
 # Contributing to LingShu (灵枢)
 
-Thanks for your interest in contributing! LingShu is a macOS desktop AI personal assistant in active development.
+Thanks for your interest in contributing! LingShu is a cross-platform desktop AI personal assistant in active development.
 
 ## Getting Started
 
@@ -13,7 +13,7 @@ Thanks for your interest in contributing! LingShu is a macOS desktop AI personal
 - Rust 1.88 with `rustfmt` and `clippy`
 - Node.js 22+ and npm
 - Docker Desktop (for PostgreSQL, Redis, Qdrant)
-- macOS recommended for desktop/EventKit development; Linux works for CI and backend-only
+- macOS 14+ is required for EventKit development; Windows 10/11 supports the packaged desktop path; Linux works for CI and backend-only development
 
 ## Development Workflow
 
@@ -65,7 +65,7 @@ Frontend ESLint 9 flat config is included (`eslint.config.mjs`). Run `npm run li
 - Migrations must be forward-compatible (zero-downtime)
 - Once merged to `main`, do not modify existing migration files
 - Add columns with `DEFAULT` values; split renames into three steps
-- Current range: 001–0022 (22 migrations)
+- Current range: 27 migrations, including the Memory Evolution Lab and conflict-review migrations
 
 ### Tauri (macOS Desktop)
 
@@ -93,7 +93,7 @@ Scope is optional but encouraged: `feat(chat): add streaming response`.
 ## Testing
 
 ```bash
-# Backend (300+ test functions, 16 DB-gated ignored)
+# Backend (383 passed, 17 DB-gated or network-gated ignored at the current snapshot)
 cargo test --workspace
 
 # Frontend
@@ -104,10 +104,10 @@ cd src-tauri && cargo build
 
 # OpenAPI contract
 # Committed openapi.json + openapi_spec_matches_committed_file test.
-# 65 routes currently registered in utoipa ApiDoc.
+# 58 paths and 90 operations are currently registered in the utoipa ApiDoc.
 ```
 
-When adding new API endpoints, register them with `utoipa` attributes in `crates/lingshu-server/src/routes/mod.rs`. Once the Phase 1 contract gate exists, include a test or generated-spec update that validates the OpenAPI schema.
+When adding new API endpoints, register them with `utoipa` attributes in `crates/lingshu-server/src/routes/mod.rs` and update the committed `openapi.json` through the existing contract test.
 
 ## Releasing / Version Bump
 
