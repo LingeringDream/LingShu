@@ -6,6 +6,7 @@ import { MemoryCenter } from './components/memory/MemoryCenter';
 import { MemoryEvolutionLab } from './components/memory/MemoryEvolutionLab';
 import { WorkspacePage } from './components/workspace/WorkspacePage';
 import { PermissionSettings } from './components/settings/PermissionSettings';
+import { AiToolsPanel } from './components/settings/AiToolsPanel';
 import { CloudAccountPanel } from './components/settings/CloudAccountPanel';
 import { useCloudAccountStore } from './stores/cloudAccountStore';
 import { PersonalityCenter } from './components/personality/PersonalityCenter';
@@ -78,7 +79,9 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<AppSectionKey>(() =>
     new URLSearchParams(window.location.search).get('section') === 'memory-lab'
       ? 'memory-lab'
-      : 'home',
+      : new URLSearchParams(window.location.search).get('section') === 'ai-tools'
+        ? 'ai-tools'
+        : 'home',
   );
   const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>(() => loadAvatarControlSettings());
 
@@ -313,6 +316,22 @@ export default function App() {
     };
   }, []);
 
+  // ── 全局快捷键：Ctrl/Cmd + Shift + M 打开「接入 AI 工具」面板 ──
+  useEffect(() => {
+    if (sessionState !== 'ready') return undefined;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
+        const target = e.target as HTMLElement | null;
+        const tag = target?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+        e.preventDefault();
+        setActiveSection('ai-tools');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [sessionState]);
+
   // ── Local session gate ────────────────────────────────────────
 
   if (sessionState !== 'ready') {
@@ -529,6 +548,8 @@ export default function App() {
     switch (activeSection) {
       case 'account':
         return <CloudAccountPanel />;
+      case 'ai-tools':
+        return <AiToolsPanel />;
       case 'home':
         return renderHome();
       case 'chat':

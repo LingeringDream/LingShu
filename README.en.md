@@ -7,7 +7,11 @@
 
 [中文](./README.md)
 
-A cross-platform desktop-companion AI assistant — a floating desktop pet with long-term memory (SoulLedger), an adjustable personality, proactive suggestions (Thought Queue), tiered system permissions, and platform-adapted calendar scheduling.
+LingShu is a user-controlled memory layer that connects AI tools for individuals, teams, and enterprises, while also providing its own desktop companion. Users can work in the LingShu client, connect Claude, Cursor, Codex, and other tools through MCP, or embed its memory capabilities through APIs and SDKs. See the [product positioning and editions](docs/product-positioning.md) for the complete model.
+
+> **LingShu is not another AI. It is the memory layer connecting all of your AIs.**
+
+The desktop client provides long-term memory (SoulLedger), an adjustable personality, proactive suggestions (Thought Queue), tiered system permissions, and platform-adapted calendar scheduling.
 
 ---
 

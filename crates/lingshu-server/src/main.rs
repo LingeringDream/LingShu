@@ -190,6 +190,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::chat::router())
         .merge(routes::memories::router())
         .merge(routes::memory_gateway::router())
+        .merge(routes::mcp::router())
+        .merge(routes::teams::router())
         .merge(routes::memory_benchmark::router())
         .merge(routes::project_members::router())
         .merge(routes::task_dependencies::router())
@@ -202,9 +204,19 @@ async fn main() -> anyhow::Result<()> {
         .merge(
             utoipa_swagger_ui::SwaggerUi::new("/swagger-ui")
                 .url("/api-docs/openapi.json", routes::openapi_spec()),
+        );
+    // A shared team server must not expose the unauthenticated desktop bootstrap
+    // or personal APIs. The browser portal at ?section=team uses only this API.
+    let app = if std::env::var("LINGSHU_TEAM_SERVER").as_deref() == Ok("1") {
+        Router::new().merge(routes::teams::router()).route(
+            "/api/v1/system/health",
+            axum::routing::get(routes::system::health_check),
         )
-        .layer(cors)
-        .with_state(state);
+    } else {
+        app
+    }
+    .layer(cors)
+    .with_state(state);
 
     // Start server
     let addr = format!("{}:{}", config.server.host, config.server.port);

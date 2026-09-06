@@ -33,6 +33,15 @@ export interface VerificationEmail {
   verificationUrl: string;
 }
 
+export interface TeamInviteEmail {
+  to: string;
+  inviterName: string;
+  teamName: string;
+  role: "admin" | "editor" | "viewer";
+  inviteId: string;
+  acceptUrl: string;
+}
+
 export type Mailer = (
   message: VerificationEmail,
   env: AppEnv,

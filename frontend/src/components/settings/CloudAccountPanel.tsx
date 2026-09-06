@@ -45,6 +45,13 @@ export function CloudAccountPanel() {
             <div><dt>设备平台</dt><dd>{account.device.platform}</dd></div>
             {account.subscription?.current_period_end && <div><dt>订阅到期</dt><dd>{new Date(account.subscription.current_period_end).toLocaleDateString('zh-CN')}</dd></div>}
           </dl>
+          {account.entitlements && <div className="cloud-account-note" aria-label="版本权益">
+            <strong>当前生效版本：{account.entitlements.effective_plan.toUpperCase()}</strong>
+            <dl className="cloud-account-details">{account.entitlements.features.map(feature => <div key={feature.code}>
+              <dt>{feature.name}</dt><dd>{!feature.available ? '尚未开放' : feature.enabled ? '可用' : `需要 ${feature.plans.map(plan => plan.toUpperCase()).join(' / ')}`}</dd>
+            </div>)}</dl>
+            <p>受邀加入团队不要求个人购买团队版，团队内操作仍受成员角色限制。</p>
+          </div>}
           {account.subscriptionError && <p className="cloud-account-muted" role="status">订阅信息暂未更新：{account.subscriptionError}</p>}
           <div className="cloud-account-actions">
             <button className="cloud-account-primary" type="button" onClick={() => void open('/account')}>打开网页账户中心</button>

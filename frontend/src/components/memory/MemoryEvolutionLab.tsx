@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import { apiFetch } from '../../lib/api';
 import './MemoryEvolutionLab.css';
+import { TeamWorkspace } from './TeamWorkspace';
 
 interface Agent {
   agent_key: string;
@@ -119,7 +120,7 @@ interface MemoryDraft {
   source_trust: number;
 }
 
-type LabView = 'console' | 'governance' | 'evidence';
+type LabView = 'console' | 'governance' | 'evidence' | 'team';
 type WeightKey = keyof Omit<ScoreBreakdown, 'total'>;
 
 const INITIAL_STATS: Stats = {
@@ -176,6 +177,7 @@ const WEIGHT_LABEL: Record<WeightKey, string> = {
 };
 
 const LAB_VIEWS: { key: LabView; label: string; description: string }[] = [
+  { key: 'team', label: '团队工作区', description: '成员、凭证与共享记忆' },
   { key: 'console', label: 'Memory Console', description: '召回、过滤与解释' },
   { key: 'governance', label: 'Agent Governance', description: '权限、冲突与生命周期' },
   { key: 'evidence', label: 'Benchmark & Integration', description: '实验、消融与接入' },
@@ -497,6 +499,8 @@ export function MemoryEvolutionLab() {
           </button>
         ))}
       </nav>
+
+      {activeView === 'team' ? <TeamWorkspace /> : null}
 
       {message ? <div className="lab-message" role="status">{message}</div> : null}
 

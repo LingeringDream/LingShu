@@ -4,6 +4,7 @@
 
 ## 架构与设计
 
+- [产品定位与版本体系](./product-positioning.md) — 客户端、MCP、API / SDK 三种入口，以及 Free、Pro、Team、Enterprise、Embedded 版本边界
 - [SoulLedger 设计决策](./soulledger-design-decisions.md) — 记忆留存、人格演化、Thought Queue、遗忘机制的设计取舍与实现状态
 - [产品需求文档](../AI-PersonalAssistant-PRD.md) — 完整产品规格（中文）
 - 架构决策记录仍未单独建立；当前系统架构见 [竞赛架构文档](./competition/architecture.md)

@@ -1691,8 +1691,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "lingshu-mcp"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "lingshu-mcp-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lingshu-mcp-core"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "lingshu-server"
-version = "1.5.2"
+version = "1.6.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1706,6 +1733,7 @@ dependencies = [
  "futures",
  "jsonwebtoken",
  "libc",
+ "lingshu-mcp-core",
  "lingshu-vector",
  "pdf-extract",
  "postgresql_archive",
@@ -1734,7 +1762,7 @@ dependencies = [
 
 [[package]]
 name = "lingshu-vector"
-version = "1.5.2"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "reqwest",

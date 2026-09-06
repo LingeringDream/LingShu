@@ -8,8 +8,8 @@
     <meta name="description" content="灵枢云账户中心">
     <title>灵枢账户中心</title>
     <link rel="icon" href="/lingshu-icon.png" type="image/png">
-    <link rel="stylesheet" href="/styles.css?v=20260905-browser-login-v1">
-    <script type="module" src="/app.js?v=20260905-browser-login-v1"></script>
+    <link rel="stylesheet" href="/styles.css?v=20260905-product-editions-v1">
+    <script type="module" src="/app.js?v=20260905-product-editions-v1"></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -164,6 +164,10 @@
               <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 20h16"/></svg>
               下载中心
             </a>
+            <a class="sidebar-link" href="/team" data-page="team" id="sidebar-link-team" hidden>
+              <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M14.5 20a5 5 0 0 1 9 0"/></svg>
+              团队
+            </a>
           </nav>
           <p>LingShu Cloud <span>·</span> 隐私优先</p>
         </aside>
@@ -176,6 +180,22 @@
               退出登录
             </button>
           </header>
+
+          <section id="pending-invites-banner" class="pending-invites" role="region" aria-labelledby="pending-invites-title" hidden>
+            <div class="pending-invites-header">
+              <span class="pending-invites-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="22" height="22"><path d="M16 11a4 4 0 1 0-8 0 4 4 0 0 0 8 0Z"/><path d="M3 21a9 9 0 0 1 18 0"/></svg>
+              </span>
+              <div>
+                <h2 id="pending-invites-title">待处理的团队邀请</h2>
+                <p id="pending-invites-summary"></p>
+              </div>
+              <button id="pending-invites-close" class="icon-button" type="button" aria-label="关闭邀请横幅">
+                <svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg>
+              </button>
+            </div>
+            <ul id="pending-invites-list" class="pending-invites-list"></ul>
+          </section>
 
           <section id="profile-section" class="account-page profile-page" data-page-panel="account" aria-labelledby="profile-name">
             <div class="profile-section">
@@ -229,12 +249,13 @@
             <div class="plan-grid" aria-label="可用套餐">
               <article class="plan-card">
                 <div class="plan-labels"><span class="plan-kicker">基础</span><span class="plan-state is-live">当前可用</span></div>
-                <h3>免费版</h3>
+                <h3>免费版 <small>Free</small></h3>
                 <p>适合单机使用、初次体验和不需要云同步的个人用户。</p>
                 <ul>
                   <li>完整本地会话与离线使用</li>
                   <li>本地基础动态记忆</li>
                   <li>多模型自由接入（本地模型 / 自备 API Key）</li>
+                  <li>本地 MCP Server，多种 AI 共享本机记忆</li>
                   <li>云账户与设备会话管理</li>
                   <li>本地数据自主备份</li>
                   <li>产品更新与基础支持</li>
@@ -244,12 +265,13 @@
 
               <article class="plan-card is-featured">
                 <div class="plan-labels"><span class="plan-kicker">进阶</span><span class="plan-state is-upcoming">随同步开放</span></div>
-                <h3>开发者版</h3>
+                <h3>专业版 <small>Pro</small></h3>
                 <p>适合个人开发者、研究者和需要多设备记忆工作流的重度用户。</p>
                 <ul>
                   <li>包含全部免费版权益</li>
                   <li>加密云端记忆同步</li>
                   <li>多设备增量同步与冲突历史</li>
+                  <li>跨设备 MCP 接入与连续记忆</li>
                   <li>高级经验沉淀与记忆参数自定义</li>
                   <li>优先获得云端新能力</li>
                 </ul>
@@ -262,23 +284,42 @@
                 <p id="billing-availability" class="billing-availability">支付通道正在准备中</p>
               </article>
 
-              <article class="plan-card is-planned">
+              <article class="plan-card is-planned" data-plan-card="team">
                 <div class="plan-labels"><span class="plan-kicker">协作</span><span class="plan-state">规划中</span></div>
-                <h3>团队版</h3>
+                <h3>团队版 <small>Team</small></h3>
                 <p>适合小型团队、实验室和需要共享记忆边界的组织。</p>
                 <ul>
-                  <li>包含全部开发者版权益</li>
+                  <li>包含全部专业版权益</li>
                   <li>团队工作区与共享记忆空间</li>
                   <li>成员角色和细粒度访问权限</li>
                   <li>团队审计记录与设备治理</li>
+                  <li>按权限访问的团队 MCP 空间</li>
                   <li>按席位统一管理订阅与账单</li>
                 </ul>
                 <span class="plan-price is-muted">价格与开放时间待公布</span>
               </article>
             </div>
+            <section class="enterprise-contact" aria-labelledby="enterprise-contact-title">
+              <div class="enterprise-contact-heading">
+                <span class="plan-kicker">企业与产品集成</span>
+                <h3 id="enterprise-contact-title">让组织和产品拥有统一的 AI 记忆层</h3>
+                <p>企业部署、权限治理、私有化交付和 OEM 集成采用需求评估与定制报价。</p>
+              </div>
+              <div class="enterprise-options">
+                <article>
+                  <div><strong>企业版 <small>Enterprise</small></strong><span>企业上下文中心、RBAC、审计、SSO、Enterprise MCP Gateway，支持云、VPC 与私有部署。</span></div>
+                  <a class="primary-button enterprise-contact-button" href="mailto:admin@lingeringdream.com?subject=%E7%81%B5%E6%9E%A2%E4%BC%81%E4%B8%9A%E7%89%88%E5%92%A8%E8%AF%A2&amp;body=%E6%82%A8%E5%A5%BD%EF%BC%8C%E6%88%91%E6%83%B3%E5%92%A8%E8%AF%A2%E7%81%B5%E6%9E%A2%E4%BC%81%E4%B8%9A%E7%89%88%E3%80%82%0A%0A%E7%A7%B0%E5%91%BC%EF%BC%9A%5B%E8%AF%B7%E5%A1%AB%E5%86%99%5D%0A%E8%81%94%E7%B3%BB%E6%96%B9%E5%BC%8F%EF%BC%9A%5B%E9%82%AE%E7%AE%B1%20%2F%20%E7%94%B5%E8%AF%9D%20%2F%20%E5%BE%AE%E4%BF%A1%5D%0A%E8%81%8C%E4%BD%8D%EF%BC%9A%5B%E8%AF%B7%E5%A1%AB%E5%86%99%5D%0A%E5%85%AC%E5%8F%B8%E6%88%96%E7%BB%84%E7%BB%87%EF%BC%9A%5B%E8%AF%B7%E5%A1%AB%E5%86%99%5D%0A%E9%9C%80%E6%B1%82%E7%AE%80%E8%BF%B0%EF%BC%9A%5B%E8%AF%B7%E5%A1%AB%E5%86%99%5D%0A%0A%E8%B0%A2%E8%B0%A2%E3%80%82">联系企业方案</a>
+                </article>
+                <article>
+                  <div><strong>嵌入版 <small>Embedded / OEM</small></strong><span>Context / Memory API、Python / TypeScript SDK、MCP Server、多租户与白标交付。</span></div>
+                  <a class="secondary-button enterprise-contact-button" href="mailto:admin@lingeringdream.com?subject=%E7%81%B5%E6%9E%A2%E5%B5%8C%E5%85%A5%E7%89%88%20%2F%20OEM%20%E5%92%A8%E8%AF%A2&amp;body=%E6%82%A8%E5%A5%BD%EF%BC%8C%E6%88%91%E6%83%B3%E5%92%A8%E8%AF%A2%E7%81%B5%E6%9E%A2%E5%B5%8C%E5%85%A5%E7%89%88%20%2F%20OEM%20%E5%90%88%E4%BD%9C%E3%80%82%0A%0A%E7%A7%B0%E5%91%BC%EF%BC%9A%5B%E8%AF%B7%E5%A1%AB%E5%86%99%5D%0A%E8%81%94%E7%B3%BB%E6%96%B9%E5%BC%8F%EF%BC%9A%5B%E9%82%AE%E7%AE%B1%20%2F%20%E7%94%B5%E8%AF%9D%20%2F%20%E5%BE%AE%E4%BF%A1%5D%0A%E8%81%8C%E4%BD%8D%EF%BC%9A%5B%E8%AF%B7%E5%A1%AB%E5%86%99%5D%0A%E5%85%AC%E5%8F%B8%E6%88%96%E7%BB%84%E7%BB%87%EF%BC%9A%5B%E8%AF%B7%E5%A1%AB%E5%86%99%5D%0A%E9%9C%80%E6%B1%82%E7%AE%80%E8%BF%B0%EF%BC%9A%5B%E8%AF%B7%E5%A1%AB%E5%86%99%5D%0A%0A%E8%B0%A2%E8%B0%A2%E3%80%82">咨询嵌入合作</a>
+                </article>
+              </div>
+              <p class="enterprise-email">商务邮箱：<a href="mailto:admin@lingeringdream.com">admin@lingeringdream.com</a></p>
+            </section>
             <div class="plan-principles" aria-label="订阅分级原则">
-              <p><strong>本地能力不设付费墙</strong><span>免费版始终保留桌面端本地核心功能、离线使用和多模型自由接入。</span></p>
-              <p><strong>付费只扩展云端能力</strong><span>开发者版的云同步权益将在功能正式开放后生效。</span></p>
+              <p><strong>本地 MCP 永久免费</strong><span>免费版让同一台电脑上的 Claude、Cursor、Codex 等 AI 共享本机灵枢记忆。</span></p>
+              <p><strong>Pro 扩展跨设备连续性</strong><span>专业版的云同步与跨设备 MCP 权益将在功能正式开放后生效。</span></p>
               <p><strong>结账前显示真实价格</strong><span>各档时长与金额以微信支付 / 支付宝收银台最终确认内容为准。</span></p>
             </div>
             <p class="billing-note">
@@ -457,12 +498,13 @@
                   <span class="doc-number">08</span>
                   <div class="doc-content">
                     <h3>订阅与账单</h3>
-                    <p>订阅采用免费版、开发者版和团队版三级结构。本地核心能力不设付费墙，付费方案只扩展云同步、高级记忆和团队治理能力。</p>
+                    <p>C 端订阅采用免费版 Free、专业版 Pro 和团队版 Team 三级结构；企业版 Enterprise 与嵌入版 Embedded / OEM 采用需求评估与定制报价。本地核心能力和本地 MCP 不设付费墙，付费方案扩展云同步、跨设备连续性和协作治理。</p>
                     <p class="doc-note"><strong>模型接入不设付费墙：</strong>免费版即可自由接入本地模型（如 Ollama）或自备第三方 API Key，不产生订阅费用；官方托管模型按量计费，与订阅费分开结算。</p>
                     <ul class="doc-list">
                       <li><strong>免费版（当前可用）：</strong>完整本地会话、离线使用、本地基础动态记忆、多模型自由接入（本地模型或自备 API Key）、云账户和设备会话管理。</li>
-                      <li><strong>开发者版（随同步开放）：</strong>在免费版基础上增加加密增量同步、多设备冲突历史、高级经验沉淀、记忆参数自定义。</li>
-                      <li><strong>团队版（规划中）：</strong>增加团队工作区、共享记忆空间、成员权限、审计记录、设备治理和按席位统一账单。</li>
+                      <li><strong>专业版 Pro（随同步开放）：</strong>在免费版基础上增加加密增量同步、多设备冲突历史、跨设备 MCP、高级经验沉淀和记忆参数自定义。</li>
+                      <li><strong>团队版 Team（规划中）：</strong>增加团队工作区、共享记忆空间、成员权限、团队 MCP 空间、审计记录、设备治理和按席位统一账单。</li>
+                      <li><strong>企业版与嵌入版：</strong>提供企业级上下文治理、MCP Gateway、API / SDK、私有部署与 OEM 能力，通过页面中的企业联系入口咨询。</li>
                     </ul>
                     <p class="doc-note"><strong>开放状态：</strong>只有“订阅与账单”页面显示可用价格和可点击的升级按钮时，在线付款才已开放；团队版当前不接受购买。</p>
                     <ol class="doc-steps">
@@ -571,18 +613,162 @@
                   <a class="github-download" data-github-platform="macos" href="https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_aarch64.dmg" target="_blank" rel="noopener noreferrer" title="需登录有仓库权限的 GitHub 账户">GitHub 下载</a>
                 </div>
               </article>
-              <article class="download-row is-muted">
+              <article class="download-row">
                 <span class="platform-mark" aria-hidden="true">
                   <svg viewBox="0 0 24 24" width="28" height="28"><circle cx="12" cy="12" r="8"/><path d="M8 16c1.2-1 2.5-1.5 4-1.5s2.8.5 4 1.5M9 9h.01M15 9h.01M9.5 12.5h5"/></svg>
                 </span>
-                <div class="download-copy"><h3>Linux</h3><p>安装包仍在准备中</p><small>开放后将在此页面更新。</small></div>
-                <div class="download-actions"><button class="drive-download" type="button" disabled>暂未开放</button></div>
+                <div class="download-copy"><h3>Linux · DEB</h3><p>Ubuntu 24.04 已验证 · x86_64 · 内置数据库</p><small>LingShu_1.5.2_amd64.deb · 27.5 MiB · sudo apt install ./LingShu_1.5.2_amd64.deb</small><span class="download-sha" data-sha-platform="linux_deb" hidden></span><span class="download-access-code" data-access-code-platform="linux_deb" hidden></span></div>
+                <div class="download-actions"><button class="drive-download" type="button" data-download-platform="linux_deb" disabled>网盘下载</button><a class="github-download" data-github-platform="linux_deb" href="https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_amd64.deb" target="_blank" rel="noopener noreferrer">GitHub 下载</a></div>
+              </article>
+              <article class="download-row">
+                <span class="platform-mark" aria-hidden="true">Linux</span>
+                <div class="download-copy"><h3>Linux · AppImage</h3><p>Ubuntu 24.04 已验证 · x86_64 · 内置数据库</p><small>LingShu_1.5.2_amd64.AppImage · 98.2 MiB · 下载后赋予执行权限，以普通用户运行。网盘扩展名可能显示为 .appimage。</small><span class="download-sha" data-sha-platform="linux_appimage" hidden></span><span class="download-access-code" data-access-code-platform="linux_appimage" hidden></span></div>
+                <div class="download-actions"><button class="drive-download" type="button" data-download-platform="linux_appimage" disabled>网盘下载</button><a class="github-download" data-github-platform="linux_appimage" href="https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_amd64.AppImage" target="_blank" rel="noopener noreferrer">GitHub 下载</a></div>
               </article>
             </div>
             <div id="download-status" class="download-status" role="status">
               <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
               <p><strong>网盘链接整理中</strong><span>GitHub 下载需登录有仓库权限的账户；网盘地址配置后供普通用户使用。</span></p>
             </div>
+          </section>
+
+          <section id="team-section" class="account-page team-section" data-page-panel="team" aria-labelledby="team-title" hidden>
+            <div class="page-intro team-intro">
+              <div><h2 id="team-title">团队工作区</h2><p>成员协作、独立 Agent 凭证与共享记忆</p></div>
+              <span id="team-current-user" class="team-current-user" hidden></span>
+            </div>
+
+            <p id="team-notice" class="team-notice" role="status" hidden></p>
+
+            <div id="team-secret" class="team-secret" role="status" hidden>
+              <strong></strong>
+              <p>请保存后交给对应成员或 Agent。关闭后无法再次查看。</p>
+              <code></code>
+              <button id="team-secret-dismiss" class="secondary-button" type="button">已保存，关闭</button>
+            </div>
+
+            <fieldset id="team-setup" class="team-setup" disabled>
+              <form id="team-create-form" class="team-form" novalidate>
+                <label class="field">
+                  <span>新团队名称</span>
+                  <span class="input-wrap">
+                    <input id="team-name" type="text" required maxlength="100" placeholder="例如：研发知识团队" autocomplete="off">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.5"/><path d="M14.5 20a5 5 0 0 1 9 0"/></svg>
+                  </span>
+                </label>
+                <button class="primary-button team-form-submit" type="submit">创建团队</button>
+              </form>
+              <form id="team-join-form" class="team-form" novalidate>
+                <label class="field">
+                  <span>邀请码</span>
+                  <span class="input-wrap">
+                    <input id="team-join-token" type="text" required placeholder="使用受邀邮箱登录后输入" autocomplete="off">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M8 12a3 3 0 0 0 3 3M11 15a3 3 0 0 0 3-3M14 12a3 3 0 0 0-3-3"/></svg>
+                  </span>
+                </label>
+                <button class="secondary-button team-form-submit" type="submit">加入团队</button>
+              </form>
+            </fieldset>
+
+            <p id="team-empty-hint" class="team-empty-hint" hidden>还没有团队。创建一个工作区，或输入管理员提供的邀请码。</p>
+
+            <label id="team-switch-row" class="team-switch-row" hidden>
+              <span>当前团队</span>
+              <select id="team-switch"></select>
+            </label>
+
+            <fieldset id="team-content" class="team-content" disabled hidden>
+              <div class="team-grid">
+                <article class="team-card">
+                  <header class="team-card-header">
+                    <h3>成员与角色 <small id="team-member-count">0</small></h3>
+                    <p>所有者管理角色；管理员管理普通成员和 Agent；编辑者写入记忆；只读成员检索记忆。</p>
+                  </header>
+                  <div id="team-members" class="team-list"></div>
+                  <form id="team-invite-form" class="team-form team-form-inline" novalidate hidden>
+                    <label class="field"><span>受邀邮箱<input id="team-invite-email" type="text" inputmode="email" pattern="[^@\s]+@[^@\s]+\.[^@\s]+" required placeholder="member@example.com" autocomplete="off" data-lpignore="true" data-form-type="other"></span></label>
+                    <label class="field"><span>邀请角色
+                        <select id="team-invite-role">
+                          <option value="editor">编辑者</option>
+                          <option value="viewer">只读成员</option>
+                        </select>
+                      </span>
+                    </label>
+                    <button class="secondary-button" type="submit">生成邀请码</button>
+                  </form>
+                  <div id="team-invites" class="team-list"></div>
+                </article>
+
+                <article class="team-card" id="team-keys-card" hidden>
+                  <header class="team-card-header">
+                    <h3>Agent 接入凭证</h3>
+                    <p>凭证固定绑定本团队和 Agent 身份。相同 Agent 可签发多个凭证以轮换，撤销旧凭证后立即拒绝新请求。</p>
+                  </header>
+                  <form id="team-key-form" class="team-form team-form-grid" novalidate>
+                    <label class="field"><span>Agent 标识<input id="team-key-agent" required pattern="[A-Za-z0-9_\-]{1,64}" maxlength="64" placeholder="research-agent" autocomplete="off"></span></label>
+                    <label class="field"><span>权限
+                        <select id="team-key-permission">
+                          <option value="read">只读</option>
+                          <option value="write">读写及定向授权</option>
+                        </select>
+                      </span>
+                    </label>
+                    <label class="field"><span>有效天数<input id="team-key-days" type="number" min="1" max="365" required value="30"></span></label>
+                    <button class="secondary-button" type="submit">签发凭证</button>
+                  </form>
+                  <div id="team-keys" class="team-list"></div>
+                  <details class="team-details">
+                    <summary>API 接入示例</summary>
+                    <p>将下面路径拼接到团队服务器地址，Bearer 使用上方签发的 Agent 凭证。团队成员必须连接同一服务器。</p>
+                    <pre id="team-api-example">POST /api/v1/teams/{teamId}/search\nAuthorization: Bearer &lt;Agent 凭证&gt;\nContent-Type: application/json\n\n{"query":"项目约定","mode":"adaptive","top_k":5}</pre>
+                    <p>写入使用 /memories；memory_scope 为 private、shared 或 global（仅本团队公共）。agent_id 由服务端根据凭证确定。</p>
+                  </details>
+                </article>
+              </div>
+
+              <article class="team-card">
+                <header class="team-card-header">
+                  <h3>团队记忆</h3>
+                  <p>公共记忆仅在当前团队可见；私有记忆仅归属身份可见。管理员也不能冒用其他 Agent 读取私有内容。</p>
+                </header>
+                <form id="team-memory-write-form" class="team-form team-form-block" novalidate hidden>
+                  <label class="field"><span>记忆内容<textarea id="team-memory-content" required maxlength="10000" placeholder="把团队约定、决策和背景知识沉淀下来。"></textarea></span></label>
+                  <div class="team-form-row">
+                    <label class="field"><span>可见范围
+                        <select id="team-memory-scope">
+                          <option value="global">团队公共</option>
+                          <option value="private">仅自己</option>
+                          <option value="shared">定向共享（写入后授权）</option>
+                        </select>
+                      </span>
+                    </label>
+                    <button class="primary-button" type="submit">写入记忆</button>
+                  </div>
+                </form>
+                <form id="team-memory-search-form" class="team-form team-form-inline" novalidate>
+                  <label class="field team-grow"><span>检索团队记忆<input id="team-memory-query" required placeholder="输入关键词或问题"></span></label>
+                  <button class="secondary-button" type="submit">检索</button>
+                  <button id="team-memory-refresh" class="secondary-button" type="button">刷新列表</button>
+                </form>
+                <label id="team-grant-row" class="team-form-row" hidden>
+                  <span class="field"><span>定向授权目标
+                      <select id="team-grant-target"><option value="">选择成员或输入 Agent 标识</option></select>
+                    </span>
+                  </span>
+                  <input id="team-grant-agent" aria-label="授权 Agent 标识" placeholder="research-agent" autocomplete="off">
+                </label>
+                <p id="team-memories-empty" class="team-empty-hint" hidden>暂无可见记忆。写入团队公共内容后，其他成员即可检索。</p>
+                <div id="team-memories" class="team-memory-list"></div>
+              </article>
+
+              <article class="team-card" id="team-audit-card" hidden>
+                <header class="team-card-header">
+                  <h3>团队审计 · 最近 100 条</h3>
+                  <p>记录成员、邀请、凭证和记忆访问操作。requested 表示请求已进入处理，不代表操作成功。</p>
+                </header>
+                <div id="team-audit" class="team-audit"></div>
+              </article>
+            </fieldset>
           </section>
         </main>
       </section>

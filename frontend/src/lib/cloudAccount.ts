@@ -1,6 +1,7 @@
 import { isTauri } from './tauri';
 
-// Fixed trusted origin: cloud credentials must never reach the local API proxy.
+// Cloud account operations use the fixed issuer. Team requests below explicitly
+// send only a short-lived access token to this installation's team API.
 export const CLOUD_ACCOUNT_URL = 'https://account.lingeringdream.com';
 const DEVICE_ID_KEY = 'lingshu_cloud_device_id';
 
@@ -27,7 +28,12 @@ export interface CloudSubscription {
   current_period_end: string | null;
   entitlement_active: boolean;
 }
+export interface ProductEntitlements {
+  effective_plan: string;
+  features: Array<{ code: string; name: string; plans: string[]; included: boolean; available: boolean; enabled: boolean }>;
+}
 export interface CloudAccount {
+  entitlements?: ProductEntitlements;
   user: CloudUser;
   device: CloudDevice;
   subscription: CloudSubscription | null;
@@ -183,8 +189,8 @@ export class CloudAccountClient {
   private async overview(): Promise<CloudAccount> {
     const account = await this.authorized<{ user: CloudUser; device: CloudDevice }>('/account');
     try {
-      const billing = await this.authorized<{ subscription: CloudSubscription }>('/account/subscription');
-      return { ...account, subscription: billing.subscription };
+      const billing = await this.authorized<{ subscription: CloudSubscription; entitlements?: ProductEntitlements }>('/account/subscription');
+      return { ...account, subscription: billing.subscription, entitlements: billing.entitlements };
     } catch (error) {
       if (error instanceof CloudAccountError && error.status === 401) throw error;
       return { ...account, subscription: null, subscriptionError: cloudErrorMessage(error) };
@@ -195,6 +201,26 @@ export class CloudAccountClient {
     return this.serial(async () => {
       if ((!this.tokens || Date.now() >= this.expiresAt - 60_000) && !await this.refresh()) return null;
       return this.overview();
+    });
+  }
+
+  teamRequest(path: string, init: { method?: string; body?: string } = {}): Promise<Response> {
+    if (!/^\/api\/v1\/teams(?:\/|$)/.test(path) || path.includes('..') || /[?#\\]/.test(path)) {
+      return Promise.reject(new CloudAccountError('无效的团队接口路径'));
+    }
+    return this.serial(async () => {
+      if ((!this.tokens || Date.now() >= this.expiresAt - 60_000) && !await this.refresh()) {
+        throw new CloudAccountError('请先在「云账户」登录，再进入团队工作区。', 401);
+      }
+      const send = () => this.fetcher(`${isTauri() ? 'http://127.0.0.1:8080' : ''}${path}`, {
+        ...init, credentials: 'omit', redirect: 'error', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.tokens!.access_token}` },
+        signal: AbortSignal.timeout(30_000),
+      });
+      const response = await send();
+      if (response.status !== 401) return response;
+      if (!await this.refresh()) throw new CloudAccountError('请重新登录云账户。', 401);
+      return send();
     });
   }
 

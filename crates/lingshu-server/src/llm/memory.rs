@@ -363,34 +363,35 @@ pub async fn extract_and_save(
         {
             Ok(outcome) => {
                 let source_ids = episode_id.into_iter().collect::<Vec<_>>();
-                if let Err(error) = sqlx::query(
+                let enrichment: Result<(), sqlx::Error> = async {
+                    let mut tx = db.begin().await?;
+                    let scope: String = sqlx::query_scalar("SELECT context_scope FROM memories WHERE id=$1 AND user_id=$2")
+                        .bind(outcome.memory.id).bind(user_id).fetch_one(&mut *tx).await?;
+                    let key = c.fact_key.as_deref().map(str::trim).filter(|key| !key.is_empty());
+                    if let Some(key) = key {
+                        crate::routes::memory_gateway::lock_fact(&mut tx, user_id, &scope, key).await?;
+                    }
+                    sqlx::query(
                     "UPDATE memories SET memory_layer='fact', scene_tags=$1, fact_key=$2, fact_value=$3, \
                      source_trust=$4, source_type='conversation_extraction', source_memory_ids=$5, updated_at=NOW() \
                      WHERE id=$6 AND user_id=$7",
                 )
                 .bind(&c.scene_tags)
-                .bind(c.fact_key.as_deref())
+                .bind(key)
                 .bind(c.fact_value.as_deref())
                 .bind(c.source_trust.clamp(0.0, 1.0))
                 .bind(&source_ids)
                 .bind(outcome.memory.id)
                 .bind(user_id)
-                .execute(db)
-                .await
-                {
-                    tracing::warn!(memory_id=%outcome.memory.id, %error, "Failed to enrich structured memory");
-                }
-                if let Some(fact_key) = c.fact_key.as_deref().filter(|key| !key.trim().is_empty()) {
-                    if let Err(error) = crate::routes::memory_gateway::reconcile_memory_conflicts(
-                        db,
-                        user_id,
-                        outcome.memory.id,
-                        fact_key,
-                    )
-                    .await
-                    {
-                        tracing::warn!(memory_id=%outcome.memory.id, %error, "Failed to reconcile extracted memory conflict");
+                .execute(&mut *tx).await?;
+                    if let Some(key) = key {
+                        crate::routes::memory_gateway::resolve_new_fact_conflicts(&mut tx, user_id, outcome.memory.id, key).await?;
                     }
+                    tx.commit().await?;
+                    Ok(())
+                }.await;
+                if let Err(error) = enrichment {
+                    tracing::warn!(memory_id=%outcome.memory.id, %error, "Failed to enrich and reconcile structured memory");
                 }
                 if outcome.created {
                     saved += 1;

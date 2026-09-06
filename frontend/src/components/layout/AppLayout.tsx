@@ -11,7 +11,8 @@ export type AppSectionKey =
   | 'preferences'
   | 'privacy'
   | 'account'
-  | 'settings';
+  | 'settings'
+  | 'ai-tools';
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -32,6 +33,7 @@ const navItems: { key: AppSectionKey; label: string }[] = [
   { key: 'privacy', label: '权限与隐私' },
   { key: 'settings', label: '模型配置' },
   { key: 'account', label: '云账户' },
+  { key: 'ai-tools', label: '接入 AI 工具' },
 ];
 
 const competitionNavItems: { key: AppSectionKey; label: string }[] = [

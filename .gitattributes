@@ -1,0 +1,4 @@
+# Vite production chunks are generated artifacts. Treat them as opaque to avoid
+# line-ending conversion and whitespace diagnostics changing their contents.
+lingshu-cloud/public/team/assets/** binary
+lingshu-cloud/public/team/*.html text eol=lf

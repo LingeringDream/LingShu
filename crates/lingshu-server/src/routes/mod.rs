@@ -4,6 +4,7 @@ pub mod calendar;
 pub mod chat;
 pub mod conversations;
 pub mod integrations;
+pub mod mcp;
 pub mod memories;
 pub mod memory_benchmark;
 pub mod memory_gateway;
@@ -18,6 +19,7 @@ pub mod signals;
 pub mod system;
 pub mod task_dependencies;
 pub mod tasks;
+pub mod teams;
 pub mod thoughts;
 pub mod users;
 
@@ -32,6 +34,10 @@ use utoipa::OpenApi;
         description = "灵枢跨平台 AI 个人助理 API"
     ),
     paths(
+        teams::list_teams, teams::create_team, teams::join_team, teams::list_members,
+        teams::change_member, teams::remove_member, teams::invite_member, teams::list_invites, teams::revoke_invite,
+        teams::list_keys, teams::create_key, teams::revoke_key, teams::list_audit,
+        teams::list_memories, teams::write_memory, teams::search_memory, teams::share_memory,
         system::health_check,
         system::metrics,
         auth::local_session,
@@ -124,6 +130,9 @@ use utoipa::OpenApi;
         providers::test_connectivity,
     ),
     components(schemas(
+        teams::Team, teams::CreateTeam, teams::Member, teams::RoleChange,
+        teams::InviteRequest, teams::JoinRequest, teams::SecretResponse,
+        teams::Invite, teams::KeyRequest, teams::AgentKey, teams::AuditEvent,
         system::HealthResponse,
         auth::AuthResponse,
         users::UserResponse,

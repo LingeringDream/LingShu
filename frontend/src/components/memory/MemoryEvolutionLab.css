@@ -83,6 +83,7 @@
 
 .lab-view-nav {
   display: flex;
+  overflow-x: auto;
   border-bottom: 1px solid var(--lab-border);
 }
 

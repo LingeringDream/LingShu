@@ -10,7 +10,17 @@ const ACCOUNT_PAGES = {
   devices: { path: "/devices", title: "设备与会话" },
   docs: { path: "/docs", title: "使用文档" },
   download: { path: "/download", title: "下载中心" },
+  team: { path: "/team", title: "团队工作区" },
 };
+
+const TEAM_ROLES = {
+  owner: "所有者",
+  admin: "管理员",
+  editor: "编辑者",
+  viewer: "只读成员",
+};
+const TEAM_ASSIGNABLE_ROLES = ["admin", "editor", "viewer"];
+const TEAM_INVITABLE_ROLES = ["editor", "viewer"];
 
 const ERROR_MESSAGES = {
   INVALID_EMAIL: "请输入有效的邮箱地址。",
@@ -44,6 +54,17 @@ const state = {
   pendingDevice: null,
   refreshPromise: null,
   toastTimer: null,
+  teams: [],
+  teamSelected: "",
+  teamMembers: [],
+  teamMemories: [],
+  teamKeys: [],
+  teamInvites: [],
+  teamAudit: [],
+  teamBusy: false,
+  teamLoadEpoch: 0,
+  pendingInvites: [],
+  pendingInvitesDismissed: false,
 };
 
 const elements = {
@@ -86,6 +107,53 @@ const elements = {
   revokeDeviceName: document.querySelector("#revoke-device-name"),
   confirmRevoke: document.querySelector("#confirm-revoke"),
   toast: document.querySelector("#toast"),
+  sidebarTeam: document.querySelector("#sidebar-link-team"),
+  teamSection: document.querySelector("#team-section"),
+  teamCurrentUser: document.querySelector("#team-current-user"),
+  teamNotice: document.querySelector("#team-notice"),
+  teamSetup: document.querySelector("#team-setup"),
+  teamCreateForm: document.querySelector("#team-create-form"),
+  teamJoinForm: document.querySelector("#team-join-form"),
+  teamName: document.querySelector("#team-name"),
+  teamJoinToken: document.querySelector("#team-join-token"),
+  teamEmptyHint: document.querySelector("#team-empty-hint"),
+  teamSwitchRow: document.querySelector("#team-switch-row"),
+  teamSwitch: document.querySelector("#team-switch"),
+  teamContent: document.querySelector("#team-content"),
+  teamMemberCount: document.querySelector("#team-member-count"),
+  teamMembers: document.querySelector("#team-members"),
+  teamInviteForm: document.querySelector("#team-invite-form"),
+  teamInviteEmail: document.querySelector("#team-invite-email"),
+  teamInviteRole: document.querySelector("#team-invite-role"),
+  teamInvites: document.querySelector("#team-invites"),
+  teamKeysCard: document.querySelector("#team-keys-card"),
+  teamKeyForm: document.querySelector("#team-key-form"),
+  teamKeyAgent: document.querySelector("#team-key-agent"),
+  teamKeyPermission: document.querySelector("#team-key-permission"),
+  teamKeyDays: document.querySelector("#team-key-days"),
+  teamKeys: document.querySelector("#team-keys"),
+  teamApiExample: document.querySelector("#team-api-example"),
+  teamMemoryWriteForm: document.querySelector("#team-memory-write-form"),
+  teamMemoryContent: document.querySelector("#team-memory-content"),
+  teamMemoryScope: document.querySelector("#team-memory-scope"),
+  teamMemorySearchForm: document.querySelector("#team-memory-search-form"),
+  teamMemoryQuery: document.querySelector("#team-memory-query"),
+  teamMemoryRefresh: document.querySelector("#team-memory-refresh"),
+  teamGrantRow: document.querySelector("#team-grant-row"),
+  teamGrantTarget: document.querySelector("#team-grant-target"),
+  teamGrantAgent: document.querySelector("#team-grant-agent"),
+  teamMemoriesEmpty: document.querySelector("#team-memories-empty"),
+  teamMemories: document.querySelector("#team-memories"),
+  teamAuditCard: document.querySelector("#team-audit-card"),
+  teamAudit: document.querySelector("#team-audit"),
+  teamSecret: document.querySelector("#team-secret"),
+  teamSecretStrong: document.querySelector("#team-secret strong"),
+  teamSecretCode: document.querySelector("#team-secret code"),
+  teamSecretDismiss: document.querySelector("#team-secret-dismiss"),
+  pendingInvitesBanner: document.querySelector("#pending-invites-banner"),
+  pendingInvitesSummary: document.querySelector("#pending-invites-summary"),
+  pendingInvitesList: document.querySelector("#pending-invites-list"),
+  pendingInvitesClose: document.querySelector("#pending-invites-close"),
 };
 
 class ApiError extends Error {
@@ -140,8 +208,18 @@ function clearSession() {
   state.billing = null;
   state.devices = [];
   state.downloads = null;
+  state.teams = [];
+  state.teamSelected = "";
+  state.teamMembers = [];
+  state.teamMemories = [];
+  state.teamKeys = [];
+  state.teamInvites = [];
+  state.teamAudit = [];
+  state.pendingInvites = [];
+  state.pendingInvitesDismissed = false;
   writeSession(SESSION_KEYS.access, null);
   writeSession(SESSION_KEYS.refresh, null);
+  applyTeamEntryVisibility();
 }
 
 function saveTokens(payload) {
@@ -305,7 +383,17 @@ function showAuth() {
 function accountPageFromPath(pathname) {
   const path = pathname.replace(/\/$/, "") || "/";
   const entry = Object.entries(ACCOUNT_PAGES).find(([, page]) => page.path === path);
-  return entry?.[0] || "account";
+  if (entry) return entry[0];
+  // Deep-link target for the team-invite email lands at /team/invite/<uuid>.
+  // Surface the team page so the "Pending invites" banner is in view; auto-
+  // accept logic lives in `loadAccount`.
+  if (path === "/team" || path.startsWith("/team/invite/")) return "team";
+  return "account";
+}
+
+function pendingInviteFromLocation() {
+  const match = location.pathname.match(/^\/team\/invite\/([0-9a-f-]{36})$/i);
+  return match ? match[1] : null;
 }
 
 function requestedAccountPage() {
@@ -337,6 +425,18 @@ function showAccount() {
   renderAccountPage(pageName);
   window.scrollTo({ top: 0 });
   finishBoot();
+  showTeamRequiredNotice();
+}
+
+// The worker redirects /team here when the visitor has no team access. The flag
+// is consumed once so a later reload does not repeat the message.
+function showTeamRequiredNotice() {
+  const query = new URLSearchParams(location.search);
+  if (query.get("team") !== "required") return;
+  query.delete("team");
+  const search = query.toString();
+  history.replaceState({}, "", `${location.pathname}${search ? `?${search}` : ""}${location.hash}`);
+  showToast("团队功能需要团队版订阅，当前账户尚未开通。", "error");
 }
 
 function deviceIcon(platform) {
@@ -476,7 +576,9 @@ function renderBilling() {
   elements.subscriptionStatus.dataset.status = subscription.status || "unknown";
 
   const periodEnd = formatBillingDate(subscription.current_period_end);
-  if (subscription.cancel_at_period_end && periodEnd) {
+  if (subscription.plan_code === "team") {
+    elements.currentPlanDetail.textContent = "团队版测试权益已生效，包含团队工作区、共享记忆与团队 MCP 空间";
+  } else if (subscription.cancel_at_period_end && periodEnd) {
     elements.currentPlanDetail.textContent = `已取消自动续费，可使用至 ${periodEnd}`;
   } else if (subscription.billing_interval && periodEnd) {
     const intervalLabels = {
@@ -492,8 +594,20 @@ function renderBilling() {
   }
 
   const developer = (data.plans || []).find((plan) => plan.code === "developer");
-  const hasManagedSubscription = subscription.plan_code === "developer" &&
+  const hasManagedSubscription = ["developer", "team"].includes(subscription.plan_code) &&
     ["active", "trialing", "past_due", "incomplete"].includes(subscription.status);
+  const teamCard = document.querySelector('[data-plan-card="team"]');
+  if (teamCard) {
+    const teamState = teamCard.querySelector(".plan-state");
+    const teamPrice = teamCard.querySelector(".plan-price");
+    const activeTeam = subscription.plan_code === "team" && subscription.entitlement_active;
+    teamCard.classList.toggle("is-planned", !activeTeam);
+    if (teamState) {
+      teamState.textContent = activeTeam ? "当前生效" : "规划中";
+      teamState.classList.toggle("is-live", activeTeam);
+    }
+    if (teamPrice) teamPrice.textContent = activeTeam ? "测试权益已生效" : "价格与开放时间待公布";
+  }
 
   // interval → 按钮元素 映射（与后端 DEVELOPER_OPTIONS 对齐）
   const optionButtons = {
@@ -521,13 +635,698 @@ function renderBilling() {
   }
   elements.manageBilling.hidden = !billing.customer_portal_available;
 
-  if (hasManagedSubscription) {
+  if (subscription.plan_code === "team" && subscription.entitlement_active) {
+    elements.billingAvailability.textContent = "团队版测试权益已生效；正式团队计费尚未开放，如需企业方案可联系商务邮箱。";
+  } else if (hasManagedSubscription) {
     elements.billingAvailability.textContent = "已有付费权益，请使用“管理账单”查看订单与到期时间。";
   } else if (billing.configured) {
     elements.billingAvailability.textContent = "权益按购买时长生效，当前不自动续费，到期前会提醒。";
   } else {
     elements.billingAvailability.textContent = "支付通道尚未启用，当前不会产生任何费用。";
   }
+  applyTeamEntryVisibility();
+}
+
+function applyTeamEntryVisibility() {
+  if (!elements.sidebarTeam) return;
+  const subscription = state.billing?.subscription;
+  const ownsTeamPlan = Boolean(
+    subscription &&
+      subscription.plan_code === "team" &&
+      subscription.entitlement_active,
+  );
+  // Members of any team workspace see the sidebar entry even when their own
+  // plan is Free/Developer — the server-side /team gate keys off the same
+  // membership check (see canAccessTeam in lingshu-cloud/src/index.ts), so the
+  // link would otherwise be hidden on exactly the page it leads to.
+  const isTeamMember = Array.isArray(state.teams) && state.teams.length > 0;
+  elements.sidebarTeam.hidden = !(ownsTeamPlan || isTeamMember);
+}
+
+function showTeamNotice(message, kind = "error") {
+  const node = elements.teamNotice;
+  if (!node) return;
+  if (!message) { node.hidden = true; node.textContent = ""; node.classList.remove("is-success"); return; }
+  node.textContent = message;
+  node.classList.toggle("is-success", kind === "success");
+  node.hidden = false;
+}
+
+function setTeamBusy(busy) {
+  state.teamBusy = busy;
+  if (elements.teamSetup) elements.teamSetup.disabled = busy;
+  if (elements.teamContent) elements.teamContent.disabled = busy;
+  if (elements.teamSwitch) elements.teamSwitch.disabled = busy;
+}
+
+async function loadTeams() {
+  const currentIdentity = state.account?.user?.id;
+  state.teamLoadEpoch += 1;
+  const epoch = state.teamLoadEpoch;
+  state.teams = [];
+  state.teamSelected = "";
+  state.teamMembers = [];
+  state.teamMemories = [];
+  state.teamKeys = [];
+  state.teamInvites = [];
+  state.teamAudit = [];
+  showTeamNotice("");
+  hideTeamSecret();
+  renderTeamSkeleton(currentIdentity);
+  if (!currentIdentity) return;
+  try {
+    const payload = await authorizedRequest(`${API}/teams`);
+    if (epoch !== state.teamLoadEpoch) return;
+    state.teams = Array.isArray(payload?.teams) ? payload.teams : [];
+    state.pendingInvites = Array.isArray(payload?.pending_invites_for_me)
+      ? payload.pending_invites_for_me
+      : [];
+    state.teamSelected = state.teams[0]?.id ?? "";
+    renderPendingInvites();
+    renderTeamSkeleton(currentIdentity);
+    applyTeamEntryVisibility();
+    if (state.teamSelected) await loadTeamDetail();
+  } catch (error) {
+    if (epoch !== state.teamLoadEpoch) return;
+    showTeamNotice(error instanceof ApiError ? error.message : "无法加载团队列表，请稍后重试。");
+    renderTeamSkeleton(currentIdentity);
+  }
+}
+
+async function loadPendingInvitesOnly() {
+  // Lightweight fetch so the invitation banner shows on every dashboard page
+  // without paying for the full team-detail cascade. Falls back silently on
+  // auth errors — the regular loadTeams path will report them later.
+  if (!state.account?.user?.id) {
+    state.pendingInvites = [];
+    renderPendingInvites();
+    applyTeamEntryVisibility();
+    return;
+  }
+  try {
+    const payload = await authorizedRequest(`${API}/teams`);
+    state.pendingInvites = Array.isArray(payload?.pending_invites_for_me)
+      ? payload.pending_invites_for_me
+      : [];
+    state.teams = Array.isArray(payload?.teams) ? payload.teams : state.teams;
+  } catch (error) {
+    if (!(error instanceof ApiError)) return;
+    // 401/403 surface through clearSession + showAuth, so the banner just stays empty.
+    if (error.status !== 401 && error.status !== 403) return;
+  }
+  renderPendingInvites();
+  applyTeamEntryVisibility();
+}
+
+function renderPendingInvites() {
+  const banner = elements.pendingInvitesBanner;
+  if (!banner) return;
+  const invites = state.pendingInvites || [];
+  const visible = state.pendingInvitesDismissed ? [] : invites;
+  if (visible.length === 0) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  if (elements.pendingInvitesSummary) {
+    const count = visible.length;
+    elements.pendingInvitesSummary.textContent = count === 1
+      ? "你有 1 个待处理的团队邀请。登录时已发送邮件给邀请方留的邮箱。"
+      : `你有 ${count} 个待处理的团队邀请。邀请已同时通过邮件发送。`;
+  }
+  if (elements.pendingInvitesList) {
+    elements.pendingInvitesList.replaceChildren();
+    for (const invite of visible) {
+      elements.pendingInvitesList.append(buildPendingInviteRow(invite));
+    }
+  }
+}
+
+function buildPendingInviteRow(invite) {
+  const row = document.createElement("li");
+  const info = document.createElement("div");
+  info.className = "pending-invites-info";
+  const title = document.createElement("strong");
+  title.textContent = invite.team_name || "未命名团队";
+  const meta = document.createElement("small");
+  const roleLabel = TEAM_ROLES[invite.role] || invite.role;
+  const expiresLabel = formatExpireLabel(invite.expires_at);
+  meta.textContent = `角色：${roleLabel} · ${expiresLabel}`;
+  info.append(title, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "pending-invites-actions";
+  const accept = document.createElement("button");
+  accept.className = "primary-button compact-button";
+  accept.type = "button";
+  accept.textContent = "接受";
+  accept.addEventListener("click", () => {
+    void acceptInvite(invite.invite_id);
+  });
+  const dismiss = document.createElement("button");
+  dismiss.className = "secondary-button compact-button";
+  dismiss.type = "button";
+  dismiss.textContent = "忽略";
+  dismiss.addEventListener("click", () => {
+    void dismissInvite(invite.invite_id);
+  });
+  actions.append(accept, dismiss);
+
+  row.append(info, actions);
+  return row;
+}
+
+function formatExpireLabel(expiresAt) {
+  if (!expiresAt) return "7 天内有效";
+  const target = Date.parse(expiresAt);
+  if (!Number.isFinite(target)) return "7 天内有效";
+  const ms = target - Date.now();
+  if (ms <= 0) return "已过期";
+  const days = Math.max(1, Math.ceil(ms / 86_400_000));
+  return `还剩 ${days} 天有效`;
+}
+
+async function acceptInvite(inviteId) {
+  if (!inviteId) return;
+  try {
+    const team = await teamRequest(`${API}/teams/invites/${encodeURIComponent(inviteId)}/accept`, undefined, "POST");
+    state.pendingInvites = state.pendingInvites.filter((entry) => entry.invite_id !== inviteId);
+    if (team && team.id) {
+      state.teams = [...state.teams.filter((t) => t.id !== team.id), team];
+      state.teamSelected = team.id;
+    }
+    renderPendingInvites();
+    applyTeamEntryVisibility();
+    showToast("已加入团队。");
+    if (location.pathname !== "/team") {
+      history.pushState({}, "", "/team");
+      await loadAccount({ preserveView: true });
+    }
+  } catch (error) {
+    showToast(error instanceof ApiError ? error.message : "接受邀请失败，请稍后重试。", "error");
+    if (error instanceof ApiError && error.code === "INVITE_INVALID") {
+      state.pendingInvites = state.pendingInvites.filter((entry) => entry.invite_id !== inviteId);
+      renderPendingInvites();
+    }
+  }
+}
+
+async function dismissInvite(inviteId) {
+  if (!inviteId) return;
+  // Treat dismiss as user-driven hide: remove locally for this session; the
+  // invite stays usable until it expires or the inviter revokes it.
+  state.pendingInvites = state.pendingInvites.filter((entry) => entry.invite_id !== inviteId);
+  renderPendingInvites();
+}
+
+async function loadTeamDetail() {
+  if (!state.teamSelected) { renderTeamDetail(); return; }
+  const epoch = ++state.teamLoadEpoch;
+  const team = currentTeam();
+  const isAdmin = isAdminRole(team?.role);
+  const base = `${API}/teams/${state.teamSelected}`;
+  try {
+    const [members, memories] = await Promise.all([
+      authorizedRequest(`${base}/members`),
+      authorizedRequest(`${base}/memories`),
+    ]);
+    if (epoch !== state.teamLoadEpoch) return;
+    state.teamMembers = Array.isArray(members) ? members : [];
+    state.teamMemories = Array.isArray(memories) ? memories : [];
+    state.teamKeys = [];
+    state.teamInvites = [];
+    state.teamAudit = [];
+    renderTeamDetail();
+    if (isAdmin) {
+      const [keys, invites, audit] = await Promise.all([
+        authorizedRequest(`${base}/keys`).catch(() => []),
+        authorizedRequest(`${base}/invites`).catch(() => []),
+        authorizedRequest(`${base}/audit`).catch(() => []),
+      ]);
+      if (epoch !== state.teamLoadEpoch) return;
+      state.teamKeys = Array.isArray(keys) ? keys : [];
+      state.teamInvites = Array.isArray(invites) ? invites : [];
+      state.teamAudit = Array.isArray(audit) ? audit : [];
+      renderTeamDetail();
+    }
+  } catch (error) {
+    if (epoch !== state.teamLoadEpoch) return;
+    showTeamNotice(error instanceof ApiError ? error.message : "无法加载团队详情，请稍后重试。");
+  }
+}
+
+function currentTeam() {
+  return state.teams.find((t) => t.id === state.teamSelected) || null;
+}
+
+function isAdminRole(role) {
+  return role === "owner" || role === "admin";
+}
+
+function renderTeamSkeleton(currentIdentity) {
+  const email = state.account?.user?.email;
+  if (email && elements.teamCurrentUser) {
+    elements.teamCurrentUser.textContent = email;
+    elements.teamCurrentUser.hidden = false;
+  } else if (elements.teamCurrentUser) {
+    elements.teamCurrentUser.hidden = true;
+  }
+  if (!elements.teamSetup) return;
+  elements.teamSetup.disabled = !currentIdentity || state.teamBusy;
+}
+
+function renderTeamDetail() {
+  const team = currentTeam();
+  const identity = state.account?.user?.id;
+  const admin = isAdminRole(team?.role);
+  if (!elements.teamSection) return;
+  if (!team) {
+    elements.teamEmptyHint.hidden = false;
+    elements.teamSwitchRow.hidden = true;
+    elements.teamContent.hidden = true;
+    return;
+  }
+  elements.teamEmptyHint.hidden = true;
+  elements.teamSwitchRow.hidden = false;
+  elements.teamSwitch.replaceChildren();
+  for (const t of state.teams) {
+    const option = document.createElement("option");
+    option.value = t.id;
+    option.textContent = `${t.name} · ${TEAM_ROLES[t.role] ?? t.role}`;
+    if (t.id === state.teamSelected) option.selected = true;
+    elements.teamSwitch.append(option);
+  }
+  elements.teamContent.hidden = false;
+  elements.teamContent.disabled = state.teamBusy;
+
+  elements.teamMemberCount.textContent = String(state.teamMembers.length);
+  renderMemberRows(team, identity, admin);
+  elements.teamInviteForm.hidden = !admin;
+  if (admin) {
+    const owner = team.role === "owner";
+    elements.teamInviteRole.replaceChildren();
+    const roles = owner ? ["editor", "viewer", "admin"] : TEAM_INVITABLE_ROLES;
+    for (const r of roles) {
+      const option = document.createElement("option");
+      option.value = r;
+      option.textContent = TEAM_ROLES[r] ?? r;
+      if (r === "editor") option.selected = true;
+      elements.teamInviteRole.append(option);
+    }
+  }
+  renderInviteRows();
+  elements.teamKeysCard.hidden = !admin;
+  if (admin) renderKeyRows();
+  if (elements.teamApiExample && team.id) {
+    elements.teamApiExample.textContent = `POST /api/v1/teams/${team.id}/search\nAuthorization: Bearer <Agent 凭证>\nContent-Type: application/json\n\n{"query":"项目约定","mode":"adaptive","top_k":5}`;
+  }
+  elements.teamMemoryWriteForm.hidden = team.role === "viewer";
+  renderMemoryRows(team, identity);
+  if (team.role !== "viewer" && admin) {
+    elements.teamGrantRow.hidden = false;
+    elements.teamGrantTarget.replaceChildren();
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "选择成员或输入 Agent 标识";
+    elements.teamGrantTarget.append(blank);
+    for (const m of state.teamMembers) {
+      if (m.cloud_user_id === identity) continue;
+      const option = document.createElement("option");
+      option.value = `member-${m.cloud_user_id}`;
+      option.textContent = m.email;
+      elements.teamGrantTarget.append(option);
+    }
+  } else {
+    elements.teamGrantRow.hidden = true;
+  }
+  elements.teamAuditCard.hidden = !admin;
+  if (admin) renderAuditRows();
+}
+
+function renderMemberRows(team, identity, admin) {
+  elements.teamMembers.replaceChildren();
+  if (state.teamMembers.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "team-empty-hint";
+    empty.textContent = "暂无成员。";
+    elements.teamMembers.append(empty);
+    return;
+  }
+  for (const m of state.teamMembers) {
+    const row = document.createElement("div");
+    row.className = "team-row";
+    const left = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = m.email;
+    const meta = document.createElement("span");
+    meta.className = "team-row-role";
+    meta.dataset.role = m.role;
+    meta.textContent = TEAM_ROLES[m.role] ?? m.role;
+    left.append(name, meta);
+    row.append(left);
+
+    const owner = team.role === "owner";
+    if (owner && m.role !== "owner") {
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", `调整 ${m.email} 的角色`);
+      for (const r of TEAM_ASSIGNABLE_ROLES) {
+        const option = document.createElement("option");
+        option.value = r;
+        option.textContent = TEAM_ROLES[r] ?? r;
+        if (r === m.role) option.selected = true;
+        select.append(option);
+      }
+      select.addEventListener("change", () => {
+        const next = select.value;
+        void act(async () => {
+          await teamRequest(`${API}/teams/${state.teamSelected}/members/${m.cloud_user_id}`, { role: next }, "PATCH");
+          const idx = state.teamMembers.findIndex((x) => x.cloud_user_id === m.cloud_user_id);
+          if (idx >= 0) state.teamMembers[idx] = { ...state.teamMembers[idx], role: next };
+          renderTeamDetail();
+          showTeamNotice("已更新成员角色。", "success");
+        });
+      });
+      row.append(select);
+    } else {
+      row.append(document.createElement("span"));
+    }
+
+    const canRemove = admin && m.role !== "owner" && (team.role === "owner" || m.role !== "admin");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "移除";
+    remove.disabled = !canRemove;
+    if (canRemove) {
+      remove.addEventListener("click", () => {
+        void act(async () => {
+          await teamRequest(`${API}/teams/${state.teamSelected}/members/${m.cloud_user_id}`, undefined, "DELETE");
+          await loadTeamDetail();
+          showTeamNotice("成员已移除，后续请求将被拒绝。", "success");
+        });
+      });
+    }
+    row.append(remove);
+    elements.teamMembers.append(row);
+  }
+}
+
+function renderInviteRows() {
+  elements.teamInvites.replaceChildren();
+  if (state.teamInvites.length === 0) return;
+  for (const invite of state.teamInvites) {
+    const row = document.createElement("div");
+    row.className = "team-row";
+    const left = document.createElement("div");
+    const email = document.createElement("strong");
+    email.textContent = invite.email;
+    const meta = document.createElement("small");
+    meta.textContent = `${TEAM_ROLES[invite.role] ?? invite.role} · ${formatInviteStatus(invite)}`;
+    left.append(email, meta);
+    row.append(left);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "撤销邀请";
+    button.disabled = Boolean(invite.used_at) || Boolean(invite.revoked_at);
+    if (!button.disabled) {
+      button.addEventListener("click", () => {
+        void act(async () => {
+          await teamRequest(`${API}/teams/${state.teamSelected}/invites/${invite.id}`, undefined, "DELETE");
+          await loadTeamDetail();
+          showTeamNotice("邀请已撤销。", "success");
+        });
+      });
+    }
+    row.append(document.createElement("span"));
+    row.append(button);
+    elements.teamInvites.append(row);
+  }
+}
+
+function renderKeyRows() {
+  elements.teamKeys.replaceChildren();
+  if (state.teamKeys.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "team-empty-hint";
+    empty.textContent = "尚未签发任何凭证。";
+    elements.teamKeys.append(empty);
+    return;
+  }
+  for (const key of state.teamKeys) {
+    const row = document.createElement("div");
+    row.className = "team-row";
+    const left = document.createElement("div");
+    const agent = document.createElement("strong");
+    agent.textContent = key.agent_key;
+    const meta = document.createElement("small");
+    meta.textContent = `${key.permission === "read" ? "只读" : "读写"} · ${formatKeyStatus(key)}`;
+    left.append(agent, meta);
+    row.append(left);
+    row.append(document.createElement("span"));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "撤销凭证";
+    button.disabled = Boolean(key.revoked_at);
+    if (!button.disabled) {
+      button.addEventListener("click", () => {
+        void act(async () => {
+          await teamRequest(`${API}/teams/${state.teamSelected}/keys/${key.id}`, undefined, "DELETE");
+          hideTeamSecret();
+          await loadTeamDetail();
+          showTeamNotice("凭证已撤销。", "success");
+        });
+      });
+    }
+    row.append(button);
+    elements.teamKeys.append(row);
+  }
+}
+
+function renderMemoryRows(team, identity) {
+  const empty = state.teamMemories.length === 0;
+  elements.teamMemoriesEmpty.hidden = !empty;
+  elements.teamMemories.replaceChildren();
+  if (empty) return;
+  for (const memory of state.teamMemories) {
+    const card = document.createElement("div");
+    card.className = "team-memory";
+    const meta = document.createElement("small");
+    const scope = memory.memory_scope === "global" ? "团队公共" : memory.memory_scope === "private" ? "私有" : "定向共享";
+    meta.textContent = `${scope} · ${memory.memory_layer}`;
+    const body = document.createElement("p");
+    body.textContent = memory.content;
+    card.append(meta, body);
+    if (team.role !== "viewer" && memory.owner_agent_id === `member-${identity}`) {
+      const actions = document.createElement("div");
+      actions.className = "team-memory-actions";
+      const grant = document.createElement("button");
+      grant.type = "button";
+      grant.textContent = "授权给目标";
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.textContent = "撤销目标授权";
+      const targetValue = () => elements.teamGrantTarget?.value || elements.teamGrantAgent?.value.trim() || "";
+      const refresh = () => { grant.disabled = !targetValue(); revoke.disabled = !targetValue(); };
+      refresh();
+      elements.teamGrantTarget?.addEventListener("change", refresh);
+      elements.teamGrantAgent?.addEventListener("input", refresh);
+      grant.addEventListener("click", () => {
+        const target = targetValue();
+        if (!target) return;
+        void act(async () => {
+          await teamRequest(`${API}/teams/${state.teamSelected}/memories/${memory.id}/grants`, { owner_agent_id: "ignored", grantee_agent_id: target, can_read: true });
+          await loadTeamDetail();
+          showTeamNotice("已改为定向共享，并授予目标读取权限。", "success");
+        });
+      });
+      revoke.addEventListener("click", () => {
+        const target = targetValue();
+        if (!target) return;
+        void act(async () => {
+          await teamRequest(`${API}/teams/${state.teamSelected}/memories/${memory.id}/grants`, { owner_agent_id: "ignored", grantee_agent_id: target, can_read: false });
+          await loadTeamDetail();
+          showTeamNotice("已撤销目标读取授权。", "success");
+        });
+      });
+      actions.append(grant, revoke);
+      card.append(actions);
+    }
+    elements.teamMemories.append(card);
+  }
+}
+
+function renderAuditRows() {
+  elements.teamAudit.replaceChildren();
+  if (state.teamAudit.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "team-empty-hint";
+    empty.textContent = "暂无审计记录。";
+    elements.teamAudit.append(empty);
+    return;
+  }
+  const emails = new Map(state.teamMembers.map((m) => [m.cloud_user_id, m.email]));
+  for (const entry of state.teamAudit) {
+    const row = document.createElement("div");
+    row.className = "team-audit-row";
+    const time = document.createElement("time");
+    time.textContent = formatDateTime(entry.created_at);
+    const action = document.createElement("strong");
+    action.textContent = entry.action;
+    const target = document.createElement("code");
+    target.textContent = entry.target || "—";
+    const actor = document.createElement("small");
+    actor.textContent = `操作身份：${emails.get(entry.actor) ?? entry.actor}`;
+    row.append(time, action, target, actor);
+    elements.teamAudit.append(row);
+  }
+}
+
+function showTeamSecret(label, token) {
+  if (!elements.teamSecret) return;
+  elements.teamSecretStrong.textContent = label;
+  elements.teamSecretCode.textContent = token;
+  elements.teamSecret.hidden = false;
+}
+
+function hideTeamSecret() {
+  if (!elements.teamSecret) return;
+  elements.teamSecret.hidden = true;
+  elements.teamSecretStrong.textContent = "";
+  elements.teamSecretCode.textContent = "";
+}
+
+function formatInviteStatus(invite) {
+  if (invite.used_at) return "已接受";
+  if (invite.revoked_at) return "已撤销";
+  if (Date.parse(invite.expires_at) < Date.now()) return "已过期";
+  return "待接受";
+}
+
+function formatKeyStatus(key) {
+  if (key.revoked_at) return "已撤销";
+  if (Date.parse(key.expires_at) < Date.now()) return "已过期";
+  return `有效至 ${new Date(key.expires_at).toLocaleDateString("zh-CN")}`;
+}
+
+function formatDateTime(value) {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return value || "—";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+  }).format(new Date(time));
+}
+
+async function teamRequest(path, body, method = body === undefined ? "GET" : "POST") {
+  const options = { method };
+  if (body !== undefined) options.body = JSON.stringify(body);
+  return authorizedRequest(path, options);
+}
+
+async function act(operation) {
+  if (state.teamBusy) return;
+  setTeamBusy(true);
+  showTeamNotice("");
+  try { await operation(); }
+  catch (error) { showTeamNotice(error instanceof Error ? error.message : "操作失败。"); }
+  finally { setTeamBusy(false); }
+}
+
+function bindTeamForms() {
+  if (!elements.teamSection) return;
+  elements.teamCreateForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const name = elements.teamName.value.trim();
+    if (!name) return;
+    void act(async () => {
+      const created = await teamRequest(`${API}/teams`, { name });
+      state.teams = [...state.teams, created];
+      state.teamSelected = created.id;
+      elements.teamName.value = "";
+      await loadTeamDetail();
+      showTeamNotice("团队已创建。", "success");
+    });
+  });
+  elements.teamJoinForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const token = elements.teamJoinToken.value.trim();
+    if (!token) return;
+    void act(async () => {
+      const joined = await teamRequest(`${API}/teams/join`, { token });
+      state.teams = [...state.teams.filter((t) => t.id !== joined.id), joined];
+      state.teamSelected = joined.id;
+      elements.teamJoinToken.value = "";
+      await loadTeamDetail();
+      showTeamNotice("已加入团队。", "success");
+    });
+  });
+  elements.teamSwitch?.addEventListener("change", () => {
+    state.teamSelected = elements.teamSwitch.value;
+    void loadTeamDetail();
+  });
+  elements.teamInviteForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const email = elements.teamInviteEmail.value.trim();
+    if (!email) return;
+    void act(async () => {
+      const payload = await teamRequest(`${API}/teams/${state.teamSelected}/invites`, {
+        email,
+        role: elements.teamInviteRole.value,
+      });
+      showTeamSecret(`邀请 ${email}（7 天内有效）`, payload.token);
+      elements.teamInviteEmail.value = "";
+      await loadTeamDetail();
+    });
+  });
+  elements.teamKeyForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const agent = elements.teamKeyAgent.value.trim();
+    if (!agent) return;
+    const permission = elements.teamKeyPermission.value;
+    const days = Number(elements.teamKeyDays.value);
+    void act(async () => {
+      const payload = await teamRequest(`${API}/teams/${state.teamSelected}/keys`, {
+        agent_key: agent,
+        name: agent,
+        permission,
+        expires_in_days: days,
+      });
+      showTeamSecret(`Agent ${agent} 凭证`, payload.token);
+      elements.teamKeyAgent.value = "";
+      await loadTeamDetail();
+    });
+  });
+  elements.teamMemoryWriteForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const content = elements.teamMemoryContent.value;
+    if (!content) return;
+    void act(async () => {
+      await teamRequest(`${API}/teams/${state.teamSelected}/memories`, {
+        content,
+        memory_layer: "episode",
+        memory_scope: elements.teamMemoryScope.value,
+      });
+      elements.teamMemoryContent.value = "";
+      await loadTeamDetail();
+      showTeamNotice("记忆已写入团队空间。", "success");
+    });
+  });
+  elements.teamMemorySearchForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const query = elements.teamMemoryQuery.value.trim();
+    if (!query) return;
+    void act(async () => {
+      const payload = await teamRequest(`${API}/teams/${state.teamSelected}/search`, {
+        query, mode: "adaptive", top_k: 20,
+      });
+      state.teamMemories = Array.isArray(payload?.results) ? payload.results : [];
+      renderTeamDetail();
+      showTeamNotice(`检索到 ${state.teamMemories.length} 条记忆。`, "success");
+    });
+  });
+  elements.teamMemoryRefresh?.addEventListener("click", () => {
+    void loadTeamDetail();
+  });
+  elements.teamSecretDismiss?.addEventListener("click", hideTeamSecret);
 }
 
 function validDriveUrl(value) {
@@ -591,10 +1390,7 @@ function renderDownloads() {
   const text = elements.downloadStatus.querySelector("span");
   if (availableCount > 0) {
     title.textContent = `${manifest.provider_name || "网盘"}下载已开放`;
-    const code = typeof manifest.access_code === "string" && manifest.access_code.trim()
-      ? `提取码：${manifest.access_code.trim()}`
-      : "将在新窗口打开网盘页面。";
-    text.textContent = code;
+    text.textContent = "请使用各安装包卡片中显示的提取码。";
     elements.downloadStatus.classList.add("is-ready");
   } else {
     title.textContent = "网盘链接整理中";
@@ -619,18 +1415,59 @@ async function loadAccount({ preserveView = false } = {}) {
     renderAccountPage(pageName);
     window.scrollTo({ top: 0 });
   }
+  // Always pull subscription so the sidebar team entry reflects the visitor's
+  // plan from the very first page they land on (not only after opening the
+  // billing tab). Failures fall back to the previous value (or stay null on
+  // first load) and never block the rest of the dashboard.
   const [account, devices, billing] = await Promise.all([
     authorizedRequest(`${API}/account`),
     pageName === "devices" ? authorizedRequest(`${API}/account/devices`) : Promise.resolve(null),
-    pageName === "billing" ? authorizedRequest(`${API}/account/subscription`) : Promise.resolve(null),
+    authorizedRequest(`${API}/account/subscription`).catch(() => null),
   ]);
   state.account = account;
   if (devices) state.devices = devices.devices || [];
   if (billing) state.billing = billing;
+  state.pendingInvitesDismissed = false;
   renderAccount();
   if (billing) renderBilling();
+  applyTeamEntryVisibility();
   if (pageName === "download") await loadDownloads();
+  if (pageName === "team") {
+    await loadTeams();
+  } else {
+    // Lightweight banner fetch so the "待处理的团队邀请" strip shows on every
+    // dashboard page (not only `/team`). Falls back silently if the user is
+    // logged out or the session is mid-refresh.
+    void loadPendingInvitesOnly();
+  }
   if (pageName === requestedAccountPage()) showAccount();
+  // Email deep-link: if the URL is `/team/invite/<uuid>` and the matching row
+  // is among the currently-pending invites, attempt the server-side accept
+  // immediately so the visitor lands on a successful join.
+  maybeAutoAcceptDeepLink();
+}
+
+async function maybeAutoAcceptDeepLink() {
+  if (!state.account?.user?.id) return;
+  const inviteId = pendingInviteFromLocation();
+  if (!inviteId) return;
+  // Wait one microtask cycle for the lightweight banner fetch to populate
+  // pendingInvites (they often arrive in the same request but we want the
+  // accept call to be made with the user's intent once we know the invite is
+  // really theirs).
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const match = state.pendingInvites.find((row) => row.invite_id === inviteId);
+    if (match) {
+      history.replaceState({}, "", "/team");
+      await acceptInvite(inviteId);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  // No matching invite was found (already accepted, expired, or revoked).
+  // Surface this to the user instead of leaving them stranded on `/team`.
+  history.replaceState({}, "", "/team");
+  showToast("这条邀请已经处理过或已失效，请在侧栏「团队」页面查看当前的邀请列表。", "error");
 }
 
 async function navigateAccount(url, { replace = false } = {}) {
@@ -814,6 +1651,10 @@ function bindEvents() {
   });
   document.querySelector("#dismiss-notice").addEventListener("click", hideNotice);
   document.querySelector("#back-to-login").addEventListener("click", () => setAuthMode("login"));
+  elements.pendingInvitesClose?.addEventListener("click", () => {
+    state.pendingInvitesDismissed = true;
+    renderPendingInvites();
+  });
   elements.loginForm.addEventListener("submit", handleLogin);
   elements.registerForm.addEventListener("submit", handleRegister);
   document.querySelector("#logout-button").addEventListener("click", handleLogout);
@@ -943,6 +1784,7 @@ async function finishDesktopLogin() {
 
 async function init() {
   bindEvents();
+  bindTeamForms();
   document.querySelector("#desktop-login-retry").addEventListener("click", () => void finishDesktopLogin());
   const query = new URLSearchParams(location.search);
   const verificationToken = query.get("verify");

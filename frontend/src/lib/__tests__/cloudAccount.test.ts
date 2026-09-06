@@ -30,6 +30,34 @@ describe('cloud account lifecycle', () => {
   });
   const overview = () => [ok(identity), ok({ subscription })];
 
+  it('team requests never use the local session and send only a short-lived cloud access token', async () => {
+    stored = 'refresh-existing';
+    window.localStorage.setItem('lingshu_auth_token', 'local-secret');
+    fetcher.mockResolvedValueOnce(ok(tokens())).mockResolvedValueOnce(ok([]));
+    await client.teamRequest('/api/v1/teams');
+    expect(fetcher.mock.calls[0][0]).toBe(`${CLOUD_ACCOUNT_URL}/api/v1/auth/refresh`);
+    expect(fetcher.mock.calls[1][0]).toBe('/api/v1/teams');
+    expect(fetcher.mock.calls[1][1]?.headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer access-1' });
+    expect(JSON.stringify(fetcher.mock.calls[1])).not.toContain('refresh-');
+    expect(JSON.stringify(fetcher.mock.calls)).not.toContain('local-secret');
+  });
+
+  it('rejects paths outside the team API without sending credentials', async () => {
+    for (const path of ['https://example.com/api/v1/teams', '/api/v1/account', '/api/v1/teams/../users', '/api/v1/teams?redirect=x']) {
+      await expect(client.teamRequest(path)).rejects.toThrow('无效的团队接口路径');
+    }
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('requires cloud login and refreshes once on a rejected team token', async () => {
+    await expect(client.teamRequest('/api/v1/teams')).rejects.toThrow('请先');
+    stored = 'old-refresh';
+    fetcher.mockResolvedValueOnce(ok(tokens())).mockResolvedValueOnce(rejected())
+      .mockResolvedValueOnce(ok(tokens('2'))).mockResolvedValueOnce(ok([]));
+    expect((await client.teamRequest('/api/v1/teams')).status).toBe(200);
+    expect(fetcher.mock.calls[3][1]?.headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer access-2' });
+  });
+
   it('does not contact the network when no cloud login exists', async () => {
     expect(await client.load()).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();

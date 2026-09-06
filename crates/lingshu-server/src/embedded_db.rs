@@ -228,7 +228,11 @@ mod tests {
     #[test]
     fn application_data_root_is_not_cwd_relative() {
         let root = application_data_root().expect("application data root resolves");
-        assert!(root.is_absolute(), "root must be absolute: {}", root.display());
+        assert!(
+            root.is_absolute(),
+            "root must be absolute: {}",
+            root.display()
+        );
         assert!(
             root.ends_with("com.lingshu.desktop/embedded-postgresql"),
             "unexpected root layout: {}",

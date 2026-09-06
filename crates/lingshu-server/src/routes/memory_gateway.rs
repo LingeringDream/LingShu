@@ -14,8 +14,8 @@ use uuid::Uuid;
 use crate::auth::{self, AuthUser};
 use crate::error::AppError;
 use crate::llm::evolutionary_memory::{
-    can_read_memory, estimate_tokens, is_retrieval_eligible, resolve_conflict, score_memory,
-    ConflictEvidence, ConflictResolution, RankableMemory, RetrievalWeights, ScoreBreakdown,
+    can_read_memory, estimate_tokens, is_retrieval_eligible, score_memory, RankableMemory,
+    RetrievalWeights, ScoreBreakdown,
 };
 use crate::state::AppState;
 
@@ -75,11 +75,15 @@ pub struct GatewayListParams {
     pub agent_id: String,
     pub layer: Option<String>,
     pub scope: Option<String>,
+    pub context_scope: Option<String>,
     pub limit: Option<i64>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CreateGatewayMemoryRequest {
+    #[serde(default = "default_context_scope")]
+    pub context_scope: String,
+    pub request_id: Option<String>,
     #[serde(default = "default_agent")]
     pub agent_id: String,
     #[serde(default = "default_layer")]
@@ -109,6 +113,7 @@ pub struct CreateGatewayMemoryRequest {
 
 #[derive(Debug, Serialize, ToSchema, Clone)]
 pub struct GatewayMemoryResponse {
+    pub context_scope: String,
     pub id: Uuid,
     pub memory_type: String,
     pub content: String,
@@ -136,6 +141,7 @@ pub struct GatewayMemoryResponse {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct GatewayMemoryRow {
+    context_scope: String,
     id: Uuid,
     memory_type: String,
     content: String,
@@ -162,19 +168,10 @@ struct GatewayMemoryRow {
     has_grant: bool,
 }
 
-#[derive(sqlx::FromRow)]
-struct ConflictMemoryRow {
-    id: Uuid,
-    fact_value: Option<String>,
-    source_trust: f32,
-    access_count: i32,
-    importance: f32,
-    occurred_at: DateTime<Utc>,
-}
-
 impl GatewayMemoryRow {
     fn response(&self) -> GatewayMemoryResponse {
         GatewayMemoryResponse {
+            context_scope: self.context_scope.clone(),
             id: self.id,
             memory_type: self.memory_type.clone(),
             content: self.content.clone(),
@@ -225,6 +222,7 @@ pub struct GrantMemoryResponse {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct GatewaySearchRequest {
+    pub context_scope: Option<String>,
     pub query: String,
     #[serde(default = "default_agent")]
     pub agent_id: String,
@@ -258,6 +256,7 @@ pub struct GatewaySearchResponse {
     pub estimated_tokens: i32,
     pub weights: RetrievalWeights,
     pub results: Vec<RankedMemoryResponse>,
+    pub disputed_memories: Vec<GatewayMemoryResponse>,
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
@@ -344,6 +343,10 @@ fn default_agent() -> String {
 fn default_layer() -> String {
     "fact".into()
 }
+fn default_context_scope() -> String {
+    "default".into()
+}
+
 fn default_scope() -> String {
     "private".into()
 }
@@ -385,6 +388,23 @@ fn validate_identifier(value: &str, name: &str) -> Result<(), AppError> {
 
 fn validate_memory_request(req: &CreateGatewayMemoryRequest) -> Result<(), AppError> {
     validate_identifier(&req.agent_id, "agent_id")?;
+    if req.context_scope.trim().is_empty() || req.context_scope.len() > 255 {
+        return Err(AppError::Validation(
+            "context_scope 必须为 1-255 字节".into(),
+        ));
+    }
+    if let Some(key) = &req.request_id {
+        if key.trim().is_empty() || key.len() > 255 {
+            return Err(AppError::Validation("request_id 必须为 1-255 字节".into()));
+        }
+    }
+    if req
+        .valid_to
+        .zip(req.valid_from.or(req.occurred_at))
+        .is_some_and(|(end, start)| end <= start)
+    {
+        return Err(AppError::Validation("valid_to 必须晚于 valid_from".into()));
+    }
     if !["episode", "fact", "experience"].contains(&req.memory_layer.as_str()) {
         return Err(AppError::Validation(
             "memory_layer 必须是 episode、fact 或 experience".into(),
@@ -405,6 +425,9 @@ fn validate_memory_request(req: &CreateGatewayMemoryRequest) -> Result<(), AppEr
     }
     if req.memory_layer == "fact" && req.fact_key.as_deref().unwrap_or("").trim().is_empty() {
         return Err(AppError::Validation("结构化事实必须提供 fact_key".into()));
+    }
+    if req.memory_layer == "fact" && req.fact_value.as_deref().unwrap_or("").trim().is_empty() {
+        return Err(AppError::Validation("结构化事实必须提供 fact_value".into()));
     }
     Ok(())
 }
@@ -455,7 +478,7 @@ pub async fn create_agent(
     Ok((axum::http::StatusCode::CREATED, Json(row)))
 }
 
-const MEMORY_SELECT: &str = "SELECT m.id, m.memory_type, m.content, m.importance, m.access_count, \
+const MEMORY_SELECT: &str = "SELECT m.context_scope, m.id, m.memory_type, m.content, m.importance, m.access_count, \
     m.memory_layer, m.owner_agent_id, m.memory_scope, m.scene_tags, m.episode_id, m.occurred_at, \
     m.valid_from, m.valid_to, m.source_type, m.source_trust, m.fact_key, m.fact_value, \
     m.conflict_status, m.superseded_by, m.retention_status, m.source_memory_ids, m.created_at, m.updated_at, \
@@ -467,6 +490,7 @@ async fn accessible_rows(
     user_id: Uuid,
     agent_id: &str,
     limit: i64,
+    context_scope: Option<&str>,
 ) -> Result<Vec<GatewayMemoryRow>, sqlx::Error> {
     // Apply the ACL inside PostgreSQL before LIMIT. Filtering after truncation
     // could hide an older granted memory merely because newer inaccessible rows
@@ -475,17 +499,18 @@ async fn accessible_rows(
         "{MEMORY_SELECT} AND (m.owner_agent_id = $2 OR m.memory_scope = 'global' OR \
          (m.memory_scope = 'shared' AND EXISTS(SELECT 1 FROM memory_access_grants acl \
           WHERE acl.memory_id = m.id AND acl.grantee_agent_id = $2 AND acl.can_read))) \
-         ORDER BY m.occurred_at DESC LIMIT $3"
+         AND ($4::text IS NULL OR m.context_scope=$4) ORDER BY m.occurred_at DESC LIMIT $3"
     );
     sqlx::query_as(&sql)
         .bind(user_id)
         .bind(agent_id)
         .bind(limit)
+        .bind(context_scope)
         .fetch_all(db)
         .await
 }
 
-#[utoipa::path(get, path = "/api/v1/memory-gateway/memories", params(("agent_id" = Option<String>, Query), ("layer" = Option<String>, Query), ("scope" = Option<String>, Query), ("limit" = Option<i64>, Query)), responses((status = 200, body = Vec<GatewayMemoryResponse>)))]
+#[utoipa::path(get, path = "/api/v1/memory-gateway/memories", params(("agent_id" = Option<String>, Query), ("layer" = Option<String>, Query), ("scope" = Option<String>, Query), ("context_scope" = Option<String>, Query), ("limit" = Option<i64>, Query)), responses((status = 200, body = Vec<GatewayMemoryResponse>)))]
 pub async fn list_gateway_memories(
     State(state): State<AppState>,
     auth: Option<AuthUser>,
@@ -498,6 +523,7 @@ pub async fn list_gateway_memories(
         user_id,
         &params.agent_id,
         params.limit.unwrap_or(100).clamp(1, 500),
+        params.context_scope.as_deref().map(str::trim),
     )
     .await?;
     let memories = rows
@@ -533,24 +559,7 @@ pub async fn create_gateway_memory(
     let user_id = auth::require_user(auth).await?;
     validate_memory_request(&req)?;
     ensure_agent(&state.db, user_id, &req.agent_id).await?;
-    let now = Utc::now();
-    let occurred_at = req.occurred_at.unwrap_or(now);
-    let valid_from = req.valid_from.unwrap_or(occurred_at);
-    let mut tx = state.db.begin().await?;
-    let memory_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO memories (user_id, memory_type, content, importance, source_memory_ids, tier, memory_layer, owner_agent_id, memory_scope, scene_tags, episode_id, occurred_at, valid_from, valid_to, source_type, source_trust, fact_key, fact_value) \
-         VALUES ($1,$2,$3,$4,$5,CASE WHEN $6 = 'experience' THEN 'derived' ELSE 'raw' END,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id",
-    ).bind(user_id).bind(&req.memory_type).bind(req.content.trim()).bind(req.importance).bind(&req.source_memory_ids)
-      .bind(&req.memory_layer).bind(&req.agent_id).bind(&req.memory_scope).bind(&req.scene_tags).bind(req.episode_id)
-      .bind(occurred_at).bind(valid_from).bind(req.valid_to).bind(&req.source_type).bind(req.source_trust)
-      .bind(req.fact_key.as_deref().map(str::trim)).bind(req.fact_value.as_deref().map(str::trim)).fetch_one(&mut *tx).await?;
-
-    if req.memory_layer == "fact" {
-        if let Some(fact_key) = req.fact_key.as_deref() {
-            resolve_new_fact_conflicts(&mut tx, user_id, memory_id, fact_key.trim()).await?;
-        }
-    }
-    tx.commit().await?;
+    let memory_id = persist_gateway_memory(&state.db, user_id, &req).await?;
 
     let sql = format!("{MEMORY_SELECT} AND m.id = $3");
     let row: GatewayMemoryRow = sqlx::query_as(&sql)
@@ -579,80 +588,154 @@ pub async fn create_gateway_memory(
     Ok((axum::http::StatusCode::CREATED, Json(row.response())))
 }
 
-async fn resolve_new_fact_conflicts(
+// All writers and reviewers acquire this lock before locking memory/event rows.
+// Locking an existing row alone cannot serialize the first write to a fact.
+async fn lock_key(tx: &mut Transaction<'_, Postgres>, key: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(key)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn lock_fact(
+    tx: &mut Transaction<'_, Postgres>,
+    user: Uuid,
+    scope: &str,
+    key: &str,
+) -> Result<(), sqlx::Error> {
+    lock_key(
+        tx,
+        &serde_json::json!(["fact", user, scope, key]).to_string(),
+    )
+    .await
+}
+
+async fn persist_gateway_memory(
+    db: &PgPool,
+    user_id: Uuid,
+    req: &CreateGatewayMemoryRequest,
+) -> Result<Uuid, AppError> {
+    validate_memory_request(req)?;
+    let now = Utc::now();
+    let occurred_at = req.occurred_at.unwrap_or(now);
+    let valid_from = req.valid_from.unwrap_or(occurred_at);
+    if req.valid_to.is_some_and(|end| end <= valid_from) {
+        return Err(AppError::Validation("valid_to 必须晚于 valid_from".into()));
+    }
+    let mut tx = db.begin().await?;
+    if let Some(request_id) = &req.request_id {
+        lock_key(
+            &mut tx,
+            &serde_json::json!(["request", user_id, req.agent_id, request_id]).to_string(),
+        )
+        .await?;
+        let prior: Option<(Uuid, serde_json::Value)> = sqlx::query_as(
+            "SELECT memory_id, payload FROM memory_write_requests WHERE user_id=$1 AND agent_id=$2 AND request_id=$3"
+        ).bind(user_id).bind(&req.agent_id).bind(request_id).fetch_optional(&mut *tx).await?;
+        if let Some((id, payload)) = prior {
+            if payload != serde_json::to_value(req).map_err(|e| AppError::Internal(e.into()))? {
+                return Err(AppError::Conflict("request_id 已用于不同内容".into()));
+            }
+            tx.commit().await?;
+            return Ok(id);
+        }
+    }
+    if let Some(key) = &req.fact_key {
+        lock_fact(&mut tx, user_id, req.context_scope.trim(), key.trim()).await?;
+    }
+    let memory_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO memories (user_id, memory_type, content, importance, source_memory_ids, tier, memory_layer, owner_agent_id, memory_scope, scene_tags, episode_id, occurred_at, valid_from, valid_to, source_type, source_trust, fact_key, fact_value, context_scope) \
+         VALUES ($1,$2,$3,$4,$5,CASE WHEN $6 = 'experience' THEN 'derived' ELSE 'raw' END,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id",
+    ).bind(user_id).bind(&req.memory_type).bind(req.content.trim()).bind(req.importance).bind(&req.source_memory_ids)
+      .bind(&req.memory_layer).bind(&req.agent_id).bind(&req.memory_scope).bind(&req.scene_tags).bind(req.episode_id)
+      .bind(occurred_at).bind(valid_from).bind(req.valid_to).bind(&req.source_type).bind(req.source_trust)
+      .bind(req.fact_key.as_deref().map(str::trim)).bind(req.fact_value.as_deref().map(str::trim)).bind(req.context_scope.trim()).fetch_one(&mut *tx).await?;
+
+    if req.memory_layer == "fact" {
+        if let Some(fact_key) = req.fact_key.as_deref() {
+            resolve_new_fact_conflicts(&mut tx, user_id, memory_id, fact_key.trim()).await?;
+        }
+    }
+    if let Some(request_id) = &req.request_id {
+        sqlx::query("INSERT INTO memory_write_requests(user_id,agent_id,request_id,payload,memory_id) VALUES($1,$2,$3,$4,$5)")
+            .bind(user_id).bind(&req.agent_id).bind(request_id)
+            .bind(serde_json::to_value(req).map_err(|e| AppError::Internal(e.into()))?).bind(memory_id)
+            .execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(memory_id)
+}
+
+pub(crate) async fn resolve_new_fact_conflicts(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     challenger_id: Uuid,
     fact_key: &str,
 ) -> Result<(), sqlx::Error> {
-    let challenger: (Option<String>, f32, i32, f32, DateTime<Utc>, String) = sqlx::query_as(
-        "SELECT fact_value, source_trust, access_count, importance, occurred_at, owner_agent_id FROM memories WHERE id = $1",
-    ).bind(challenger_id).fetch_one(&mut **tx).await?;
-    let incumbent: Option<ConflictMemoryRow> = sqlx::query_as(
-        "SELECT id, fact_value, source_trust, access_count, importance, occurred_at FROM memories \
-         WHERE user_id = $1 AND fact_key = $2 AND id <> $3 AND owner_agent_id = $4 \
-         AND conflict_status = 'active' AND retention_status = 'active' AND deleted_at IS NULL \
-         ORDER BY valid_from DESC LIMIT 1 FOR UPDATE",
-    )
-    .bind(user_id)
-    .bind(fact_key)
-    .bind(challenger_id)
-    .bind(&challenger.5)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let Some(incumbent) = incumbent else {
-        return Ok(());
-    };
-    if incumbent.fact_value == challenger.0 {
+    let scope: String =
+        sqlx::query_scalar("SELECT context_scope FROM memories WHERE id=$1 AND user_id=$2")
+            .bind(challenger_id)
+            .bind(user_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    lock_fact(tx, user_id, &scope, fact_key).await?;
+    let challenger: GatewayMemoryRow = sqlx::query_as(&format!("{MEMORY_SELECT} AND m.id=$3"))
+        .bind(user_id)
+        .bind("")
+        .bind(challenger_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    if challenger.conflict_status == "superseded" {
         return Ok(());
     }
-
-    let (resolution, delta) = resolve_conflict(
-        &ConflictEvidence {
-            source_trust: incumbent.source_trust,
-            access_count: incumbent.access_count,
-            importance: incumbent.importance,
-            occurred_at: incumbent.occurred_at,
-        },
-        &ConflictEvidence {
-            source_trust: challenger.1,
-            access_count: challenger.2,
-            importance: challenger.3,
-            occurred_at: challenger.4,
-        },
-    );
-    let (resolution_name, reason) = match resolution {
-        ConflictResolution::ChallengerWins => {
-            sqlx::query("UPDATE memories SET conflict_status='superseded', retention_status='filtered', valid_to=$1, superseded_by=$2, updated_at=NOW() WHERE id=$3")
-                .bind(challenger.4).bind(challenger_id).bind(incumbent.id).execute(&mut **tx).await?;
-            (
-                "challenger_wins",
-                "新事实在时序、来源可信度、频次与重要性综合评分中占优",
-            )
+    // Only equal visibility domains can affect one another. Shared records
+    // require the same effective readership, including their owners.
+    let candidates: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT m.id FROM memories m WHERE m.user_id=$1 AND m.context_scope=$2 AND m.fact_key=$3
+         AND m.id<>$4 AND m.deleted_at IS NULL AND m.memory_layer='fact'
+         AND m.conflict_status IN ('active','disputed') AND m.retention_status='active'
+         AND m.memory_scope=$5
+         AND (m.memory_scope='global' OR (m.memory_scope='private' AND m.owner_agent_id=$6)
+           OR (m.memory_scope='shared' AND
+             ARRAY(SELECT DISTINCT a FROM (SELECT m.owner_agent_id::text AS a UNION SELECT grantee_agent_id FROM memory_access_grants WHERE memory_id=m.id AND can_read) x ORDER BY a)
+             = ARRAY(SELECT DISTINCT a FROM (SELECT $6::text AS a UNION SELECT grantee_agent_id FROM memory_access_grants WHERE memory_id=$4 AND can_read) x ORDER BY a)))
+         AND m.valid_from < COALESCE($8, 'infinity'::timestamptz)
+         AND $7 < COALESCE(m.valid_to, 'infinity'::timestamptz)
+         ORDER BY m.id FOR UPDATE"
+    ).bind(user_id).bind(&scope).bind(fact_key).bind(challenger_id)
+     .bind(&challenger.memory_scope).bind(&challenger.owner_agent_id)
+     .bind(challenger.valid_from).bind(challenger.valid_to).fetch_all(&mut **tx).await?;
+    for incumbent_id in candidates {
+        let incumbent: GatewayMemoryRow = sqlx::query_as(&format!("{MEMORY_SELECT} AND m.id=$3"))
+            .bind(user_id)
+            .bind("")
+            .bind(incumbent_id)
+            .fetch_one(&mut **tx)
+            .await?;
+        if incumbent.fact_value == challenger.fact_value {
+            continue;
         }
-        ConflictResolution::IncumbentWins => {
-            sqlx::query("UPDATE memories SET conflict_status='superseded', retention_status='filtered', valid_to=NOW(), superseded_by=$1, updated_at=NOW() WHERE id=$2")
-                .bind(incumbent.id).bind(challenger_id).execute(&mut **tx).await?;
-            (
-                "incumbent_wins",
-                "既有事实的综合证据强度更高，保留并过滤挑战事实",
-            )
-        }
-        ConflictResolution::Disputed => {
-            sqlx::query("UPDATE memories SET conflict_status='disputed', updated_at=NOW() WHERE id = ANY($1)")
-                .bind(vec![incumbent.id, challenger_id]).execute(&mut **tx).await?;
-            ("disputed", "两条事实证据接近，进入争议队列等待确认")
-        }
-    };
-    sqlx::query(
-        "INSERT INTO memory_conflict_events (user_id, fact_key, incumbent_memory_id, challenger_memory_id, resolution, reason, score_delta, review_status) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,CASE WHEN $5 = 'disputed' THEN 'pending' ELSE 'not_required' END)",
-    ).bind(user_id).bind(fact_key).bind(incumbent.id).bind(challenger_id).bind(resolution_name).bind(reason).bind(delta).execute(&mut **tx).await?;
+        // Agent-provided confidence and arrival order are not authority.
+        // Preserve both claims until an explicit review resolves the conflict.
+        sqlx::query(
+            "UPDATE memories SET conflict_status='disputed', updated_at=NOW() WHERE id=ANY($1)",
+        )
+        .bind(vec![incumbent_id, challenger_id])
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query("INSERT INTO memory_conflict_events(user_id,fact_key,incumbent_memory_id,challenger_memory_id,resolution,reason,score_delta,review_status)
+            SELECT $1,$2,$3,$4,'disputed','同一作用域和有效时间内存在不同主张，等待证据或用户裁决',0,'pending'
+            WHERE NOT EXISTS(SELECT 1 FROM memory_conflict_events WHERE user_id=$1 AND review_status='pending'
+            AND ((incumbent_memory_id=$3 AND challenger_memory_id=$4) OR (incumbent_memory_id=$4 AND challenger_memory_id=$3)))")
+            .bind(user_id).bind(fact_key).bind(incumbent_id).bind(challenger_id).execute(&mut **tx).await?;
+    }
     Ok(())
 }
 
 /// Re-run conflict governance for a memory enriched after the canonical write
 /// path (for example an LLM-extracted structured fact).
+#[cfg(test)]
 pub(crate) async fn reconcile_memory_conflicts(
     db: &PgPool,
     user_id: Uuid,
@@ -676,8 +759,16 @@ pub async fn grant_memory_access(
     validate_identifier(&req.owner_agent_id, "owner_agent_id")?;
     validate_identifier(&req.grantee_agent_id, "grantee_agent_id")?;
     ensure_agent(&state.db, user_id, &req.grantee_agent_id).await?;
+    let mut tx = state.db.begin().await?;
+    let identity: Option<(String, Option<String>)> = sqlx::query_as("SELECT context_scope,fact_key FROM memories WHERE id=$1 AND user_id=$2 AND owner_agent_id=$3 AND deleted_at IS NULL")
+        .bind(id).bind(user_id).bind(&req.owner_agent_id).fetch_optional(&mut *tx).await?;
+    let (scope, key) =
+        identity.ok_or_else(|| AppError::Forbidden("只有记忆所有者 Agent 可以授权共享".into()))?;
+    if let Some(key) = &key {
+        lock_fact(&mut tx, user_id, &scope, key).await?;
+    }
     let owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM memories WHERE id=$1 AND user_id=$2 AND owner_agent_id=$3 AND deleted_at IS NULL)")
-        .bind(id).bind(user_id).bind(&req.owner_agent_id).fetch_one(&state.db).await?;
+        .bind(id).bind(user_id).bind(&req.owner_agent_id).fetch_one(&mut *tx).await?;
     if !owned {
         return Err(AppError::Forbidden(
             "只有记忆所有者 Agent 可以授权共享".into(),
@@ -686,11 +777,15 @@ pub async fn grant_memory_access(
     sqlx::query(
         "INSERT INTO memory_access_grants (memory_id, grantee_agent_id, can_read, can_write, can_share) VALUES ($1,$2,$3,$4,$5) \
          ON CONFLICT (memory_id, grantee_agent_id) DO UPDATE SET can_read=EXCLUDED.can_read, can_write=EXCLUDED.can_write, can_share=EXCLUDED.can_share",
-    ).bind(id).bind(&req.grantee_agent_id).bind(req.can_read).bind(req.can_write).bind(req.can_share).execute(&state.db).await?;
+    ).bind(id).bind(&req.grantee_agent_id).bind(req.can_read).bind(req.can_write).bind(req.can_share).execute(&mut *tx).await?;
     sqlx::query("UPDATE memories SET memory_scope='shared', updated_at=NOW() WHERE id=$1")
         .bind(id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
+    if let Some(key) = &key {
+        resolve_new_fact_conflicts(&mut tx, user_id, id, key).await?;
+    }
+    tx.commit().await?;
     Ok(Json(GrantMemoryResponse {
         memory_id: id,
         grantee_agent_id: req.grantee_agent_id,
@@ -718,7 +813,14 @@ pub async fn gateway_search(
     }
     ensure_agent(&state.db, user_id, &req.agent_id).await?;
     let requested_k = req.top_k.clamp(1, 50);
-    let rows = accessible_rows(&state.db, user_id, &req.agent_id, 500).await?;
+    let rows = accessible_rows(
+        &state.db,
+        user_id,
+        &req.agent_id,
+        500,
+        req.context_scope.as_deref().map(str::trim),
+    )
+    .await?;
     let accessible: Vec<GatewayMemoryRow> = rows
         .into_iter()
         .filter(|row| {
@@ -767,6 +869,7 @@ pub async fn gateway_search(
     let requested_tags: HashSet<&str> = req.scene_tags.iter().map(String::as_str).collect();
     let mut filtered_count = 0usize;
     let mut ranked: Vec<(GatewayMemoryRow, ScoreBreakdown)> = Vec::new();
+    let mut disputed_memories = Vec::new();
     for row in accessible {
         let rankable = RankableMemory {
             id: row.id,
@@ -780,7 +883,17 @@ pub async fn gateway_search(
             retention_status: row.retention_status.clone(),
             semantic_score: semantic_scores.get(&row.id).copied().unwrap_or(0.0),
         };
-        if req.mode == "adaptive" && !is_retrieval_eligible(&rankable, now) {
+        if row.conflict_status == "disputed"
+            && row.valid_from <= now
+            && row.valid_to.map(|end| end > now).unwrap_or(true)
+            && (crate::llm::evolutionary_memory::lexical_similarity(&req.query, &row.content) > 0.0
+                || rankable.semantic_score > 0.0)
+        {
+            disputed_memories.push(row.response());
+        }
+        if req.mode == "adaptive"
+            && (row.valid_from > now || !is_retrieval_eligible(&rankable, now))
+        {
             filtered_count += 1;
             continue;
         }
@@ -805,6 +918,7 @@ pub async fn gateway_search(
             .then_with(|| right.0.occurred_at.cmp(&left.0.occurred_at))
     });
     ranked.truncate(requested_k as usize);
+    disputed_memories.truncate(requested_k as usize);
     let ids: Vec<Uuid> = ranked.iter().map(|(row, _)| row.id).collect();
     if !ids.is_empty() {
         sqlx::query("UPDATE memories SET access_count=access_count+1, last_accessed_at=NOW() WHERE id=ANY($1) AND user_id=$2").bind(&ids).bind(user_id).execute(&state.db).await?;
@@ -836,6 +950,7 @@ pub async fn gateway_search(
         estimated_tokens,
         weights,
         results,
+        disputed_memories,
     }))
 }
 
@@ -909,6 +1024,10 @@ pub async fn resolve_conflict_review(
     }
 
     let mut tx = state.db.begin().await?;
+    let identity: (String, String) = sqlx::query_as("SELECT m.context_scope,e.fact_key FROM memory_conflict_events e JOIN memories m ON m.id=e.challenger_memory_id WHERE e.id=$1 AND e.user_id=$2")
+        .bind(id).bind(user_id).fetch_optional(&mut *tx).await?
+        .ok_or_else(|| AppError::NotFound("冲突记录不存在".into()))?;
+    lock_fact(&mut tx, user_id, &identity.0, &identity.1).await?;
     let event: ConflictReviewEventRow = sqlx::query_as(
         "SELECT fact_key, incumbent_memory_id, challenger_memory_id, resolution, review_status \
          FROM memory_conflict_events WHERE id = $1 AND user_id = $2 FOR UPDATE",
@@ -955,9 +1074,17 @@ pub async fn resolve_conflict_review(
     .await?
     .ok_or_else(|| AppError::NotFound("落败候选记忆不存在".into()))?;
 
-    if winner.owner_agent_id != loser.owner_agent_id {
+    let reviewable: bool = sqlx::query_scalar("SELECT a.conflict_status='disputed' AND b.conflict_status='disputed'
+        AND a.context_scope=b.context_scope AND a.memory_scope=b.memory_scope AND
+        (a.memory_scope='global' OR (a.memory_scope='private' AND a.owner_agent_id=b.owner_agent_id)
+        OR (a.memory_scope='shared' AND
+        ARRAY(SELECT x FROM (SELECT a.owner_agent_id AS x UNION SELECT grantee_agent_id FROM memory_access_grants WHERE memory_id=a.id AND can_read) g ORDER BY x)
+        = ARRAY(SELECT x FROM (SELECT b.owner_agent_id AS x UNION SELECT grantee_agent_id FROM memory_access_grants WHERE memory_id=b.id AND can_read) g ORDER BY x)))
+        FROM memories a, memories b WHERE a.id=$1 AND b.id=$2")
+        .bind(winner.id).bind(loser.id).fetch_one(&mut *tx).await?;
+    if !reviewable {
         return Err(AppError::Conflict(
-            "不同记忆所有者的历史冲突不能合并，请分别处理各 Agent 的私有事实".into(),
+            "候选状态或共享权限已变化，请刷新冲突记录".into(),
         ));
     }
 
@@ -971,7 +1098,7 @@ pub async fn resolve_conflict_review(
     .await?;
     sqlx::query(
         "UPDATE memories SET conflict_status='superseded', retention_status='filtered', \
-         valid_to=LEAST(COALESCE(valid_to, NOW()), NOW()), superseded_by=$1, updated_at=NOW() \
+         superseded_by=$1, updated_at=NOW() \
          WHERE id=$2 AND user_id=$3",
     )
     .bind(winner.id)
@@ -980,13 +1107,24 @@ pub async fn resolve_conflict_review(
     .execute(&mut *tx)
     .await?;
 
+    // A pairwise review must not hide other unresolved alternatives.
+    sqlx::query("UPDATE memories SET conflict_status='disputed' WHERE id=$1 AND EXISTS(
+        SELECT 1 FROM memory_conflict_events e JOIN memories a ON a.id=e.incumbent_memory_id JOIN memories b ON b.id=e.challenger_memory_id
+        WHERE e.id<>$2 AND e.review_status='pending' AND (a.id=$1 OR b.id=$1)
+        AND a.conflict_status<>'superseded' AND b.conflict_status<>'superseded')")
+        .bind(winner.id).bind(id).execute(&mut *tx).await?;
     let normalized_note = req
         .note
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let mut experience_to_index: Option<(Uuid, String)> = None;
-    let experience_memory_id = if req.promote_to_experience {
+    let winner_active: bool =
+        sqlx::query_scalar("SELECT conflict_status='active' FROM memories WHERE id=$1")
+            .bind(winner.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let experience_memory_id = if req.promote_to_experience && winner_active {
         let content =
             reviewed_experience_content(&event.fact_key, &winner, &loser, normalized_note);
         // A derived record contains values from both sides, so it must never be
@@ -1001,8 +1139,8 @@ pub async fn resolve_conflict_review(
         let source_ids = vec![winner.id, loser.id];
         let experience_id: Uuid = sqlx::query_scalar(
             "INSERT INTO memories (user_id, memory_type, content, importance, source_memory_ids, tier, \
-             memory_layer, owner_agent_id, memory_scope, scene_tags, source_type, source_trust) \
-             VALUES ($1,$2,$3,$4,$5,'derived','experience',$6,$7,$8,'conflict_resolution',1.0) RETURNING id",
+             memory_layer, owner_agent_id, memory_scope, scene_tags, source_type, source_trust, context_scope) \
+             VALUES ($1,$2,$3,$4,$5,'derived','experience',$6,$7,$8,'conflict_resolution',1.0,$9) RETURNING id",
         )
         .bind(user_id)
         .bind(&winner.memory_type)
@@ -1012,6 +1150,7 @@ pub async fn resolve_conflict_review(
         .bind(&winner.owner_agent_id)
         .bind(experience_scope)
         .bind(&scene_tags)
+        .bind(&identity.0)
         .fetch_one(&mut *tx)
         .await?;
         if experience_scope == "shared" {
@@ -1058,6 +1197,17 @@ pub async fn resolve_conflict_review(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE memory_conflict_events SET review_status='resolved', reason='候选已在另一项人工裁决中被替代', reviewed_at=NOW()
+        WHERE user_id=$1 AND id<>$2 AND review_status='pending' AND (incumbent_memory_id=$3 OR challenger_memory_id=$3)")
+        .bind(user_id).bind(id).bind(loser.id).execute(&mut *tx).await?;
+    // Equal-value peers may have disputed only the now-retired alternative.
+    sqlx::query("UPDATE memories m SET conflict_status='active', updated_at=NOW()
+        WHERE m.user_id=$1 AND m.context_scope=$2 AND m.fact_key=$3 AND m.conflict_status='disputed'
+        AND m.deleted_at IS NULL AND EXISTS(SELECT 1 FROM memory_conflict_events e WHERE e.review_status='resolved'
+            AND ((e.incumbent_memory_id=m.id AND e.challenger_memory_id=$4) OR (e.challenger_memory_id=m.id AND e.incumbent_memory_id=$4)))
+        AND NOT EXISTS(SELECT 1 FROM memory_conflict_events e WHERE e.review_status='pending'
+            AND (e.incumbent_memory_id=m.id OR e.challenger_memory_id=m.id))")
+        .bind(user_id).bind(&identity.0).bind(&identity.1).bind(loser.id).execute(&mut *tx).await?;
     tx.commit().await?;
 
     crate::telemetry::record(
@@ -1242,3 +1392,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "memory_gateway_concurrency_tests.rs"]
+mod concurrency_tests;

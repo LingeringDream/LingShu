@@ -50,11 +50,19 @@ describe('CloudAccountPanel', () => {
     useCloudAccountStore.setState({ account: {
       user: { id: '1', email: 'alice@example.com', display_name: 'Alice', email_verified_at: '', created_at: '' },
       device: { id: '1', name: '工作电脑', platform: 'windows' },
+      entitlements: { effective_plan: 'free', features: [
+        { code: 'local_mcp', name: '本地 MCP', plans: ['free'], included: true, available: true, enabled: true },
+        { code: 'cloud_sync', name: '云同步', plans: ['pro'], included: false, available: false, enabled: false },
+        { code: 'team_create', name: '创建团队', plans: ['team'], included: false, available: true, enabled: false },
+      ] },
       subscription: { plan_code: 'free', plan_name: '免费版', status: 'active', current_period_end: null, entitlement_active: true },
     } });
     render(<CloudAccountPanel />);
     expect(screen.getByText('alice@example.com')).toBeInTheDocument();
     expect(screen.getByText('免费版')).toBeInTheDocument();
+    expect(screen.getByText('可用')).toBeInTheDocument();
+    expect(screen.getByText('尚未开放')).toBeInTheDocument();
+    expect(screen.getByText('需要 TEAM')).toBeInTheDocument();
     expect(screen.getByText('工作电脑')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '退出云账户' }));
     expect(useCloudAccountStore.getState().logout).toHaveBeenCalled();

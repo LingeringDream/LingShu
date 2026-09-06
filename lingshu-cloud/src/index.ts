@@ -1,3 +1,4 @@
+import { canCreateTeam } from "./entitlements";
 import {
   burnPasswordKdf,
   hashPassword,
@@ -16,6 +17,7 @@ import {
 } from "./billing";
 import { sendVerificationEmail } from "./email";
 import { HttpError, isHttpError } from "./errors";
+import { teamRequest } from "./teams";
 import type {
   AppEnv,
   AuthContext,
@@ -352,7 +354,7 @@ function securityHeaders(request: Request, env: AppEnv): Headers {
   const origin = request.headers.get("Origin");
   if (origin && (allowedOrigins(env).has(origin) || allowedOrigins(env).has("*"))) {
     headers.set("Access-Control-Allow-Origin", origin);
-    headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
     headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-LingShu-Device-ID");
     headers.set("Access-Control-Expose-Headers", "Retry-After");
     headers.set("Vary", "Origin");
@@ -388,12 +390,14 @@ async function assetResponse(request: Request, env: AppEnv): Promise<Response> {
     throw new HttpError(404, "Not found", "NOT_FOUND");
   }
   const requestUrl = new URL(request.url);
-  const appRoutes = new Set(["/account", "/billing", "/devices", "/docs", "/download"]);
-  // Cloudflare Static Assets serves /index.html with a 307 redirect to /
-  // (clean-URL handling), so fetching "/index.html" for SPA routes would
-  // propagate that redirect and make sub-pages unreachable. Fetch the root
-  // "/" instead, which returns index.html with a 200 status.
-  const assetRequest = appRoutes.has(requestUrl.pathname.replace(/\/$/, ""))
+  const appRoutes = new Set(["/account", "/billing", "/devices", "/docs", "/download", "/team"]);
+  // Deep-link target for team invites sent via email: `/team/invite/<uuid>`.
+  // Falling back to "/" hands the URL over to the account-center SPA so the
+  // "Pending invites" banner can surface the matching row after sign-in.
+  const cleanPath = requestUrl.pathname.replace(/\/$/, "") || "/";
+  const isInviteDeepLink = /^\/team\/invite\/[0-9a-f-]{36}$/i.test(cleanPath);
+  const isAppRoute = appRoutes.has(cleanPath) || isInviteDeepLink;
+  const assetRequest = isAppRoute
     ? new Request(new URL("/", requestUrl), request)
     : request;
   const asset = await env.ASSETS.fetch(assetRequest);
@@ -418,6 +422,18 @@ async function assetResponse(request: Request, env: AppEnv): Promise<Response> {
     statusText: asset.statusText,
     headers,
   });
+}
+
+// The team console is a static asset, so without this gate anyone (including
+// signed-out visitors) could load its UI by typing the URL directly. Data was
+// never exposed because /api/v1/teams enforces its own checks; this keeps the
+// unreleased interface private too.
+async function teamPageGate(request: Request, env: AppEnv): Promise<Response> {
+  const identity = await cookieIdentity(request, env);
+  if (!identity || !(await canAccessTeam(env, identity.userId))) {
+    return Response.redirect(new URL("/billing?team=required", request.url).toString(), 302);
+  }
+  return assetResponse(request, env);
 }
 
 function errorResponse(
@@ -1036,6 +1052,38 @@ async function browserIdentity(request: Request, env: AppEnv): Promise<AuthConte
   return authenticate(new Request(request.url, { headers }), env);
 }
 
+// Page navigations (address bar, sidebar links) carry no Origin header, so the
+// same-origin guard in browserIdentity() would reject them. Read the durable
+// browser cookie only: absent or invalid simply means "signed out".
+async function cookieIdentity(request: Request, env: AppEnv): Promise<AuthContext | null> {
+  const value = (request.headers.get("Cookie") || "").split(";").map(part => part.trim())
+    .find(part => part.startsWith(`${BROWSER_COOKIE}=`))?.slice(BROWSER_COOKIE.length + 1);
+  if (!value) return null;
+  const headers = new Headers(request.headers);
+  headers.set("Authorization", `Bearer ${value}`);
+  try {
+    return await authenticate(new Request(request.url, { headers }), env);
+  } catch {
+    return null;
+  }
+}
+
+// A team seat is paid by the workspace owner, so invited members may keep free
+// accounts. Gate on entitlement OR membership; the entitlement half mirrors
+// hasTeamEntitlement() in teams.ts.
+async function canAccessTeam(env: AppEnv, userId: string): Promise<boolean> {
+  const [subscription, member] = await Promise.all([
+    env.DB.prepare("SELECT plan_code, status, current_period_end FROM subscriptions WHERE user_id = ?")
+      .bind(userId)
+      .first<{ plan_code: string; status: string; current_period_end: string | null }>(),
+    env.DB.prepare("SELECT 1 AS ok FROM team_members WHERE cloud_user_id = ? LIMIT 1")
+      .bind(userId)
+      .first<{ ok: number }>(),
+  ]);
+  if (member) return true;
+  return canCreateTeam(subscription);
+}
+
 async function browserSession(request: Request, env: AppEnv): Promise<Response> {
   const session = await browserIdentity(request, env);
   const now = Math.floor(Date.now() / 1000);
@@ -1293,6 +1341,9 @@ async function route(
     !path.startsWith("/api/") &&
     path !== "/health"
   ) {
+    if (path === "/team" || path === "/team/index.html") {
+      return teamPageGate(request, env);
+    }
     return assetResponse(request, env);
   }
   if (request.method === "GET" && path === "/health") {
@@ -1349,6 +1400,10 @@ async function route(
   const revokeMatch = path.match(/^\/api\/v1\/account\/devices\/([^/]+)$/);
   if (request.method === "DELETE" && revokeMatch) {
     return revokeDevice(request, env, decodeURIComponent(revokeMatch[1]));
+  }
+  if (path.startsWith("/api/v1/teams")) {
+    const response = await teamRequest(request, env, path);
+    if (response) return response;
   }
   throw new HttpError(404, "Not found", "NOT_FOUND");
 }

@@ -1,3 +1,4 @@
+import { getEntitlements, normalizePlan, subscriptionIsEntitled } from "./entitlements";
 import { HttpError } from "./errors";
 import type { AppEnv, AuthContext } from "./types";
 
@@ -54,7 +55,7 @@ const STRIPE_API_VERSION = "2026-02-25.clover";
 const WEBHOOK_TOLERANCE_SECONDS = 300;
 const textEncoder = new TextEncoder();
 
-// 开发者版购买档位：interval → 实际时长（月）。复用 Stripe 月付 / 年付 price 收款，
+// 专业版购买档位：interval → 实际时长（月）。复用 Stripe 月付 / 年付 price 收款，
 // 到期时间由我方按所选时长重算，而非依赖 Stripe 的原生自动续费周期。
 interface DeveloperOptionSpec {
   interval: string;
@@ -140,11 +141,11 @@ function objectId(value: unknown): string | null {
   return null;
 }
 
-function subscriptionIsEntitled(row: SubscriptionRow | null): boolean {
-  if (!row || row.plan_code !== "developer") return false;
-  if (row.status === "active" || row.status === "trialing") return true;
-  return row.status === "past_due" &&
-    Boolean(row.current_period_end && Date.parse(row.current_period_end) > Date.now());
+function planName(planCode: string): string {
+  if (normalizePlan(planCode) === "pro") return "专业版 Pro";
+  if (planCode === "team") return "团队版";
+  if (planCode === "free") return "免费版";
+  return "未识别方案";
 }
 
 function displayLabel(value: string | undefined, fallback: string): string {
@@ -168,14 +169,11 @@ export async function getBillingOverview(
   const entitled = subscriptionIsEntitled(subscription);
   const configured = isBillingConfigured(env);
   return {
+    entitlements: getEntitlements(subscription),
     subscription: subscription
       ? {
           plan_code: subscription.plan_code,
-          plan_name: subscription.plan_code === "developer"
-            ? "开发者版"
-            : subscription.plan_code === "free"
-              ? "免费版"
-              : "未识别方案",
+          plan_name: planName(subscription.plan_code),
           status: subscription.status,
           billing_interval: subscription.billing_interval,
           current_period_end: subscription.current_period_end,
@@ -201,15 +199,15 @@ export async function getBillingOverview(
         name: "免费版",
         availability: "available",
         description: "本地核心能力与基础云账户",
-        features: ["完整本地会话与离线使用", "本地基础动态记忆", "多模型自由接入（本地模型 / 自备 API Key）", "云账户与设备会话管理", "本地数据自主备份"],
+        features: ["完整本地会话与离线使用", "本地基础动态记忆", "多模型自由接入（本地模型 / 自备 API Key）", "云账户与设备会话管理", "本地数据自主备份", "本地 MCP 接入"],
         options: [],
       },
       {
         code: "developer",
-        name: "开发者版",
+        name: "专业版 Pro",
         availability: "upcoming",
         description: "为多设备和高级记忆工作流准备",
-        features: ["全部免费版权益", "加密云端记忆同步", "多设备增量同步与冲突历史", "高级经验沉淀与记忆参数自定义"],
+        features: ["全部免费版权益", "加密云端记忆同步", "多设备增量同步与冲突历史", "跨设备 MCP 接入", "高级经验沉淀与记忆参数自定义"],
         options: DEVELOPER_OPTIONS.map((spec) => ({
           interval: spec.interval,
           label: displayLabel(
@@ -231,7 +229,7 @@ export async function getBillingOverview(
         name: "团队版",
         availability: "planned",
         description: "为共享记忆边界与组织治理准备",
-        features: ["全部开发者版权益", "团队工作区与共享记忆空间", "成员角色与访问权限", "团队审计记录与设备治理", "按席位统一账单"],
+        features: ["全部专业版权益", "团队工作区与共享记忆空间", "成员角色与访问权限", "团队 MCP 空间", "团队审计记录与设备治理", "按席位统一账单"],
         options: [],
       },
     ],

@@ -132,6 +132,10 @@ async function stripeSignature(payload: string, secret: string): Promise<string>
 
 beforeEach(async () => {
   await resetDatabase();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM team_members"),
+    env.DB.prepare("DELETE FROM team_workspaces"),
+  ]);
 });
 
 describe("lingshu-cloud account service", () => {
@@ -261,6 +265,20 @@ describe("lingshu-cloud account service", () => {
     expect(html).toContain("当前尚不提供忘记密码、修改密码、删除账户和记忆同步");
   });
 
+  it("publishes the corrected product editions and enterprise contact entry", async () => {
+    const response = await request("/billing", { method: "GET" });
+    const html = await response.text();
+    expect(html).toContain("专业版 <small>Pro</small>");
+    expect(html).toContain("企业版 <small>Enterprise</small>");
+    expect(html).toContain("嵌入版 <small>Embedded / OEM</small>");
+    expect(html).toContain("mailto:admin@lingeringdream.com?subject=%E7%81%B5%E6%9E%A2%E4%BC%81%E4%B8%9A%E7%89%88%E5%92%A8%E8%AF%A2&amp;body=");
+    expect(html).toContain("%E7%A7%B0%E5%91%BC%EF%BC%9A%5B%E8%AF%B7%E5%A1%AB%E5%86%99%5D");
+    expect(html).toContain("%E8%81%94%E7%B3%BB%E6%96%B9%E5%BC%8F%EF%BC%9A");
+    expect(html).toContain("%E8%81%8C%E4%BD%8D%EF%BC%9A");
+    expect(html).toContain("%E5%85%AC%E5%8F%B8%E6%88%96%E7%BB%84%E7%BB%87%EF%BC%9A");
+    expect(html).not.toContain("<h3>开发者版</h3>");
+  });
+
   it("publishes the Windows drive download and GitHub fallback", async () => {
     const response = await request("/downloads.json", { method: "GET" });
     expect(response.status).toBe(200);
@@ -271,7 +289,11 @@ describe("lingshu-cloud account service", () => {
     expect(manifest.access_code).toBe("9jtk");
     expect(manifest.downloads.windows.url).toBe("https://wwbty.lanzouv.com/iXoAg46szc6h");
     expect(manifest.downloads.windows.sha256).toBe("1d879c55de0556513975f27b7b1e0ab2cbf5afff5a878dad275e692658a65583");
-    expect(manifest.downloads.macos.url).toBe("");
+    expect(manifest.downloads.macos.url).toBe("https://wwbty.lanzouv.com/iM0G646trhod");
+    expect(manifest.downloads.linux_deb.url).toBe("https://wwbty.lanzouv.com/i9nDu46uc42j");
+    expect(manifest.downloads.linux_deb.access_code).toBe("hrbk");
+    expect(manifest.downloads.linux_appimage.url).toBe("https://wwbty.lanzouv.com/iDBQ646uck8b");
+    expect(manifest.downloads.linux_appimage.access_code).toBe("gn19");
     expect(manifest.downloads.windows.github_url).toContain("/releases/download/v1.5.2/");
     expect(manifest.downloads.macos.github_url).toContain("/releases/download/v1.5.2/");
   });
@@ -554,6 +576,38 @@ describe("lingshu-cloud account service", () => {
     expect((await responseJson(checkoutResponse)).error.code).toBe("BILLING_NOT_CONFIGURED");
   });
 
+  it("recognizes an active team test entitlement", async () => {
+    const { verified, login } = await loginVerifiedAccount("team-plan@example.com");
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO billing_customers
+          (user_id, provider, provider_customer_id, created_at, updated_at)
+         VALUES (?, 'stripe', ?, ?, ?)`,
+      ).bind(verified.user.id, "cus_lingshu_team_test", now, now),
+      env.DB.prepare(
+        `INSERT INTO subscriptions
+          (user_id, provider, provider_customer_id, provider_subscription_id,
+           price_id, plan_code, billing_interval, status, current_period_end,
+           cancel_at_period_end, created_at, updated_at)
+         VALUES (?, 'stripe', ?, ?, NULL, 'team', NULL, 'active', NULL, 0, ?, ?)`,
+      ).bind(verified.user.id, "cus_lingshu_team_test", "sub_lingshu_team_test", now, now),
+    ]);
+
+    const overview = await responseJson(
+      await request("/api/v1/account/subscription", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${login.access_token}` },
+      }),
+    );
+    expect(overview.subscription).toMatchObject({
+      plan_code: "team",
+      plan_name: "团队版",
+      status: "active",
+      entitlement_active: true,
+    });
+  });
+
   it("creates a hosted Stripe subscription Checkout session for an authenticated user", async () => {
     const { login } = await loginVerifiedAccount("checkout@example.com");
     const calls: Array<{ url: string; body: string }> = [];
@@ -742,5 +796,142 @@ describe("lingshu-cloud account service", () => {
       plan_code: "unrecognized",
       entitlement_active: false,
     });
+  });
+});
+
+describe("team page gate", () => {
+  const TEAM_REQUIRED = "http://localhost/billing?team=required";
+
+  async function signIn(email: string) {
+    await registerAndVerify(email);
+    const response = await request("/api/v1/auth/login", {
+      ...jsonInit({ email, password: "correct horse battery staple", device_name: "Gate browser", platform: "web" }),
+      headers: { Origin: "http://localhost", "Content-Type": "application/json" },
+    });
+    const tokens = await responseJson(response);
+    const account = await responseJson(
+      await request("/api/v1/account", { method: "GET", headers: { Authorization: `Bearer ${tokens.access_token}` } }),
+    );
+    return { accessToken: tokens.access_token, cookie: response.headers.get("Set-Cookie")!.split(";")[0], userId: account.user.id as string };
+  }
+
+  // subscriptions.provider_customer_id is a FK to billing_customers, so the
+  // customer row has to exist first.
+  async function grantPlan(userId: string, planCode: string, status = "active", periodEnd: string | null = null) {
+    const now = new Date().toISOString();
+    const customerId = `cus_${userId}`;
+    await env.DB.prepare(
+      `INSERT INTO billing_customers (user_id, provider, provider_customer_id, created_at, updated_at)
+       VALUES (?, 'stripe', ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         provider_customer_id = excluded.provider_customer_id, updated_at = excluded.updated_at`,
+    ).bind(userId, customerId, now, now).run();
+    await env.DB.prepare(
+      `INSERT INTO subscriptions
+         (user_id, provider, provider_customer_id, provider_subscription_id,
+          price_id, plan_code, billing_interval, status, current_period_end,
+          cancel_at_period_end, created_at, updated_at)
+       VALUES (?, 'stripe', ?, ?, NULL, ?, 'month', ?, ?, 0, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         plan_code = excluded.plan_code, status = excluded.status,
+         current_period_end = excluded.current_period_end, updated_at = excluded.updated_at`,
+    ).bind(userId, customerId, `sub_${userId}_${planCode}`, planCode, status, periodEnd, now, now).run();
+  }
+
+  it.each([
+    ["free", "active", null, 403],
+    ["pro", "active", null, 403],
+    ["enterprise", "active", null, 403],
+    ["team", "active", null, 201],
+    ["team", "active", "2020-01-01T00:00:00Z", 403],
+    ["embedded", "active", null, 403],
+  ] as const)("enforces %s %s %s at the creation API", async (plan, status, end, expected) => {
+    const { accessToken, userId } = await signIn(`policy-${plan}@example.com`);
+    await grantPlan(userId, plan, status, end);
+    const response = await request("/api/v1/teams", {
+      ...jsonInit({ name: "Policy team", plan_code: "enterprise", entitlement_active: true }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+    });
+    expect(response.status).toBe(expected);
+    const overview = await responseJson(await request("/api/v1/account/subscription", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }));
+    expect(overview.entitlements.features.find((f: { code: string }) => f.code === "team_create").enabled).toBe(expected === 201);
+  });
+
+  function grantTeamPlan(userId: string, status = "active", periodEnd: string | null = null) {
+    return grantPlan(userId, "team", status, periodEnd);
+  }
+
+  async function makeTeamMember(userId: string, email: string) {
+    const teamId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO team_workspaces (id, name, created_at) VALUES (?, 'Gate team', ?)").bind(teamId, now),
+      env.DB.prepare("INSERT INTO team_members (team_id, cloud_user_id, email, role, created_at) VALUES (?, ?, ?, 'editor', ?)").bind(teamId, userId, email, now),
+    ]);
+  }
+
+  it("redirects a signed-out visitor to billing", async () => {
+    const response = await request("/team");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe(TEAM_REQUIRED);
+  });
+
+  it("redirects a visitor with a forged cookie", async () => {
+    const response = await request("/team", { headers: { Cookie: "__Host-lingshu_browser=not.a.real.token" } });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe(TEAM_REQUIRED);
+  });
+
+  it("redirects a free-plan account", async () => {
+    const { cookie } = await signIn("gate-free@example.com");
+    const response = await request("/team", { headers: { Cookie: cookie } });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe(TEAM_REQUIRED);
+  });
+
+  it("redirects a developer-plan account", async () => {
+    const { cookie, userId } = await signIn("gate-dev@example.com");
+    await grantPlan(userId, "developer");
+    const response = await request("/team", { headers: { Cookie: cookie } });
+    expect(response.headers.get("Location")).toBe(TEAM_REQUIRED);
+  });
+
+  it("admits an active team plan", async () => {
+    const { cookie, userId } = await signIn("gate-team@example.com");
+    await grantTeamPlan(userId);
+    const response = await request("/team", { headers: { Cookie: cookie } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Location")).toBeNull();
+  });
+
+  it("admits an invited member who is still on the free plan", async () => {
+    const email = "gate-member@example.com";
+    const { cookie, userId } = await signIn(email);
+    await makeTeamMember(userId, email);
+    const response = await request("/team", { headers: { Cookie: cookie } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Location")).toBeNull();
+  });
+
+  it("redirects when the team plan lapsed", async () => {
+    const { cookie, userId } = await signIn("gate-lapsed@example.com");
+    const past = new Date(Date.now() - 86_400_000).toISOString();
+    await grantTeamPlan(userId, "past_due", past);
+    const response = await request("/team", { headers: { Cookie: cookie } });
+    expect(response.headers.get("Location")).toBe(TEAM_REQUIRED);
+  });
+
+  it("gates /team/index.html as well", async () => {
+    const response = await request("/team/index.html");
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe(TEAM_REQUIRED);
+  });
+
+  it("leaves other account routes public", async () => {
+    for (const path of ["/", "/account", "/billing", "/devices", "/docs", "/download"]) {
+      expect((await request(path)).headers.get("Location"), path).toBeNull();
+    }
   });
 });

@@ -1,0 +1,20 @@
+[package]
+name = "lingshu-mcp-core"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[lib]
+name = "lingshu_mcp_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = "0.6"
