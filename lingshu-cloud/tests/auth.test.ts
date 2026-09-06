@@ -284,17 +284,18 @@ describe("lingshu-cloud account service", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     const manifest = await responseJson(response);
-    expect(manifest.version).toBe("1.5.2");
+    expect(manifest.version).toBe("1.6.0");
     expect(manifest.github_requires_access).toBe(true);
-    expect(manifest.access_code).toBe("9jtk");
-    expect(manifest.downloads.windows.url).toBe("https://wwbty.lanzouv.com/iXoAg46szc6h");
-    expect(manifest.downloads.windows.sha256).toBe("1d879c55de0556513975f27b7b1e0ab2cbf5afff5a878dad275e692658a65583");
+    expect(manifest.access_code).toBe("cx6i");
+    expect(manifest.downloads.windows.url).toBe("https://wwbty.lanzouv.com/b01giajdba");
+    expect(manifest.downloads.windows.access_code).toBe("cx6i");
+    expect(manifest.downloads.windows.sha256).toBe("8dc04ab5ef71c991f287ac5979c418d77ed8161713f01c3ce707400e59ba7df7");
     expect(manifest.downloads.macos.url).toBe("https://wwbty.lanzouv.com/iM0G646trhod");
     expect(manifest.downloads.linux_deb.url).toBe("https://wwbty.lanzouv.com/i9nDu46uc42j");
     expect(manifest.downloads.linux_deb.access_code).toBe("hrbk");
     expect(manifest.downloads.linux_appimage.url).toBe("https://wwbty.lanzouv.com/iDBQ646uck8b");
     expect(manifest.downloads.linux_appimage.access_code).toBe("gn19");
-    expect(manifest.downloads.windows.github_url).toContain("/releases/download/v1.5.2/");
+    expect(manifest.downloads.windows.github_url).toContain("/releases/download/v1.6.0/");
     expect(manifest.downloads.macos.github_url).toContain("/releases/download/v1.5.2/");
   });
 
