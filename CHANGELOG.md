@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-09-06
+
+### Version 1.6.1
+
+- `feat(eval)`: add the standalone `crates/lingshu-eval` harness. It links the production ranking code directly, so measured behaviour is the behaviour that ships — no second copy of the scorer.
+- `feat(eval)`: report the full official metric set — Accuracy, P@1/P@3/P@5, R@5, Hit@5, MRR and evidence-support Sup@5 — instead of Hit@5 alone.
+- `feat(eval)`: add the public LoCoMo dataset (10 conversations / 5,882 memories / 1,977 QA, CC BY-NC 4.0) with frozen offline MiniLM embeddings, plus ablation, conflict-governance, multi-Agent permission, latency, memory-footprint and open-domain task-completion experiments.
+- `feat(eval)`: add an end-to-end QA F1 measurement (retrieval + local generation + LLM-as-judge) and a real resident-set-size probe measured in isolated child processes.
+- `fix(retrieval)`: teach `for_query` English before/after markers and a new aggregation intent, so summary-style questions stop being ranked by recency.
+- `perf(retrieval)`: rewrite `lexical_similarity` as packed-u64 merge scanning — roughly 20x faster, with an equivalence test proving identical output.
+- `docs`: rewrite the competition experiment report with a requirement-to-evidence mapping table, per-difficulty results, measured RSS, and an explicit resolved / unresolved evidence boundary section.
+- `ux(downloads)`: drop the GitHub download buttons from the download hub. Builds are now distributed through the network drive only, and the docs, FAQ and status copy were updated to match.
+
+### Version 1.6.0
+
+- `feat(mcp)`: add `crates/lingshu-mcp` and `crates/lingshu-mcp-core`, a stdio MCP server that exposes the memory gateway to any MCP-capable AI tool (`lingshu_recall` / `lingshu_store` / `lingshu_grant` / `lingshu_conflicts` / `lingshu_resolve_conflict` / `lingshu_stats`). Each tool identifies itself with an `agent_id`, which maps naturally onto the multi-Agent memory model.
+- `feat(teams)`: add team workspaces — create and join a team, member roles, email and in-app invitations, Agent credentials, team memory read/write, and an audit trail.
+- `feat(entitlements)`: centralise the three-tier `free` / `pro` / `team` policy on the server. Subscription rows are never accepted from clients, and an expiry date always wins over a stale `active` status.
+- `fix(entitlements)`: show team entitlements to invited members. Membership now grants the team feature set even when the member keeps a free personal plan — only creating a *new* workspace requires a paid team subscription.
+- `feat(desktop)`: add an "AI tools" settings panel and bundle the `lingshu-mcp` sidecar in the desktop installer.
+- `feat(memory)`: add write coordination for concurrent memory writes and a dedicated team memory space.
+
 ## 2026-09-04
 
 ### Version 1.5.2
