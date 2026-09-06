@@ -90,7 +90,7 @@ function TeamWorkspaceSession() {
     <fieldset disabled={busy} className="team-setup">
       <form onSubmit={e => { e.preventDefault(); if (!canCreate) return; void act(async () => { const t = await request<Team>('/api/v1/teams', { name }); await loadTeams(); setSelected(t.id); setName(''); setMessage('团队已创建'); }); }}>
         <label>新团队名称<input required maxLength={100} value={name} onChange={e => setName(e.target.value)} placeholder="例如：研发知识团队" /></label><button disabled={!canCreate}>创建团队</button>
-        {!canCreate && <p>{account.entitlements ? '创建团队需要有效的 Team 权益；免费账号可通过邀请加入。' : '版本权益尚未获取，请到云账户刷新账户信息。'}</p>}
+        {!canCreate && <p>{account.entitlements?.access_source === 'team_membership' ? '当前为受邀团队成员；创建新的团队需要单独开通团队版订阅。' : account.entitlements ? '创建团队需要有效的 Team 权益；免费账号可通过邀请加入。' : '版本权益尚未获取，请到云账户刷新账户信息。'}</p>}
       </form>
       <form onSubmit={e => { e.preventDefault(); void act(async () => { const t = await request<Team>('/api/v1/teams/join', { token: join.trim() }); await loadTeams(); setSelected(t.id); setJoin(''); setMessage('已加入团队'); }); }}>
         <label>邀请码<input required value={join} onChange={e => setJoin(e.target.value)} placeholder="使用受邀邮箱登录后输入" autoComplete="off" /></label><button>加入团队</button>

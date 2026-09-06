@@ -4,6 +4,12 @@ import { getPlatformCapabilities, isTauri } from '../../lib/tauri';
 import { useCloudAccountStore } from '../../stores/cloudAccountStore';
 import './CloudAccountPanel.css';
 
+function planLabel(code?: string) {
+  if (code === 'team') return '团队版 Team';
+  if (code === 'pro') return '专业版 Pro';
+  return '免费版 Free';
+}
+
 export function CloudAccountPanel() {
   const { account, busy, initialized, error, login, logout, reload, browserPending, loginWithBrowser, cancelBrowserLogin } = useCloudAccountStore();
   const [email, setEmail] = useState('');
@@ -40,13 +46,13 @@ export function CloudAccountPanel() {
             <div><h3>{account.user.display_name}</h3><p>{account.user.email}</p><span className="cloud-account-verified">邮箱已验证</span></div>
           </div>
           <dl className="cloud-account-details">
-            <div><dt>当前订阅</dt><dd>{account.subscription?.plan_name || '暂未获取'}{account.subscription && !account.subscription.entitlement_active ? '（权益未生效）' : ''}</dd></div>
+            <div><dt>当前版本</dt><dd>{account.entitlements ? planLabel(account.entitlements.effective_plan) : account.subscription?.plan_name || '暂未获取'}{account.entitlements?.access_source === 'team_membership' ? '（受邀成员）' : account.subscription && !account.subscription.entitlement_active ? '（权益未生效）' : ''}</dd></div>
             <div><dt>当前设备</dt><dd>{account.device.name}</dd></div>
             <div><dt>设备平台</dt><dd>{account.device.platform}</dd></div>
             {account.subscription?.current_period_end && <div><dt>订阅到期</dt><dd>{new Date(account.subscription.current_period_end).toLocaleDateString('zh-CN')}</dd></div>}
           </dl>
           {account.entitlements && <div className="cloud-account-note" aria-label="版本权益">
-            <strong>当前生效版本：{account.entitlements.effective_plan.toUpperCase()}</strong>
+            <strong>当前生效版本：{planLabel(account.entitlements.effective_plan)}{account.entitlements.access_source === 'team_membership' ? '（受邀成员）' : ''}</strong>
             <dl className="cloud-account-details">{account.entitlements.features.map(feature => <div key={feature.code}>
               <dt>{feature.name}</dt><dd>{!feature.available ? '尚未开放' : feature.enabled ? '可用' : `需要 ${feature.plans.map(plan => plan.toUpperCase()).join(' / ')}`}</dd>
             </div>)}</dl>

@@ -30,6 +30,7 @@ export interface CloudSubscription {
 }
 export interface ProductEntitlements {
   effective_plan: string;
+  access_source?: 'free' | 'subscription' | 'team_membership';
   features: Array<{ code: string; name: string; plans: string[]; included: boolean; available: boolean; enabled: boolean }>;
 }
 export interface CloudAccount {

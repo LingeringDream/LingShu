@@ -31,12 +31,28 @@ const features = [
   { code: "team_create", name: "创建团队工作区", plans: ["team"], available: true },
 ] as const;
 
-export function getEntitlements(row: SubscriptionState | null, now = Date.now()) {
-  const plan: Plan = subscriptionIsEntitled(row, now) ? normalizePlan(row!.plan_code)! : "free";
+export function getEntitlements(
+  row: SubscriptionState | null,
+  now = Date.now(),
+  hasTeamMembership = false,
+) {
+  const subscriptionPlan: Plan = subscriptionIsEntitled(row, now)
+    ? normalizePlan(row!.plan_code)!
+    : "free";
+  const plan: Plan = hasTeamMembership ? "team" : subscriptionPlan;
   return {
     effective_plan: plan,
+    access_source: hasTeamMembership && subscriptionPlan !== "team"
+      ? "team_membership"
+      : subscriptionPlan === "free"
+        ? "free"
+        : "subscription",
     features: features.map(feature => {
-      const included = (feature.plans as readonly string[]).includes(plan);
+      // A team seat grants use of its workspace, but only a paid Team
+      // subscription may create another workspace.
+      const included = feature.code === "team_create"
+        ? subscriptionPlan === "team"
+        : (feature.plans as readonly string[]).includes(plan);
       return { code: feature.code, name: feature.name, plans: feature.plans, included,
         available: feature.available, enabled: included && feature.available };
     }),

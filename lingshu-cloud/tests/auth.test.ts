@@ -608,6 +608,31 @@ describe("lingshu-cloud account service", () => {
     });
   });
 
+  it("shows an invited free account as Team without granting team creation", async () => {
+    const email = "invited-free-plan@example.com";
+    const { verified, login } = await loginVerifiedAccount(email);
+    const teamId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO team_workspaces (id, name, created_at) VALUES (?, 'Invited team', ?)")
+        .bind(teamId, now),
+      env.DB.prepare("INSERT INTO team_members (team_id, cloud_user_id, email, role, created_at) VALUES (?, ?, ?, 'editor', ?)")
+        .bind(teamId, verified.user.id, email, now),
+    ]);
+
+    const overview = await responseJson(await request("/api/v1/account/subscription", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${login.access_token}` },
+    }));
+    expect(overview.subscription).toMatchObject({ plan_code: "free" });
+    expect(overview.entitlements).toMatchObject({
+      effective_plan: "team",
+      access_source: "team_membership",
+    });
+    expect(overview.entitlements.features.find((feature: { code: string }) => feature.code === "team_create"))
+      .toMatchObject({ included: false, enabled: false });
+  });
+
   it("creates a hosted Stripe subscription Checkout session for an authenticated user", async () => {
     const { login } = await loginVerifiedAccount("checkout@example.com");
     const calls: Array<{ url: string; body: string }> = [];

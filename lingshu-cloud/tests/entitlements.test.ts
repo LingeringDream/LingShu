@@ -20,6 +20,17 @@ describe("product entitlements", () => {
       expect(result.features.filter(f => !f.available).every(f => !f.enabled)).toBe(true);
     }
   });
+  it("shows an invited free account as Team without granting team creation", () => {
+    const result = getEntitlements(null, now, true);
+    expect(result).toMatchObject({
+      effective_plan: "team",
+      access_source: "team_membership",
+    });
+    expect(result.features.find(f => f.code === "team_create")).toMatchObject({
+      included: false,
+      enabled: false,
+    });
+  });
   it("only exposes three personal-product editions and excludes business entitlements", () => {
     for (const plan_code of ["enterprise", "embedded"]) {
       const result = getEntitlements({ plan_code, status: "active", current_period_end: null });

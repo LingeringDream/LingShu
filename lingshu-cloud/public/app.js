@@ -560,6 +560,7 @@ function renderBilling() {
   const data = state.billing;
   if (!data) return;
   const subscription = data.subscription || {};
+  const entitlements = data.entitlements || {};
   const billing = data.billing || {};
   const statusLabels = {
     active: "已生效",
@@ -571,12 +572,22 @@ function renderBilling() {
     unpaid: "未付款",
     paused: "已暂停",
   };
-  elements.currentPlanName.textContent = subscription.plan_name || "免费版";
-  elements.subscriptionStatus.textContent = statusLabels[subscription.status] || "状态未知";
-  elements.subscriptionStatus.dataset.status = subscription.status || "unknown";
+  const effectivePlanNames = { free: "免费版", pro: "专业版 Pro", team: "团队版" };
+  elements.currentPlanName.textContent = effectivePlanNames[entitlements.effective_plan]
+    || subscription.plan_name
+    || "免费版";
+  const isInvitedTeamMember = entitlements.access_source === "team_membership";
+  elements.subscriptionStatus.textContent = isInvitedTeamMember
+    ? "受邀成员"
+    : statusLabels[subscription.status] || "状态未知";
+  elements.subscriptionStatus.dataset.status = isInvitedTeamMember
+    ? "active"
+    : subscription.status || "unknown";
 
   const periodEnd = formatBillingDate(subscription.current_period_end);
-  if (subscription.plan_code === "team") {
+  if (isInvitedTeamMember) {
+    elements.currentPlanDetail.textContent = "已加入团队版工作区；创建新的团队需要单独开通团队版订阅";
+  } else if (subscription.plan_code === "team") {
     elements.currentPlanDetail.textContent = "团队版测试权益已生效，包含团队工作区、共享记忆与团队 MCP 空间";
   } else if (subscription.cancel_at_period_end && periodEnd) {
     elements.currentPlanDetail.textContent = `已取消自动续费，可使用至 ${periodEnd}`;

@@ -156,7 +156,7 @@ export async function getBillingOverview(
   env: AppEnv,
   auth: AuthContext,
 ): Promise<Record<string, unknown>> {
-  const [customer, subscription] = await Promise.all([
+  const [customer, subscription, teamMembership] = await Promise.all([
     env.DB.prepare(
       "SELECT user_id, provider_customer_id FROM billing_customers WHERE user_id = ?",
     )
@@ -165,11 +165,14 @@ export async function getBillingOverview(
     env.DB.prepare("SELECT * FROM subscriptions WHERE user_id = ?")
       .bind(auth.userId)
       .first<SubscriptionRow>(),
+    env.DB.prepare("SELECT 1 AS present FROM team_members WHERE cloud_user_id = ? LIMIT 1")
+      .bind(auth.userId)
+      .first<{ present: number }>(),
   ]);
   const entitled = subscriptionIsEntitled(subscription);
   const configured = isBillingConfigured(env);
   return {
-    entitlements: getEntitlements(subscription),
+    entitlements: getEntitlements(subscription, Date.now(), Boolean(teamMembership)),
     subscription: subscription
       ? {
           plan_code: subscription.plan_code,
