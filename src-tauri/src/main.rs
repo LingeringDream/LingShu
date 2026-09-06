@@ -104,6 +104,7 @@ async fn wait_for_backend(port: u16, timeout: std::time::Duration) -> bool {
     false
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn parse_lsof_pids(output: &str) -> Vec<u32> {
     output
         .lines()
@@ -111,6 +112,7 @@ fn parse_lsof_pids(output: &str) -> Vec<u32> {
         .collect()
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn command_looks_like_lingshu_sidecar(command: &str) -> bool {
     let command = command.trim();
     if command.is_empty() {
@@ -122,6 +124,7 @@ fn command_looks_like_lingshu_sidecar(command: &str) -> bool {
     })
 }
 
+#[cfg(any(test, target_os = "macos"))]
 fn command_looks_like_bundled_lingshu_sidecar(command: &str) -> bool {
     command.contains(".app/Contents/MacOS/") && command_looks_like_lingshu_sidecar(command)
 }
@@ -825,6 +828,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(main["visible"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn desktop_bundle_includes_server_and_memory_mcp_sidecars() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let sidecars = config["bundle"]["externalBin"].as_array().unwrap();
+        assert!(sidecars.iter().any(|value| value == "binaries/lingshu-server"));
+        assert!(sidecars.iter().any(|value| value == "binaries/lingshu-mcp"));
     }
 
     #[test]

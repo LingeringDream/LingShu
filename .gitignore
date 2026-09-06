@@ -78,6 +78,7 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/icons/icon.iconset/
 src-tauri/binaries/lingshu-server-*
+src-tauri/binaries/lingshu-mcp-*
 src-tauri/resources/vcruntime140.dll
 
 # Misc

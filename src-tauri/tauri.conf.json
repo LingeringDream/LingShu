@@ -50,7 +50,8 @@
     "targets": "all",
     "useLocalToolsDir": true,
     "externalBin": [
-      "binaries/lingshu-server"
+      "binaries/lingshu-server",
+      "binaries/lingshu-mcp"
     ],
     "icon": [
       "icons/32x32.png",

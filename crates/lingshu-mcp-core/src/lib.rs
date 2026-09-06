@@ -77,7 +77,7 @@ impl McpCore {
             "result":{
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities":{"tools":{}},
-                "serverInfo":{"name":"lingshu-memory","version":"1.5.2"}
+                "serverInfo":{"name":"lingshu-memory","version":env!("CARGO_PKG_VERSION")}
             }
         })
     }

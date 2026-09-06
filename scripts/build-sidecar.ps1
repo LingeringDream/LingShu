@@ -16,19 +16,27 @@ if ($Target -notlike '*-windows-*') {
     throw "build-sidecar.ps1 only packages the self-contained Windows sidecar (target: $Target)"
 }
 
-Write-Host "Building self-contained lingshu-server for $Target"
+Write-Host "Building self-contained lingshu-server and lingshu-mcp for $Target"
 cargo build -p lingshu-server --release --target $Target --features desktop-embedded-db
 if ($LASTEXITCODE -ne 0) {
-    throw "Sidecar build failed with exit code $LASTEXITCODE"
+    throw "Server sidecar build failed with exit code $LASTEXITCODE"
+}
+cargo build -p lingshu-mcp --release --target $Target
+if ($LASTEXITCODE -ne 0) {
+    throw "MCP sidecar build failed with exit code $LASTEXITCODE"
 }
 
-$source = Join-Path $repoRoot "target\$Target\release\lingshu-server.exe"
 $binaryDirectory = Join-Path $repoRoot "src-tauri\binaries"
-$destination = Join-Path $binaryDirectory "lingshu-server-$Target.exe"
 New-Item -ItemType Directory -Path $binaryDirectory -Force | Out-Null
-Copy-Item -LiteralPath $source -Destination $destination -Force
-
-Write-Host "Sidecar binary placed at $destination"
+foreach ($binaryName in @("lingshu-server", "lingshu-mcp")) {
+    $source = Join-Path $repoRoot "target\$Target\release\$binaryName.exe"
+    $destination = Join-Path $binaryDirectory "$binaryName-$Target.exe"
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Built sidecar is missing: $source"
+    }
+    Copy-Item -LiteralPath $source -Destination $destination -Force
+    Write-Host "Sidecar binary placed at $destination"
+}
 
 # The bundled PostgreSQL executables and the Rust sidecar both use the
 # Microsoft C runtime. Developer machines usually already have it through

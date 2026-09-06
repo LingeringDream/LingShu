@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the lingshu-server sidecar binary for bundling into the Tauri .app.
+# Build the lingshu-server and lingshu-mcp sidecar binaries for Tauri bundles.
 # Can be run from anywhere — auto-locates the repository root.
 #
 # By default the sidecar carries its own PostgreSQL runtime (cargo feature
@@ -42,8 +42,6 @@ if [ -z "$TARGET" ]; then
 fi
 
 BIN_DIR="src-tauri/binaries"
-SRC="target/$TARGET/release/lingshu-server"
-DST="$BIN_DIR/lingshu-server-$TARGET"
 
 echo "→ Building lingshu-server for $TARGET"
 
@@ -58,10 +56,20 @@ else
     cargo build -p lingshu-server --release --target "$TARGET"
 fi
 
-mkdir -p "$BIN_DIR"
-cp "$SRC" "$DST"
-chmod +x "$DST"
+echo "→ Building lingshu-mcp for $TARGET"
+cargo build -p lingshu-mcp --release --target "$TARGET"
 
-echo "✓ Sidecar binary placed at $DST"
+mkdir -p "$BIN_DIR"
+for binary in lingshu-server lingshu-mcp; do
+    src="target/$TARGET/release/$binary"
+    dst="$BIN_DIR/$binary-$TARGET"
+    if [ ! -f "$src" ]; then
+        echo "Missing built sidecar: $src" >&2
+        exit 1
+    fi
+    cp "$src" "$dst"
+    chmod +x "$dst"
+    echo "✓ Sidecar binary placed at $dst"
+done
 echo ""
 echo "Next: cd frontend && npm run tauri build"
