@@ -1,0 +1,950 @@
+{
+ "name": "LingShu-ZTE-60Turn-v2",
+ "description": "可复现的 60 轮时序记忆、冲突、过期与噪声检索样本；v2 将查询从 12 扩充到 54，覆盖全部 active 事实，单查询分辨率约 1.85pp；6 个事实变更查询标记 group=fact-change，用于难易分层的达标对照。",
+ "turns": [
+  {
+   "turn": 1,
+   "id": "m01",
+   "content": "用户目前常住北京",
+   "fact_key": "profile.city",
+   "value": "北京",
+   "age_days": 90,
+   "importance": 0.96,
+   "trust": 0.55,
+   "access": 8,
+   "state": "superseded"
+  },
+  {
+   "turn": 2,
+   "id": "m02",
+   "content": "项目现在主要使用 Python 技术栈",
+   "fact_key": "project.stack",
+   "value": "Python",
+   "age_days": 88,
+   "importance": 0.95,
+   "trust": 0.58,
+   "access": 7,
+   "state": "superseded"
+  },
+  {
+   "turn": 3,
+   "id": "m03",
+   "content": "项目交付截止日期是 9 月 5 日",
+   "fact_key": "project.deadline",
+   "value": "9月5日",
+   "age_days": 85,
+   "importance": 0.97,
+   "trust": 0.6,
+   "access": 9,
+   "state": "superseded"
+  },
+  {
+   "turn": 4,
+   "id": "m04",
+   "content": "团队目前共有 3 名成员",
+   "fact_key": "team.size",
+   "value": "3",
+   "age_days": 82,
+   "importance": 0.94,
+   "trust": 0.6,
+   "access": 8,
+   "state": "superseded"
+  },
+  {
+   "turn": 5,
+   "id": "m05",
+   "content": "用户当前偏好的编辑器是 Vim",
+   "fact_key": "preference.editor",
+   "value": "Vim",
+   "age_days": 80,
+   "importance": 0.93,
+   "trust": 0.62,
+   "access": 7,
+   "state": "superseded"
+  },
+  {
+   "turn": 6,
+   "id": "m06",
+   "content": "系统当前部署在云端虚拟机",
+   "fact_key": "deployment.target",
+   "value": "云端虚拟机",
+   "age_days": 78,
+   "importance": 0.92,
+   "trust": 0.61,
+   "access": 6,
+   "state": "superseded"
+  },
+  {
+   "turn": 7,
+   "id": "m07",
+   "content": "用户喜欢无糖咖啡",
+   "fact_key": "preference.coffee",
+   "value": "无糖",
+   "age_days": 76,
+   "importance": 0.64,
+   "trust": 0.75,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 8,
+   "id": "m08",
+   "content": "项目周会安排在周一上午",
+   "fact_key": "project.weekly",
+   "value": "周一上午",
+   "age_days": 74,
+   "importance": 0.62,
+   "trust": 0.72,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 9,
+   "id": "m09",
+   "content": "用户养了一只橘猫",
+   "fact_key": "profile.pet",
+   "value": "橘猫",
+   "age_days": 72,
+   "importance": 0.58,
+   "trust": 0.7,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 10,
+   "id": "m10",
+   "content": "项目使用 PostgreSQL 数据库",
+   "fact_key": "project.database",
+   "value": "PostgreSQL",
+   "age_days": 70,
+   "importance": 0.72,
+   "trust": 0.78,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 11,
+   "id": "m11",
+   "content": "用户偏好深色界面",
+   "fact_key": "preference.theme",
+   "value": "深色",
+   "age_days": 68,
+   "importance": 0.66,
+   "trust": 0.76,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 12,
+   "id": "m12",
+   "content": "项目代码托管在 GitHub",
+   "fact_key": "project.repository",
+   "value": "GitHub",
+   "age_days": 66,
+   "importance": 0.7,
+   "trust": 0.8,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 13,
+   "id": "m13",
+   "content": "用户通常上午处理复杂任务",
+   "fact_key": "preference.focus_time",
+   "value": "上午",
+   "age_days": 64,
+   "importance": 0.61,
+   "trust": 0.73,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 14,
+   "id": "m14",
+   "content": "项目采用 MIT 开源许可证",
+   "fact_key": "project.license",
+   "value": "MIT",
+   "age_days": 62,
+   "importance": 0.6,
+   "trust": 0.79,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 15,
+   "id": "m15",
+   "content": "用户希望回答保持简洁",
+   "fact_key": "preference.reply_style",
+   "value": "简洁",
+   "age_days": 60,
+   "importance": 0.68,
+   "trust": 0.77,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 16,
+   "id": "m16",
+   "content": "项目后端监听 8080 端口",
+   "fact_key": "project.port",
+   "value": "8080",
+   "age_days": 58,
+   "importance": 0.56,
+   "trust": 0.74,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 17,
+   "id": "m17",
+   "content": "项目使用 Redis 作为可选缓存",
+   "fact_key": "project.cache",
+   "value": "Redis",
+   "age_days": 56,
+   "importance": 0.59,
+   "trust": 0.76,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 18,
+   "id": "m18",
+   "content": "用户每周跑步两次",
+   "fact_key": "profile.exercise",
+   "value": "每周两次",
+   "age_days": 54,
+   "importance": 0.5,
+   "trust": 0.68,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 19,
+   "id": "m19",
+   "content": "项目界面使用 React",
+   "fact_key": "project.frontend",
+   "value": "React",
+   "age_days": 52,
+   "importance": 0.71,
+   "trust": 0.81,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 20,
+   "id": "m20",
+   "content": "用户的常用语言是中文",
+   "fact_key": "profile.language",
+   "value": "中文",
+   "age_days": 50,
+   "importance": 0.63,
+   "trust": 0.82,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 21,
+   "id": "m21",
+   "content": "项目向量库使用 Qdrant",
+   "fact_key": "project.vector",
+   "value": "Qdrant",
+   "age_days": 48,
+   "importance": 0.69,
+   "trust": 0.84,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 22,
+   "id": "m22",
+   "content": "用户不希望自动发送外部消息",
+   "fact_key": "preference.external_action",
+   "value": "禁止自动发送",
+   "age_days": 46,
+   "importance": 0.75,
+   "trust": 0.86,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 23,
+   "id": "m23",
+   "content": "项目桌面端基于 Tauri",
+   "fact_key": "project.desktop",
+   "value": "Tauri",
+   "age_days": 44,
+   "importance": 0.7,
+   "trust": 0.84,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 24,
+   "id": "m24",
+   "content": "用户偏好使用键盘快捷键",
+   "fact_key": "preference.input",
+   "value": "键盘快捷键",
+   "age_days": 42,
+   "importance": 0.57,
+   "trust": 0.71,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 25,
+   "id": "m25",
+   "content": "项目需要支持 macOS",
+   "fact_key": "project.platform",
+   "value": "macOS",
+   "age_days": 40,
+   "importance": 0.67,
+   "trust": 0.8,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 26,
+   "id": "m26",
+   "content": "用户周末通常不安排会议",
+   "fact_key": "preference.weekend",
+   "value": "不安排会议",
+   "age_days": 38,
+   "importance": 0.55,
+   "trust": 0.72,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 27,
+   "id": "m27",
+   "content": "项目日志默认使用结构化格式",
+   "fact_key": "project.logging",
+   "value": "结构化",
+   "age_days": 36,
+   "importance": 0.54,
+   "trust": 0.75,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 28,
+   "id": "m28",
+   "content": "用户希望数据本地优先",
+   "fact_key": "preference.privacy",
+   "value": "本地优先",
+   "age_days": 34,
+   "importance": 0.73,
+   "trust": 0.85,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 29,
+   "id": "m29",
+   "content": "项目测试框架使用 Vitest",
+   "fact_key": "project.frontend_test",
+   "value": "Vitest",
+   "age_days": 32,
+   "importance": 0.58,
+   "trust": 0.79,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 30,
+   "id": "m30",
+   "content": "用户希望保留记忆来源链",
+   "fact_key": "preference.provenance",
+   "value": "保留来源链",
+   "age_days": 30,
+   "importance": 0.76,
+   "trust": 0.88,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 31,
+   "id": "m31",
+   "content": "用户搬迁后定居上海",
+   "fact_key": "profile.city",
+   "value": "上海",
+   "age_days": 5,
+   "importance": 0.84,
+   "trust": 0.96,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 32,
+   "id": "m32",
+   "content": "后端已经迁移至 Rust",
+   "fact_key": "project.stack",
+   "value": "Rust",
+   "age_days": 4,
+   "importance": 0.86,
+   "trust": 0.97,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 33,
+   "id": "m33",
+   "content": "交付日顺延至 9 月 8 日",
+   "fact_key": "project.deadline",
+   "value": "9月8日",
+   "age_days": 3,
+   "importance": 0.9,
+   "trust": 0.98,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 34,
+   "id": "m34",
+   "content": "团队扩充至 5 人",
+   "fact_key": "team.size",
+   "value": "5",
+   "age_days": 3,
+   "importance": 0.83,
+   "trust": 0.95,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 35,
+   "id": "m35",
+   "content": "编辑器已经改用 VS Code",
+   "fact_key": "preference.editor",
+   "value": "VS Code",
+   "age_days": 2,
+   "importance": 0.82,
+   "trust": 0.94,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 36,
+   "id": "m36",
+   "content": "部署方案调整为端侧设备",
+   "fact_key": "deployment.target",
+   "value": "端侧设备",
+   "age_days": 1,
+   "importance": 0.88,
+   "trust": 0.96,
+   "access": 3,
+   "state": "active"
+  },
+  {
+   "turn": 37,
+   "id": "m37",
+   "content": "项目要求检索平均时延低于 600ms",
+   "fact_key": "target.latency",
+   "value": "600ms",
+   "age_days": 24,
+   "importance": 0.8,
+   "trust": 0.9,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 38,
+   "id": "m38",
+   "content": "项目要求记忆准确率达到 86%",
+   "fact_key": "target.accuracy",
+   "value": "86%",
+   "age_days": 23,
+   "importance": 0.82,
+   "trust": 0.91,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 39,
+   "id": "m39",
+   "content": "项目需要连续测试至少 50 轮",
+   "fact_key": "target.turns",
+   "value": "50",
+   "age_days": 22,
+   "importance": 0.84,
+   "trust": 0.92,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 40,
+   "id": "m40",
+   "content": "项目需要输出消融实验",
+   "fact_key": "target.ablation",
+   "value": "需要",
+   "age_days": 21,
+   "importance": 0.79,
+   "trust": 0.9,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 41,
+   "id": "m41",
+   "content": "检索候选包含场景标签",
+   "fact_key": "feature.scene_tags",
+   "value": "支持",
+   "age_days": 20,
+   "importance": 0.71,
+   "trust": 0.88,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 42,
+   "id": "m42",
+   "content": "记忆系统记录来源可信度",
+   "fact_key": "feature.source_trust",
+   "value": "支持",
+   "age_days": 19,
+   "importance": 0.73,
+   "trust": 0.89,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 43,
+   "id": "m43",
+   "content": "记忆网关区分私有和公共空间",
+   "fact_key": "feature.memory_scope",
+   "value": "支持",
+   "age_days": 18,
+   "importance": 0.75,
+   "trust": 0.91,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 44,
+   "id": "m44",
+   "content": "冲突事件必须可以审计",
+   "fact_key": "feature.conflict_audit",
+   "value": "支持",
+   "age_days": 17,
+   "importance": 0.72,
+   "trust": 0.9,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 45,
+   "id": "m45",
+   "content": "系统保存每次检索运行证据",
+   "fact_key": "feature.retrieval_run",
+   "value": "支持",
+   "age_days": 16,
+   "importance": 0.7,
+   "trust": 0.88,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 46,
+   "id": "m46",
+   "content": "三层记忆包括原始片段层",
+   "fact_key": "layer.episode",
+   "value": "原始片段",
+   "age_days": 15,
+   "importance": 0.68,
+   "trust": 0.86,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 47,
+   "id": "m47",
+   "content": "三层记忆包括结构化事实层",
+   "fact_key": "layer.fact",
+   "value": "结构化事实",
+   "age_days": 14,
+   "importance": 0.69,
+   "trust": 0.86,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 48,
+   "id": "m48",
+   "content": "三层记忆包括通用经验层",
+   "fact_key": "layer.experience",
+   "value": "通用经验",
+   "age_days": 13,
+   "importance": 0.7,
+   "trust": 0.87,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 49,
+   "id": "m49",
+   "content": "过期记忆会被标记为 stale",
+   "fact_key": "feature.stale",
+   "value": "支持",
+   "age_days": 12,
+   "importance": 0.66,
+   "trust": 0.85,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 50,
+   "id": "m50",
+   "content": "被替代事实不会进入自适应召回",
+   "fact_key": "feature.superseded",
+   "value": "过滤",
+   "age_days": 11,
+   "importance": 0.74,
+   "trust": 0.9,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 51,
+   "id": "m51",
+   "content": "用户喜欢在雨天听轻音乐",
+   "fact_key": "preference.music",
+   "value": "轻音乐",
+   "age_days": 10,
+   "importance": 0.51,
+   "trust": 0.7,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 52,
+   "id": "m52",
+   "content": "项目文档使用 Markdown",
+   "fact_key": "project.docs",
+   "value": "Markdown",
+   "age_days": 9,
+   "importance": 0.55,
+   "trust": 0.77,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 53,
+   "id": "m53",
+   "content": "用户希望重要参数可配置",
+   "fact_key": "preference.configurable",
+   "value": "可配置",
+   "age_days": 8,
+   "importance": 0.67,
+   "trust": 0.83,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 54,
+   "id": "m54",
+   "content": "项目演示视频目标时长为 3 到 5 分钟",
+   "fact_key": "target.video",
+   "value": "3-5分钟",
+   "age_days": 7,
+   "importance": 0.65,
+   "trust": 0.84,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 55,
+   "id": "m55",
+   "content": "项目交付包含部署手册",
+   "fact_key": "target.deploy_doc",
+   "value": "需要",
+   "age_days": 6,
+   "importance": 0.64,
+   "trust": 0.85,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 56,
+   "id": "m56",
+   "content": "项目交付包含架构图",
+   "fact_key": "target.architecture",
+   "value": "需要",
+   "age_days": 5,
+   "importance": 0.64,
+   "trust": 0.85,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 57,
+   "id": "m57",
+   "content": "项目交付包含标准化数据集",
+   "fact_key": "target.dataset",
+   "value": "需要",
+   "age_days": 4,
+   "importance": 0.68,
+   "trust": 0.87,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 58,
+   "id": "m58",
+   "content": "项目交付包含对比实验报告",
+   "fact_key": "target.report",
+   "value": "需要",
+   "age_days": 3,
+   "importance": 0.69,
+   "trust": 0.88,
+   "access": 1,
+   "state": "active"
+  },
+  {
+   "turn": 59,
+   "id": "m59",
+   "content": "系统支持静态 RAG 基线模式",
+   "fact_key": "feature.static_baseline",
+   "value": "支持",
+   "age_days": 2,
+   "importance": 0.72,
+   "trust": 0.89,
+   "access": 2,
+   "state": "active"
+  },
+  {
+   "turn": 60,
+   "id": "m60",
+   "content": "系统支持自适应多特征重排",
+   "fact_key": "feature.adaptive_rerank",
+   "value": "支持",
+   "age_days": 1,
+   "importance": 0.78,
+   "trust": 0.92,
+   "access": 2,
+   "state": "active"
+  }
+ ],
+ "queries": [
+  {
+   "query": "用户现在常住哪里",
+   "expected": "m31",
+   "group": "fact-change"
+  },
+  {
+   "query": "项目现在主要使用什么技术栈",
+   "expected": "m32",
+   "group": "fact-change"
+  },
+  {
+   "query": "项目最新交付截止日期是什么时候",
+   "expected": "m33",
+   "group": "fact-change"
+  },
+  {
+   "query": "团队目前共有多少名成员",
+   "expected": "m34",
+   "group": "fact-change"
+  },
+  {
+   "query": "用户现在偏好的编辑器是什么",
+   "expected": "m35",
+   "group": "fact-change"
+  },
+  {
+   "query": "系统当前优先部署在哪里",
+   "expected": "m36",
+   "group": "fact-change"
+  },
+  {
+   "query": "项目检索平均时延要求是多少",
+   "expected": "m37"
+  },
+  {
+   "query": "项目至少要连续测试多少轮",
+   "expected": "m39"
+  },
+  {
+   "query": "记忆网关如何区分私有和公共空间",
+   "expected": "m43"
+  },
+  {
+   "query": "三层记忆中的通用经验层是什么",
+   "expected": "m48"
+  },
+  {
+   "query": "系统是否支持静态 RAG 基线模式",
+   "expected": "m59"
+  },
+  {
+   "query": "系统怎样进行自适应多特征重排",
+   "expected": "m60"
+  },
+  {
+   "query": "用户喝咖啡加不加糖",
+   "expected": "m07"
+  },
+  {
+   "query": "项目周会安排在什么时间",
+   "expected": "m08"
+  },
+  {
+   "query": "用户养了什么宠物",
+   "expected": "m09"
+  },
+  {
+   "query": "项目当前使用什么数据库",
+   "expected": "m10"
+  },
+  {
+   "query": "用户偏好浅色还是深色界面",
+   "expected": "m11"
+  },
+  {
+   "query": "项目代码托管在哪个平台",
+   "expected": "m12"
+  },
+  {
+   "query": "用户通常在什么时段处理复杂任务",
+   "expected": "m13"
+  },
+  {
+   "query": "项目采用什么开源许可证",
+   "expected": "m14"
+  },
+  {
+   "query": "用户希望回答保持什么风格",
+   "expected": "m15"
+  },
+  {
+   "query": "项目后端监听哪个端口",
+   "expected": "m16"
+  },
+  {
+   "query": "项目用哪个组件做可选缓存",
+   "expected": "m17"
+  },
+  {
+   "query": "用户每周运动几次",
+   "expected": "m18"
+  },
+  {
+   "query": "项目界面使用哪个前端框架",
+   "expected": "m19"
+  },
+  {
+   "query": "用户常用什么语言",
+   "expected": "m20"
+  },
+  {
+   "query": "项目向量库使用哪个引擎",
+   "expected": "m21"
+  },
+  {
+   "query": "用户是否允许自动发送外部消息",
+   "expected": "m22"
+  },
+  {
+   "query": "项目桌面端基于什么框架",
+   "expected": "m23"
+  },
+  {
+   "query": "用户偏好用什么方式操作输入",
+   "expected": "m24"
+  },
+  {
+   "query": "项目需要支持哪个桌面平台",
+   "expected": "m25"
+  },
+  {
+   "query": "用户周末是否安排会议",
+   "expected": "m26"
+  },
+  {
+   "query": "项目日志默认采用什么格式",
+   "expected": "m27"
+  },
+  {
+   "query": "用户希望数据如何存储",
+   "expected": "m28"
+  },
+  {
+   "query": "项目前端测试使用什么框架",
+   "expected": "m29"
+  },
+  {
+   "query": "用户是否希望保留记忆来源链",
+   "expected": "m30"
+  },
+  {
+   "query": "项目要求记忆准确率达到多少",
+   "expected": "m38"
+  },
+  {
+   "query": "项目是否需要输出消融实验",
+   "expected": "m40"
+  },
+  {
+   "query": "检索候选是否包含场景标签",
+   "expected": "m41"
+  },
+  {
+   "query": "记忆系统是否记录来源可信度",
+   "expected": "m42"
+  },
+  {
+   "query": "冲突事件是否必须可审计",
+   "expected": "m44"
+  },
+  {
+   "query": "系统是否保存每次检索运行证据",
+   "expected": "m45"
+  },
+  {
+   "query": "三层记忆中的原始片段层是什么",
+   "expected": "m46"
+  },
+  {
+   "query": "三层记忆中的结构化事实层是什么",
+   "expected": "m47"
+  },
+  {
+   "query": "过期记忆是否会被标记为 stale",
+   "expected": "m49"
+  },
+  {
+   "query": "被替代事实是否会进入自适应召回",
+   "expected": "m50"
+  },
+  {
+   "query": "用户喜欢在什么天气听什么音乐",
+   "expected": "m51"
+  },
+  {
+   "query": "项目文档使用什么格式",
+   "expected": "m52"
+  },
+  {
+   "query": "用户是否希望重要参数可配置",
+   "expected": "m53"
+  },
+  {
+   "query": "项目演示视频目标时长是多少",
+   "expected": "m54"
+  },
+  {
+   "query": "项目交付是否包含部署手册",
+   "expected": "m55"
+  },
+  {
+   "query": "项目交付是否包含架构图",
+   "expected": "m56"
+  },
+  {
+   "query": "项目交付是否包含标准化数据集",
+   "expected": "m57"
+  },
+  {
+   "query": "项目交付是否包含对比实验报告",
+   "expected": "m58"
+  }
+ ]
+}

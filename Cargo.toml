@@ -5,6 +5,7 @@ members = [
     "crates/lingshu-vector",
     "crates/lingshu-mcp",
     "crates/lingshu-mcp-core",
+    "crates/lingshu-eval",
 ]
 
 [workspace.package]

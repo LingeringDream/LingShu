@@ -1845,8 +1845,7 @@ svg {
   gap: 10px;
 }
 
-.drive-download,
-.github-download {
+.drive-download {
   width: 119px;
   min-height: 42px;
   display: inline-flex;
@@ -1865,22 +1864,6 @@ svg {
 .drive-download:hover:not(:disabled) {
   border-color: var(--accent-hover);
   background: var(--accent-hover);
-}
-
-.github-download {
-  background: #fff;
-  color: var(--accent);
-}
-
-.github-download:hover {
-  background: var(--accent-soft);
-}
-
-.github-download[aria-disabled="true"] {
-  border-color: var(--border);
-  background: var(--surface-soft);
-  color: var(--text-3);
-  pointer-events: none;
 }
 
 .drive-download:disabled {

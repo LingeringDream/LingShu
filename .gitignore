@@ -84,6 +84,7 @@ src-tauri/resources/vcruntime140.dll
 # Misc
 *.tmp
 *.bak
+**/__pycache__/
 
 # Local temporary analysis and extraction files
 /_check/
@@ -106,3 +107,7 @@ src-tauri/resources/vcruntime140.dll
 # Live2D model files (large, licensed separately)
 frontend/public/live2d/*
 !frontend/public/live2d/README.md
+
+# 公开数据集 ONNX 嵌入模型（体积大，约 470MB，需离线重建）
+datasets/public/_model/
+datasets/public/_model_multi/

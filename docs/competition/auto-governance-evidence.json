@@ -1,0 +1,897 @@
+{
+  "summary": {
+    "all": {
+      "rule": {
+        "macro_f1": 0.4474,
+        "active_recall": 0.7692,
+        "false_elimination_rate": 0.2308,
+        "false_retention_rate": 0.4688,
+        "accuracy": 0.6512,
+        "classification_error_rate": 0.3488,
+        "prediction_coverage": 1.0,
+        "invalid_or_missing_count": 0,
+        "false_elimination_count": 15,
+        "active_total": 65,
+        "gate_status": "not_evaluated: labels require review; no retrieval or production acceptance claim"
+      },
+      "always_active": {
+        "macro_f1": 0.134,
+        "active_recall": 1.0,
+        "false_elimination_rate": 0.0,
+        "false_retention_rate": 1.0,
+        "accuracy": 0.5039,
+        "classification_error_rate": 0.4961,
+        "prediction_coverage": 1.0,
+        "invalid_or_missing_count": 0,
+        "false_elimination_count": 0,
+        "active_total": 65,
+        "gate_status": "not_evaluated: labels require review; no retrieval or production acceptance claim"
+      },
+      "llm": {
+        "macro_f1": 0.2297,
+        "active_recall": 0.7231,
+        "false_elimination_rate": 0.2769,
+        "false_retention_rate": 0.2188,
+        "accuracy": 0.4651,
+        "classification_error_rate": 0.5349,
+        "prediction_coverage": 0.9922480620155039,
+        "invalid_or_missing_count": 1,
+        "false_elimination_count": 18,
+        "active_total": 65,
+        "gate_status": "not_evaluated: labels require review; no retrieval or production acceptance claim"
+      }
+    },
+    "test": {
+      "rule": {
+        "macro_f1": 0.4315,
+        "active_recall": 0.8571,
+        "false_elimination_rate": 0.1429,
+        "false_retention_rate": 0.4545,
+        "accuracy": 0.6977,
+        "classification_error_rate": 0.3023,
+        "prediction_coverage": 1.0,
+        "invalid_or_missing_count": 0,
+        "false_elimination_count": 3,
+        "active_total": 21,
+        "gate_status": "not_evaluated: labels require review; no retrieval or production acceptance claim"
+      },
+      "always_active": {
+        "macro_f1": 0.1312,
+        "active_recall": 1.0,
+        "false_elimination_rate": 0.0,
+        "false_retention_rate": 1.0,
+        "accuracy": 0.4884,
+        "classification_error_rate": 0.5116,
+        "prediction_coverage": 1.0,
+        "invalid_or_missing_count": 0,
+        "false_elimination_count": 0,
+        "active_total": 21,
+        "gate_status": "not_evaluated: labels require review; no retrieval or production acceptance claim"
+      },
+      "llm": {
+        "macro_f1": 0.2442,
+        "active_recall": 0.8571,
+        "false_elimination_rate": 0.1429,
+        "false_retention_rate": 0.1364,
+        "accuracy": 0.5116,
+        "classification_error_rate": 0.4884,
+        "prediction_coverage": 1.0,
+        "invalid_or_missing_count": 0,
+        "false_elimination_count": 3,
+        "active_total": 21,
+        "gate_status": "not_evaluated: labels require review; no retrieval or production acceptance claim"
+      }
+    }
+  },
+  "protocol": {
+    "all": {
+      "dataset_sha256": "5ec387af6b34c7fb5f6ad92590d28c79ee6d87ec61b4015d8528079e9e2d32c0",
+      "code_sha256": "628f256de5538345dce3e90b88eeff8736b3abcf18fd753badb7c518fac89c7d",
+      "model": "llama3.1:8b",
+      "seed": 42,
+      "oracle_fact_key_clustering": true,
+      "invalid_policy": "Unknown stays unknown; scored incorrect, reported separately; no store mutations",
+      "scope": "Five-class diagnostics on unvalidated synthetic labels; not end-to-end retrieval",
+      "model_digest": "46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e"
+    },
+    "test": {
+      "dataset_sha256": "48585531b40d68aa2ac01ad88909d80ef9288f92e49dca2c439dab21e75f62a9",
+      "code_sha256": "628f256de5538345dce3e90b88eeff8736b3abcf18fd753badb7c518fac89c7d",
+      "model": "llama3.1:8b",
+      "seed": 42,
+      "oracle_fact_key_clustering": true,
+      "invalid_policy": "Unknown stays unknown; scored incorrect, reported separately; no store mutations",
+      "scope": "Five-class diagnostics on unvalidated synthetic labels; not end-to-end retrieval",
+      "model_digest": "46e0c10c039e019119339687c3c1757cc81b9da49709a3b3924863ba87ca666e"
+    }
+  },
+  "sizes": {
+    "all": {
+      "turns": 129,
+      "queries": 73,
+      "classes": {
+        "superseded": 35,
+        "active": 65,
+        "duplicate": 7,
+        "stale": 17,
+        "unresolved": 5
+      },
+      "query_groups": {
+        "fact-change": 41,
+        "conflict": 12,
+        "stable-fact": 12,
+        "unanswerable": 8
+      }
+    },
+    "dev": {
+      "turns": 86,
+      "queries": 50,
+      "classes": {
+        "superseded": 21,
+        "active": 44,
+        "duplicate": 6,
+        "unresolved": 3,
+        "stale": 12
+      },
+      "query_groups": {
+        "fact-change": 25,
+        "conflict": 8,
+        "stable-fact": 11,
+        "unanswerable": 6
+      }
+    },
+    "test": {
+      "turns": 43,
+      "queries": 23,
+      "classes": {
+        "stale": 5,
+        "active": 21,
+        "superseded": 14,
+        "duplicate": 1,
+        "unresolved": 2
+      },
+      "query_groups": {
+        "fact-change": 16,
+        "conflict": 4,
+        "stable-fact": 1,
+        "unanswerable": 2
+      }
+    }
+  },
+  "flag_counts": {
+    "conflict_requires_resolution_policy": 5,
+    "question_embedded_in_fact_statement": 22,
+    "correction_precedes_different_claim": 6,
+    "duplicate_without_equal_value": 4,
+    "expiry_needs_calendar_evidence": 6
+  },
+  "baselines": {
+    "age_only_depth3": {
+      "tree": {
+        "feature": "age_days",
+        "threshold": 29.0,
+        "left": {
+          "feature": "age_days",
+          "threshold": 4.5,
+          "left": {
+            "label": "stale",
+            "n": 5
+          },
+          "right": {
+            "feature": "age_days",
+            "threshold": 23.5,
+            "left": {
+              "label": "active",
+              "n": 29
+            },
+            "right": {
+              "label": "active",
+              "n": 8
+            }
+          }
+        },
+        "right": {
+          "feature": "age_days",
+          "threshold": 135.0,
+          "left": {
+            "feature": "age_days",
+            "threshold": 55.0,
+            "left": {
+              "label": "stale",
+              "n": 7
+            },
+            "right": {
+              "label": "superseded",
+              "n": 25
+            }
+          },
+          "right": {
+            "feature": "age_days",
+            "threshold": 190.0,
+            "left": {
+              "label": "active",
+              "n": 9
+            },
+            "right": {
+              "label": "active",
+              "n": 3
+            }
+          }
+        }
+      },
+      "scores": {
+        "dev": {
+          "active": {
+            "precision": 0.7551,
+            "recall": 0.8409,
+            "f1": 0.7957
+          },
+          "superseded": {
+            "precision": 0.6,
+            "recall": 0.7143,
+            "f1": 0.6522
+          },
+          "stale": {
+            "precision": 0.5833,
+            "recall": 0.5833,
+            "f1": 0.5833
+          },
+          "duplicate": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "unresolved": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "accuracy": 0.686,
+          "false_elimination_rate": 0.1591,
+          "false_retention_rate": 0.2857,
+          "macro_f1_present": 0.4062,
+          "macro_f1_all": 0.4062,
+          "active_recall": 0.8409,
+          "prediction_coverage": 1.0,
+          "invalid_or_missing_count": 0,
+          "unknown_active_count": 0,
+          "active_total": 44,
+          "non_active_total": 42,
+          "false_elimination_count": 7,
+          "false_retention_count": 12,
+          "active_nonrecognition_rate": 0.1590909090909091,
+          "confusion_matrix": {
+            "active": {
+              "active": 37,
+              "superseded": 6,
+              "stale": 1,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "superseded": {
+              "active": 5,
+              "superseded": 15,
+              "stale": 1,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "stale": {
+              "active": 1,
+              "superseded": 4,
+              "stale": 7,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "duplicate": {
+              "active": 5,
+              "superseded": 0,
+              "stale": 1,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "unresolved": {
+              "active": 1,
+              "superseded": 0,
+              "stale": 2,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            }
+          }
+        },
+        "test": {
+          "active": {
+            "precision": 0.6667,
+            "recall": 0.8571,
+            "f1": 0.75
+          },
+          "superseded": {
+            "precision": 0.6429,
+            "recall": 0.6429,
+            "f1": 0.6429
+          },
+          "stale": {
+            "precision": 1.0,
+            "recall": 0.4,
+            "f1": 0.5714
+          },
+          "duplicate": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "unresolved": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "accuracy": 0.6744,
+          "false_elimination_rate": 0.1429,
+          "false_retention_rate": 0.4091,
+          "macro_f1_present": 0.3929,
+          "macro_f1_all": 0.3929,
+          "active_recall": 0.8571,
+          "prediction_coverage": 1.0,
+          "invalid_or_missing_count": 0,
+          "unknown_active_count": 0,
+          "active_total": 21,
+          "non_active_total": 22,
+          "false_elimination_count": 3,
+          "false_retention_count": 9,
+          "active_nonrecognition_rate": 0.14285714285714285,
+          "confusion_matrix": {
+            "active": {
+              "active": 18,
+              "superseded": 3,
+              "stale": 0,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "superseded": {
+              "active": 5,
+              "superseded": 9,
+              "stale": 0,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "stale": {
+              "active": 1,
+              "superseded": 2,
+              "stale": 2,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "duplicate": {
+              "active": 1,
+              "superseded": 0,
+              "stale": 0,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "unresolved": {
+              "active": 2,
+              "superseded": 0,
+              "stale": 0,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            }
+          }
+        }
+      },
+      "predictions": {
+        "dev": {
+          "c01.addr.v0": "superseded",
+          "c01.addr.v1": "active",
+          "c02.stack.dup": "active",
+          "c02.stack.v0": "active",
+          "c02.stack.v1": "active",
+          "c04.lead.a": "stale",
+          "c04.lead.b": "active",
+          "c06.budget.v0": "active",
+          "c07.meeting.v0": "stale",
+          "c07.meeting.v1": "active",
+          "c08.db.dup": "active",
+          "c08.db.v0": "active",
+          "c10.region.v0": "active",
+          "c11.backup.v0": "active",
+          "c11.backup.v1": "active",
+          "c13.editor.v0": "superseded",
+          "c13.editor.v1": "active",
+          "c14.city.v0": "active",
+          "c15.phone.v0": "stale",
+          "c16.venue.err": "active",
+          "c16.venue.v0": "stale",
+          "c16.venue.v1": "active",
+          "c17.mainlang.tmp": "stale",
+          "c17.mainlang.v0": "stale",
+          "gen.CDN 加速域名.23.v0": "superseded",
+          "gen.CDN 加速域名.23.v1": "active",
+          "gen.corr.02.err": "active",
+          "gen.corr.02.fix": "active",
+          "gen.corr.03.err": "stale",
+          "gen.corr.03.fix": "active",
+          "gen.corr.04.err": "active",
+          "gen.corr.04.fix": "active",
+          "gen.corr.05.err": "active",
+          "gen.corr.05.fix": "active",
+          "gen.lapse.02.stable": "superseded",
+          "gen.lapse.02.tmp": "active",
+          "gen.lapse.03.stable": "superseded",
+          "gen.lapse.03.tmp": "stale",
+          "gen.lapse.05.stable": "superseded",
+          "gen.lapse.05.tmp": "stale",
+          "gen.lapse.06.stable": "superseded",
+          "gen.lapse.06.tmp": "stale",
+          "gen.stable.00.v0": "superseded",
+          "gen.stable.01.v0": "active",
+          "gen.stable.02.v0": "active",
+          "gen.stable.03.v0": "active",
+          "gen.stable.04.v0": "superseded",
+          "gen.stable.05.v0": "active",
+          "gen.stable.06.v0": "active",
+          "gen.unans.00.old": "superseded",
+          "gen.unans.01.old": "superseded",
+          "gen.unans.03.old": "superseded",
+          "gen.unans.04.old": "superseded",
+          "gen.unans.06.old": "stale",
+          "gen.unres.01.a": "stale",
+          "gen.unres.01.b": "active",
+          "gen.unres.02.a": "active",
+          "gen.unres.02.b": "active",
+          "gen.主站域名.07.v0": "active",
+          "gen.主站域名.07.v1": "active",
+          "gen.主站域名.08.v0": "superseded",
+          "gen.主站域名.08.v1": "active",
+          "gen.代码仓库地址.12.v0": "active",
+          "gen.代码仓库地址.12.v1": "active",
+          "gen.代码仓库地址.13.v0": "superseded",
+          "gen.代码仓库地址.13.v1": "active",
+          "gen.客户合同金额.01.v0": "superseded",
+          "gen.客户合同金额.01.v1": "active",
+          "gen.客户合同金额.02.v0": "superseded",
+          "gen.客户合同金额.02.v1": "active",
+          "gen.客户合同金额.03.v0": "superseded",
+          "gen.客户合同金额.03.v1": "active",
+          "gen.数据库主从延迟.24.v0": "superseded",
+          "gen.数据库主从延迟.24.v1": "active",
+          "gen.测试环境版本.14.v0": "superseded",
+          "gen.测试环境版本.14.v1": "active",
+          "gen.监控告警阈值.20.v0": "superseded",
+          "gen.监控告警阈值.20.v1": "active",
+          "gen.监控告警阈值.21.v0": "superseded",
+          "gen.监控告警阈值.21.v1": "active",
+          "gen.线上实例数量.18.v0": "superseded",
+          "gen.线上实例数量.18.v1": "active",
+          "gen.运维值班人.09.v0": "superseded",
+          "gen.运维值班人.09.v1": "active",
+          "gen.运维值班人.10.v0": "superseded",
+          "gen.运维值班人.10.v1": "active"
+        },
+        "test": {
+          "c03.delivery.v0": "superseded",
+          "c03.delivery.v1": "active",
+          "c05.contact.v0": "superseded",
+          "c05.contact.v1": "active",
+          "c09.port.v0": "superseded",
+          "c09.port.v1": "active",
+          "c12.log.v0": "superseded",
+          "c12.log.v1": "active",
+          "gen.CDN 加速域名.22.v0": "active",
+          "gen.CDN 加速域名.22.v1": "active",
+          "gen.corr.01.err": "active",
+          "gen.corr.01.fix": "active",
+          "gen.corr.06.err": "active",
+          "gen.corr.06.fix": "active",
+          "gen.lapse.01.stable": "superseded",
+          "gen.lapse.01.tmp": "active",
+          "gen.lapse.04.stable": "superseded",
+          "gen.lapse.04.tmp": "stale",
+          "gen.stable.07.v0": "superseded",
+          "gen.unans.02.old": "superseded",
+          "gen.unans.05.old": "stale",
+          "gen.unres.03.a": "active",
+          "gen.unres.03.b": "active",
+          "gen.unres.04.a": "active",
+          "gen.unres.04.b": "active",
+          "gen.数据库主从延迟.25.v0": "superseded",
+          "gen.数据库主从延迟.25.v1": "active",
+          "gen.服务器机房位置.04.v0": "superseded",
+          "gen.服务器机房位置.04.v1": "active",
+          "gen.服务器机房位置.05.v0": "superseded",
+          "gen.服务器机房位置.05.v1": "active",
+          "gen.服务器机房位置.06.v0": "superseded",
+          "gen.服务器机房位置.06.v1": "active",
+          "gen.测试环境版本.15.v0": "active",
+          "gen.测试环境版本.15.v1": "active",
+          "gen.测试环境版本.16.v0": "superseded",
+          "gen.测试环境版本.16.v1": "active",
+          "gen.线上实例数量.17.v0": "active",
+          "gen.线上实例数量.17.v1": "active",
+          "gen.线上实例数量.19.v0": "superseded",
+          "gen.线上实例数量.19.v1": "active",
+          "gen.运维值班人.11.v0": "active",
+          "gen.运维值班人.11.v1": "active"
+        }
+      }
+    },
+    "metadata_only_depth3": {
+      "tree": {
+        "feature": "importance",
+        "threshold": 0.5785,
+        "left": {
+          "feature": "access",
+          "threshold": 2.5,
+          "left": {
+            "feature": "importance",
+            "threshold": 0.4885,
+            "left": {
+              "label": "stale",
+              "n": 14
+            },
+            "right": {
+              "label": "duplicate",
+              "n": 4
+            }
+          },
+          "right": {
+            "feature": "importance",
+            "threshold": 0.5,
+            "left": {
+              "label": "active",
+              "n": 5
+            },
+            "right": {
+              "label": "superseded",
+              "n": 3
+            }
+          }
+        },
+        "right": {
+          "feature": "age_days",
+          "threshold": 31.5,
+          "left": {
+            "feature": "access",
+            "threshold": 6.5,
+            "left": {
+              "label": "active",
+              "n": 22
+            },
+            "right": {
+              "label": "active",
+              "n": 4
+            }
+          },
+          "right": {
+            "feature": "trust",
+            "threshold": 0.7395,
+            "left": {
+              "label": "superseded",
+              "n": 11
+            },
+            "right": {
+              "label": "active",
+              "n": 23
+            }
+          }
+        }
+      },
+      "scores": {
+        "dev": {
+          "active": {
+            "precision": 0.7778,
+            "recall": 0.9545,
+            "f1": 0.8571
+          },
+          "superseded": {
+            "precision": 0.7857,
+            "recall": 0.5238,
+            "f1": 0.6286
+          },
+          "stale": {
+            "precision": 0.7143,
+            "recall": 0.8333,
+            "f1": 0.7692
+          },
+          "duplicate": {
+            "precision": 0.75,
+            "recall": 0.5,
+            "f1": 0.6
+          },
+          "unresolved": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "accuracy": 0.7674,
+          "false_elimination_rate": 0.0455,
+          "false_retention_rate": 0.2857,
+          "macro_f1_present": 0.571,
+          "macro_f1_all": 0.571,
+          "active_recall": 0.9545,
+          "prediction_coverage": 1.0,
+          "invalid_or_missing_count": 0,
+          "unknown_active_count": 0,
+          "active_total": 44,
+          "non_active_total": 42,
+          "false_elimination_count": 2,
+          "false_retention_count": 12,
+          "active_nonrecognition_rate": 0.045454545454545456,
+          "confusion_matrix": {
+            "active": {
+              "active": 42,
+              "superseded": 1,
+              "stale": 0,
+              "duplicate": 1,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "superseded": {
+              "active": 9,
+              "superseded": 11,
+              "stale": 1,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "stale": {
+              "active": 1,
+              "superseded": 1,
+              "stale": 10,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "duplicate": {
+              "active": 0,
+              "superseded": 0,
+              "stale": 3,
+              "duplicate": 3,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "unresolved": {
+              "active": 2,
+              "superseded": 1,
+              "stale": 0,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            }
+          }
+        },
+        "test": {
+          "active": {
+            "precision": 0.7308,
+            "recall": 0.9048,
+            "f1": 0.8085
+          },
+          "superseded": {
+            "precision": 0.8,
+            "recall": 0.5714,
+            "f1": 0.6667
+          },
+          "stale": {
+            "precision": 0.8,
+            "recall": 0.8,
+            "f1": 0.8
+          },
+          "duplicate": {
+            "precision": 0.5,
+            "recall": 1.0,
+            "f1": 0.6667
+          },
+          "unresolved": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "accuracy": 0.7442,
+          "false_elimination_rate": 0.0952,
+          "false_retention_rate": 0.3182,
+          "macro_f1_present": 0.5884,
+          "macro_f1_all": 0.5884,
+          "active_recall": 0.9048,
+          "prediction_coverage": 1.0,
+          "invalid_or_missing_count": 0,
+          "unknown_active_count": 0,
+          "active_total": 21,
+          "non_active_total": 22,
+          "false_elimination_count": 2,
+          "false_retention_count": 7,
+          "active_nonrecognition_rate": 0.09523809523809523,
+          "confusion_matrix": {
+            "active": {
+              "active": 19,
+              "superseded": 1,
+              "stale": 0,
+              "duplicate": 1,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "superseded": {
+              "active": 5,
+              "superseded": 8,
+              "stale": 1,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "stale": {
+              "active": 1,
+              "superseded": 0,
+              "stale": 4,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "duplicate": {
+              "active": 0,
+              "superseded": 0,
+              "stale": 0,
+              "duplicate": 1,
+              "unresolved": 0,
+              "invalid": 0
+            },
+            "unresolved": {
+              "active": 1,
+              "superseded": 1,
+              "stale": 0,
+              "duplicate": 0,
+              "unresolved": 0,
+              "invalid": 0
+            }
+          }
+        }
+      },
+      "predictions": {
+        "dev": {
+          "c01.addr.v0": "active",
+          "c01.addr.v1": "active",
+          "c02.stack.dup": "duplicate",
+          "c02.stack.v0": "active",
+          "c02.stack.v1": "active",
+          "c04.lead.a": "active",
+          "c04.lead.b": "active",
+          "c06.budget.v0": "active",
+          "c07.meeting.v0": "active",
+          "c07.meeting.v1": "active",
+          "c08.db.dup": "stale",
+          "c08.db.v0": "active",
+          "c10.region.v0": "active",
+          "c11.backup.v0": "superseded",
+          "c11.backup.v1": "duplicate",
+          "c13.editor.v0": "active",
+          "c13.editor.v1": "active",
+          "c14.city.v0": "active",
+          "c15.phone.v0": "superseded",
+          "c16.venue.err": "duplicate",
+          "c16.venue.v0": "superseded",
+          "c16.venue.v1": "active",
+          "c17.mainlang.tmp": "stale",
+          "c17.mainlang.v0": "active",
+          "gen.CDN 加速域名.23.v0": "active",
+          "gen.CDN 加速域名.23.v1": "active",
+          "gen.corr.02.err": "duplicate",
+          "gen.corr.02.fix": "active",
+          "gen.corr.03.err": "stale",
+          "gen.corr.03.fix": "active",
+          "gen.corr.04.err": "stale",
+          "gen.corr.04.fix": "active",
+          "gen.corr.05.err": "stale",
+          "gen.corr.05.fix": "active",
+          "gen.lapse.02.stable": "superseded",
+          "gen.lapse.02.tmp": "stale",
+          "gen.lapse.03.stable": "active",
+          "gen.lapse.03.tmp": "stale",
+          "gen.lapse.05.stable": "active",
+          "gen.lapse.05.tmp": "stale",
+          "gen.lapse.06.stable": "active",
+          "gen.lapse.06.tmp": "stale",
+          "gen.stable.00.v0": "active",
+          "gen.stable.01.v0": "active",
+          "gen.stable.02.v0": "active",
+          "gen.stable.03.v0": "active",
+          "gen.stable.04.v0": "active",
+          "gen.stable.05.v0": "active",
+          "gen.stable.06.v0": "active",
+          "gen.unans.00.old": "stale",
+          "gen.unans.01.old": "stale",
+          "gen.unans.03.old": "stale",
+          "gen.unans.04.old": "stale",
+          "gen.unans.06.old": "stale",
+          "gen.unres.01.a": "superseded",
+          "gen.unres.01.b": "active",
+          "gen.unres.02.a": "active",
+          "gen.unres.02.b": "active",
+          "gen.主站域名.07.v0": "active",
+          "gen.主站域名.07.v1": "active",
+          "gen.主站域名.08.v0": "active",
+          "gen.主站域名.08.v1": "active",
+          "gen.代码仓库地址.12.v0": "superseded",
+          "gen.代码仓库地址.12.v1": "active",
+          "gen.代码仓库地址.13.v0": "superseded",
+          "gen.代码仓库地址.13.v1": "active",
+          "gen.客户合同金额.01.v0": "superseded",
+          "gen.客户合同金额.01.v1": "active",
+          "gen.客户合同金额.02.v0": "superseded",
+          "gen.客户合同金额.02.v1": "active",
+          "gen.客户合同金额.03.v0": "superseded",
+          "gen.客户合同金额.03.v1": "active",
+          "gen.数据库主从延迟.24.v0": "superseded",
+          "gen.数据库主从延迟.24.v1": "active",
+          "gen.测试环境版本.14.v0": "active",
+          "gen.测试环境版本.14.v1": "active",
+          "gen.监控告警阈值.20.v0": "superseded",
+          "gen.监控告警阈值.20.v1": "active",
+          "gen.监控告警阈值.21.v0": "active",
+          "gen.监控告警阈值.21.v1": "active",
+          "gen.线上实例数量.18.v0": "superseded",
+          "gen.线上实例数量.18.v1": "active",
+          "gen.运维值班人.09.v0": "superseded",
+          "gen.运维值班人.09.v1": "active",
+          "gen.运维值班人.10.v0": "active",
+          "gen.运维值班人.10.v1": "active"
+        },
+        "test": {
+          "c03.delivery.v0": "active",
+          "c03.delivery.v1": "active",
+          "c05.contact.v0": "superseded",
+          "c05.contact.v1": "active",
+          "c09.port.v0": "superseded",
+          "c09.port.v1": "active",
+          "c12.log.v0": "active",
+          "c12.log.v1": "superseded",
+          "gen.CDN 加速域名.22.v0": "superseded",
+          "gen.CDN 加速域名.22.v1": "active",
+          "gen.corr.01.err": "stale",
+          "gen.corr.01.fix": "active",
+          "gen.corr.06.err": "duplicate",
+          "gen.corr.06.fix": "active",
+          "gen.lapse.01.stable": "active",
+          "gen.lapse.01.tmp": "stale",
+          "gen.lapse.04.stable": "active",
+          "gen.lapse.04.tmp": "stale",
+          "gen.stable.07.v0": "active",
+          "gen.unans.02.old": "stale",
+          "gen.unans.05.old": "stale",
+          "gen.unres.03.a": "superseded",
+          "gen.unres.03.b": "active",
+          "gen.unres.04.a": "active",
+          "gen.unres.04.b": "duplicate",
+          "gen.数据库主从延迟.25.v0": "superseded",
+          "gen.数据库主从延迟.25.v1": "active",
+          "gen.服务器机房位置.04.v0": "superseded",
+          "gen.服务器机房位置.04.v1": "active",
+          "gen.服务器机房位置.05.v0": "active",
+          "gen.服务器机房位置.05.v1": "active",
+          "gen.服务器机房位置.06.v0": "superseded",
+          "gen.服务器机房位置.06.v1": "active",
+          "gen.测试环境版本.15.v0": "superseded",
+          "gen.测试环境版本.15.v1": "active",
+          "gen.测试环境版本.16.v0": "active",
+          "gen.测试环境版本.16.v1": "active",
+          "gen.线上实例数量.17.v0": "superseded",
+          "gen.线上实例数量.17.v1": "active",
+          "gen.线上实例数量.19.v0": "active",
+          "gen.线上实例数量.19.v1": "active",
+          "gen.运维值班人.11.v0": "active",
+          "gen.运维值班人.11.v1": "active"
+        }
+      }
+    }
+  },
+  "sha256": {
+    "governance_v4_audit.json": "35634296d07f20a5bac4f202e7551bc13a0c1d2ee46a1dfbde63e70c52f588ee",
+    "auto_state_v4_all_audited_v2.json": "8a3d5d8abd1e7829c01e1633359f855f144353876ce79bd73620ee32e563fb37",
+    "auto_state_v4_test_audited_v2.json": "ad09b28bba6679ebf020de28678efaab4fd5b87334f00246ce361900736d1de6"
+  }
+}

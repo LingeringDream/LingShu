@@ -1362,19 +1362,6 @@ function renderDownloads() {
     button.onclick = url ? () => window.open(url, "_blank", "noopener,noreferrer") : null;
     if (url) availableCount += 1;
   });
-  document.querySelectorAll("[data-github-platform]").forEach((link) => {
-    const entry = downloads[link.dataset.githubPlatform] || {};
-    const manifestUrl = validDriveUrl(entry.github_url);
-    const fallbackUrl = validDriveUrl(link.getAttribute("href"));
-    const url = manifestUrl || fallbackUrl;
-    if (url) {
-      link.href = url;
-      link.removeAttribute("aria-disabled");
-    } else {
-      link.removeAttribute("href");
-      link.setAttribute("aria-disabled", "true");
-    }
-  });
   document.querySelectorAll("[data-sha-platform]").forEach((sha) => {
     const entry = downloads[sha.dataset.shaPlatform] || {};
     if (typeof entry.sha256 === "string" && /^[0-9a-f]{64}$/i.test(entry.sha256)) {
@@ -1405,7 +1392,7 @@ function renderDownloads() {
     elements.downloadStatus.classList.add("is-ready");
   } else {
     title.textContent = "网盘链接整理中";
-    text.textContent = "GitHub 下载需登录有仓库权限的账户；网盘地址配置后供普通用户使用。";
+    text.textContent = "安装包统一通过网盘分发，网盘地址配置后即可下载。";
     elements.downloadStatus.classList.remove("is-ready");
   }
 }

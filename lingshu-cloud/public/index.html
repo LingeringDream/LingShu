@@ -374,7 +374,7 @@
                 <a href="#system-capabilities"><strong>记忆、人格与系统能力</strong><small>SoulLedger、权限分级与日历</small></a>
                 <a href="#memory-sync"><strong>记忆同步</strong><small>当前状态与本地数据边界</small></a>
                 <a href="#billing-guide"><strong>订阅与账单</strong><small>升级、管理与付款安全</small></a>
-                <a href="#download-verification"><strong>下载与校验</strong><small>网盘、GitHub 与 SHA-256</small></a>
+                <a href="#download-verification"><strong>下载与校验</strong><small>网盘与 SHA-256</small></a>
                 <a href="#dev-edition"><strong>开发版与竞赛演示</strong><small>Docker 一键启动与故障排查</small></a>
                 <a href="#troubleshooting"><strong>常见问题</strong><small>启动、模型、权限与数据备份</small></a>
               </nav>
@@ -521,7 +521,7 @@
                   <span class="doc-number">09</span>
                   <div class="doc-content">
                     <h3>下载来源与文件校验</h3>
-                    <p>普通用户优先使用网盘下载；GitHub Release 作为备用来源。当前 GitHub 仓库为私有仓库，因此必须登录并拥有仓库权限。Windows 当前版本 <strong>1.6.0</strong> 的校验值如下：</p>
+                    <p>安装包统一通过网盘分发；下载后请先核对文件名与 SHA-256 再安装。Windows 当前版本 <strong>1.6.0</strong> 的校验值如下：</p>
                     <h4>Windows（LingShu_1.6.0_x64-setup.exe）</h4>
                     <pre><code>8dc04ab5ef71c991f287ac5979c418d77ed8161713f01c3ce707400e59ba7df7</code></pre>
                     <h4>macOS（LingShu_1.5.2_aarch64.dmg）</h4>
@@ -567,7 +567,7 @@
                       <div><dt>重复打开安装程序后出现多个窗口</dt><dd>灵枢为单实例应用：再次启动会显示并聚焦已打开的控制面板，不会创建第二个实例。若看到多个窗口，可能是旧版本残留，请完全退出托盘程序后重新打开。</dd></div>
                       <div><dt>Windows 崩溃或强制结束后无法启动</dt><dd>新版会自动检测并清理崩溃遗留的数据库进程记录（postmaster.pid），正常重启应用即可，不会删除数据。</dd></div>
                       <div><dt>关闭主窗口后程序还在运行</dt><dd>关闭主窗口只是隐藏窗口，灵枢与桌面宠物会继续在托盘运行。需要完全退出时，右键托盘图标选择退出。</dd></div>
-                      <div><dt>安装被安全软件拦截或提示缺少运行库</dt><dd>安装包已内置 Microsoft C 运行库与数据库，无需预装。若被安全软件拦截，请对安装包或安装目录添加信任后重试，并从官网或 GitHub Release 重新下载校验。</dd></div>
+                      <div><dt>安装被安全软件拦截或提示缺少运行库</dt><dd>安装包已内置 Microsoft C 运行库与数据库，无需预装。若被安全软件拦截，请对安装包或安装目录添加信任后重试，并从官网下载中心重新下载校验。</dd></div>
                       <div><dt>聊天没有响应或提示模型错误</dt><dd>本地聊天依赖 Ollama 或已配置的模型 API。请确认已安装并启动 Ollama（<code>ollama serve</code>），且“聊天设置”中选择了本机已安装的模型；语义记忆检索还需 <code>ollama pull nomic-embed-text</code>。</dd></div>
                       <div><dt>联网搜索不可用</dt><dd>联网搜索由独立权限开关控制，默认关闭。请在桌面端“权限”面板开启「L1 · 联网搜索」后重试。</dd></div>
                       <div><dt>macOS 日历事件写入失败</dt><dd>日历写入通过系统日历（EventKit）完成，仅支持 macOS 14+，且需要在“系统设置 → 隐私与安全性 → 日历”中允许灵枢访问。Windows 与网页版请使用日历导出（.ics 文件）。</dd></div>
@@ -600,7 +600,6 @@
                 <div class="download-copy"><h3>Windows</h3><p>Windows 10 / 11 · x64 · EXE 安装程序</p><small>文件：LingShu_1.6.0_x64-setup.exe · 约 33 MB</small><span class="download-sha" data-sha-platform="windows" hidden></span><span class="download-access-code" data-access-code-platform="windows" hidden></span></div>
                 <div class="download-actions">
                   <button class="drive-download" type="button" data-download-platform="windows" disabled>网盘下载</button>
-                  <a class="github-download" data-github-platform="windows" href="https://github.com/LingeringDream/LingShu/releases/download/v1.6.0/LingShu_1.6.0_x64-setup.exe" target="_blank" rel="noopener noreferrer" title="需登录有仓库权限的 GitHub 账户">GitHub 下载</a>
                 </div>
               </article>
               <article class="download-row">
@@ -610,7 +609,6 @@
                 <div class="download-copy"><h3>macOS</h3><p>macOS 14+ · Apple Silicon · DMG 镜像</p><small>文件：LingShu_1.5.2_aarch64.dmg · 约 17 MB</small><span class="download-sha" data-sha-platform="macos" hidden></span><span class="download-access-code" data-access-code-platform="macos" hidden></span></div>
                 <div class="download-actions">
                   <button class="drive-download" type="button" data-download-platform="macos" disabled>网盘下载</button>
-                  <a class="github-download" data-github-platform="macos" href="https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_aarch64.dmg" target="_blank" rel="noopener noreferrer" title="需登录有仓库权限的 GitHub 账户">GitHub 下载</a>
                 </div>
               </article>
               <article class="download-row">
@@ -618,17 +616,17 @@
                   <svg viewBox="0 0 24 24" width="28" height="28"><circle cx="12" cy="12" r="8"/><path d="M8 16c1.2-1 2.5-1.5 4-1.5s2.8.5 4 1.5M9 9h.01M15 9h.01M9.5 12.5h5"/></svg>
                 </span>
                 <div class="download-copy"><h3>Linux · DEB</h3><p>Ubuntu 24.04 已验证 · x86_64 · 内置数据库</p><small>LingShu_1.5.2_amd64.deb · 27.5 MiB · sudo apt install ./LingShu_1.5.2_amd64.deb</small><span class="download-sha" data-sha-platform="linux_deb" hidden></span><span class="download-access-code" data-access-code-platform="linux_deb" hidden></span></div>
-                <div class="download-actions"><button class="drive-download" type="button" data-download-platform="linux_deb" disabled>网盘下载</button><a class="github-download" data-github-platform="linux_deb" href="https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_amd64.deb" target="_blank" rel="noopener noreferrer">GitHub 下载</a></div>
+                <div class="download-actions"><button class="drive-download" type="button" data-download-platform="linux_deb" disabled>网盘下载</button></div>
               </article>
               <article class="download-row">
                 <span class="platform-mark" aria-hidden="true">Linux</span>
                 <div class="download-copy"><h3>Linux · AppImage</h3><p>Ubuntu 24.04 已验证 · x86_64 · 内置数据库</p><small>LingShu_1.5.2_amd64.AppImage · 98.2 MiB · 下载后赋予执行权限，以普通用户运行。网盘扩展名可能显示为 .appimage。</small><span class="download-sha" data-sha-platform="linux_appimage" hidden></span><span class="download-access-code" data-access-code-platform="linux_appimage" hidden></span></div>
-                <div class="download-actions"><button class="drive-download" type="button" data-download-platform="linux_appimage" disabled>网盘下载</button><a class="github-download" data-github-platform="linux_appimage" href="https://github.com/LingeringDream/LingShu/releases/download/v1.5.2/LingShu_1.5.2_amd64.AppImage" target="_blank" rel="noopener noreferrer">GitHub 下载</a></div>
+                <div class="download-actions"><button class="drive-download" type="button" data-download-platform="linux_appimage" disabled>网盘下载</button></div>
               </article>
             </div>
             <div id="download-status" class="download-status" role="status">
               <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
-              <p><strong>网盘链接整理中</strong><span>GitHub 下载需登录有仓库权限的账户；网盘地址配置后供普通用户使用。</span></p>
+              <p><strong>网盘链接整理中</strong><span>安装包统一通过网盘分发，网盘地址配置后即可下载。</span></p>
             </div>
           </section>
 
