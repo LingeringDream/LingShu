@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { cloudAccountClient, CloudAccountError, cloudErrorMessage, type CloudAccount } from '../lib/cloudAccount';
 import { waitForBrowserLogin } from '../lib/browserLogin';
+import { stopProAutoSync } from '../lib/proSync';
 
 interface CloudAccountState {
   account: CloudAccount | null;
@@ -21,8 +22,14 @@ export const useCloudAccountStore = create<CloudAccountState>((set, get) => {
   async function run(operation: () => Promise<CloudAccount | null>) {
     if (get().busy) return;
     set({ busy: true, error: null });
-    try { set({ account: await operation() }); }
+    try {
+      const previousUser = get().account?.user.id;
+      const account = await operation();
+      if (account?.user.id !== previousUser) stopProAutoSync();
+      set({ account });
+    }
     catch (error) {
+      if (error instanceof CloudAccountError && error.status === 401) stopProAutoSync();
       set({ error: cloudErrorMessage(error), ...(error instanceof CloudAccountError && error.status === 401 ? { account: null } : {}) });
     } finally { set({ busy: false, initialized: true }); }
   }
@@ -46,6 +53,6 @@ export const useCloudAccountStore = create<CloudAccountState>((set, get) => {
     async initialize() { if (!get().initialized) await get().reload(); },
     reload: () => run(() => cloudAccountClient.load()),
     login: (email, password, name, platform) => run(() => cloudAccountClient.login(email, password, name, platform)),
-    logout: () => run(async () => { await cloudAccountClient.logout(); return null; }),
+    logout: () => run(async () => { await cloudAccountClient.logout(); stopProAutoSync(); return null; }),
   };
 });

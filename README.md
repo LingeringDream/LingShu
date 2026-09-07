@@ -9,7 +9,7 @@
 
 [English](./README.en.md)
 
-灵枢是连接不同 AI 工具的长期记忆层，当前软件面向个人与小团队，同时提供桌面宠物式 AI 助手。用户可以直接使用灵枢客户端，也可以通过 MCP 让支持该协议的 AI 工具按权限读写同一套记忆。企业版与 Embedded / OEM 属于独立产品规划，API / SDK 产品化不作为当前软件已交付能力。完整定位见[产品定位与版本体系](docs/product-positioning.md)。
+灵枢是连接不同 AI 工具的个人、团队与企业记忆层，同时提供桌面宠物式 AI 助手。用户既可以直接使用灵枢客户端，也可以通过 MCP 让 Claude、Cursor、Codex 等工具共享同一套记忆，或通过当前 HTTP API 将记忆能力嵌入其他产品；Python / TypeScript SDK 属于后续规划。完整的产品定位、版本权益与付费边界见[产品定位与版本体系](docs/product-positioning.md)。
 
 > **灵枢不是另一个 AI。灵枢是连接所有 AI 的记忆层。**
 
@@ -34,10 +34,10 @@
 | 档位 | 当前可用 | 尚未开放 |
 |------|----------|----------|
 | Free | 本地聊天、动态记忆、本地 MCP、备份；可接受团队邀请 | — |
-| Pro | Free 本地能力 | 加密云同步、跨设备 MCP、高级记忆治理 |
+| Pro | Free 本地能力、个人私有记忆加密云同步 | 跨设备远程 MCP、高级记忆治理 |
 | Team | Free 本地能力、创建团队工作区；成员按角色和授权访问团队记忆 | Pro 规划能力、按席位账单 |
 
-免费账号受邀后显示“团队版 Team（受邀成员）”，可使用所属团队；创建新团队仍需账号自身有效的 Team 订阅。权益由服务端校验，订阅失效不删除本地记忆或关闭本地 MCP，现有团队也不会因此自动删除。团队共享记忆与个人跨设备同步是两项独立能力，后者尚未开放。详见[权益实施说明](docs/version-entitlements.md)。
+免费账号受邀后显示“团队版 Team（受邀成员）”，可使用所属团队；创建新团队仍需账号自身有效的 Team 订阅。权益由服务端校验，订阅失效不删除本地记忆或关闭本地 MCP，现有团队也不会因此自动删除。团队共享记忆与个人跨设备同步是两项独立能力，后者已提供手动增量同步。详见[权益实施说明](docs/version-entitlements.md)。
 
 ## 产业赛道作品
 
@@ -81,6 +81,8 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 
 | 类别 | 能力 | 状态 |
 |------|------|------|
+| MCP 记忆服务 | stdio MCP Server，6 个工具（`lingshu_recall` / `lingshu_store` / `lingshu_grant` / `lingshu_conflicts` / `lingshu_resolve_conflict` / `lingshu_stats`），让 Claude、Cursor、Codex 等共享同一记忆层 | ✅ 已实现 |
+| 并发写入与裁决 | 事实级事务锁、业务作用域隔离、不同主张保留为争议、人工裁决保留记录与审计 | ✅ 已实现 |
 | 桌面宠物 | 透明浮层、可拖拽、贴边浮窗；Tauri `startDragging` 原生拖动 | ✅ Tauri 2 壳就位 |
 | SoulLedger | 分层记忆、去重、遗忘衰减（含来源护栏）、人格演化、离线 LLM 语义合并、向量检索 | ✅ 后端完成 |
 | Memory Evolution Lab | 三层异构记忆、多 Agent 权限空间、冲突治理、自适应检索、静态 RAG 基线与消融评测 | ✅ 可运行原型；自动治理仍待验收 |
@@ -94,14 +96,17 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 | 角色提示词 | 用户自定义系统角色提示词，集成进对话工作区 | ✅ 已实现 |
 | Markdown 渲染 | MessageBubble 支持 Markdown 格式化展示 | ✅ 已实现 |
 | LLM 设置持久化 | LLM 配置（模型、max_tokens、context_messages 等）存 PostgreSQL，重启保留 | ✅ 已实现 |
-| MCP 与团队记忆 | 本地 MCP、AI 工具配置、团队成员与角色、Agent 凭证、共享记忆和审计 | ✅ 已实现 |
-| 云账户与设备会话 | 可选云账户、网页登录、设备撤销、订阅概览与下载中心 | ✅ 已部署；个人加密云同步暂未开放 |
+| 云账户与版本权益 | 可选云账户、网页登录、设备撤销、订阅概览与下载中心；Free / Pro / Team 权益由云端统一计算 | ✅ 已部署；个人私有记忆加密同步服务已部署；需使用新版客户端，远程 MCP 与高级治理仍未开放 |
+| 团队工作区 | 有效 Team 订阅可创建工作区；受邀 Free 用户可加入，团队内按角色和记忆授权执行 | ✅ 已实现；团队 MCP、统一账单尚未开放 |
 
 ## 项目状态
 
-**当前源码已具备本地记忆、MCP、团队工作区和竞赛演示原型，重点转向评测证据完善。** 代码实现与实验验收分开记录；测试结果以对应提交的 CI 或本地运行输出为准，不沿用旧版本的测试数量。
+**核心功能与跨平台桌面基础设施已完成，当前进入竞赛证据完善和云账户配套收尾阶段。** SoulLedger 记忆系统、Memory Gateway、冲突治理、自适应检索、人格、思考队列、权限分级、工具调用、日历平台适配等均已实现。当前 Rust workspace 为 **408 passed、19 ignored**，前端为 **29 个测试文件、132 项测试通过**，云账户 Worker 为 **55 项测试通过**。
 
-- ✅ Rust + Axum 后端（API、WebSocket、团队工作区与并发写入迁移）
+- ✅ Rust + Axum 后端（API、WebSocket、29 个数据库迁移）
+- ✅ MCP 记忆服务（`lingshu-mcp` + `lingshu-mcp-core`）：stdio 传输，6 个工具，与 REST 共用同一套 Memory Gateway、权限与审计
+- ✅ 并发写入与裁决：事实级事务锁、业务作用域 `context_scope` 隔离、不同主张保留为 `disputed`、人工裁决保留记录
+- ✅ 版本权益：Free / Pro / Team 三档由云端统一计算，客户端只展示结果，受限操作仍由后端校验
 - ✅ React + TypeScript + Vite 前端（聊天 + 记忆/人格/日历/思绪中心 + 设置 + 角色提示词 + 工作区）
 - ✅ PostgreSQL + Redis + Qdrant 开发环境
 - ✅ SoulLedger：记忆提取/去重、遗忘衰减 + 来源护栏、人格演化、离线 LLM 语义合并
@@ -113,8 +118,8 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 - ✅ 信号埋点事件层，已接入核心业务路径
 - ✅ Tauri 2 桌面壳（main + pet 窗口）+ EventKit 桥接（macOS 14+ `NSCalendarsFullAccessUsageDescription`）
 - ✅ Apple Calendar：macOS 使用 EventKit；Windows、Linux 和 Web 使用 ICS 导出；均支持自然语言解析、CRUD 与 L1 确认
-- ✅ Windows / macOS 独立版：Sidecar 内置 PostgreSQL 运行时，安装包可独立启动，不依赖 Docker 或外部数据库
-- ✅ 云账户：网页登录 PKCE、设备会话、订阅概览和下载中心；个人加密云同步与跨设备 MCP 暂未开放；团队工作区已实现
+- ✅ macOS / Windows 独立版：Sidecar 内置 PostgreSQL 运行时，安装包可独立启动，不依赖 Docker 或外部数据库
+- ✅ 云账户：网页登录 PKCE、设备会话、订阅概览和下载中心；Pro 提供个人私有记忆端到端加密同步；远程 MCP 与高级治理仍未开放
 - ✅ Chat：工具调用（tool-use loop）、角色提示词、Markdown 渲染、流式 SSE 响应
 - ✅ 联网搜索：独立 L1 权限开关、网页结果解析、来源链接保留、超时与响应大小限制
 - ✅ LLM 设置持久化至 PostgreSQL（模型、max_tokens、context_messages 等，重启保留）
@@ -128,6 +133,7 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 |------|------|
 | 后端 | Rust 1.88, Axum 0.7, Tokio, sqlx (PostgreSQL), fred (Redis), reqwest |
 | 前端 | React 18, TypeScript, Zustand, Vite 6 |
+| 集成 | MCP（stdio / JSON-RPC 2.0）：Claude、Cursor、Codex、Cline、VS Code、Zed 等 |
 | 数据 | PostgreSQL 16, Redis 7, Qdrant |
 | LLM | Ollama（本地，默认）或任意 OpenAI 兼容端点（DeepSeek 等） |
 | 桌面 | Tauri 2 + macOS EventKit；Windows/Linux/Web 使用平台降级和 ICS 导出 |
@@ -139,7 +145,7 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 - [Node.js](https://nodejs.org) 22+ 与 npm
 - [Docker](https://docker.com) Desktop（基础设施服务）
 - [Ollama](https://ollama.com)（本地 LLM）：需 pull 一个对话模型与嵌入模型 `nomic-embed-text`
-- macOS 14+ Apple Silicon 可使用 EventKit；Windows 10/11 x64 支持独立安装包；Linux 可用于 CI 与纯后端
+- macOS 14+ Apple Silicon 可使用 EventKit 与自包含安装包；Windows 10/11 x64 支持独立安装包；Linux 可用于 CI 与纯后端
 
 ## 快速开始
 
@@ -222,13 +228,43 @@ cd frontend && npm ci && npm run dev      # http://localhost:5173，/api 代理�
 docker compose -f docker/docker-compose.dev.yml --profile full up
 ```
 
-## MCP 接入与团队记忆
+## MCP 接入
 
-先启动灵枢本地服务，再在客户端设置的「AI 工具」面板选择目标工具和传输方式，生成配置；支持的桌面工具可直接写入配置文件，其余工具手动复制。桌面安装包包含 `lingshu-mcp`，源码开发可运行 `cargo build -p lingshu-mcp --release` 生成它。
+MCP 是灵枢的核心入口之一。后端启动后，任何支持 MCP 的 AI 工具都能把灵枢当作共享长期记忆层来读写，无需打开灵枢客户端。
 
-本地 stdio MCP 默认连接 `http://127.0.0.1:8080`，支持 `LINGSHU_BASE_URL` 和 `LINGSHU_TOKEN`；未提供令牌时通过本地会话获取身份。提供 `lingshu_recall`、`lingshu_store`、`lingshu_grant`、`lingshu_conflicts`、`lingshu_resolve_conflict`、`lingshu_stats` 六个工具，按 Agent 身份与记忆权限执行。
+```bash
+cargo build --release -p lingshu-mcp     # → target/release/lingshu-mcp
+```
 
-团队工作区支持创建/加入、成员角色、邀请、Agent 凭证、共享记忆和访问审计。远程接入需使用对应服务的地址与凭证，不能把本地免密会话直接暴露到网络。并发写入通过事实级事务锁协调，冲突主张保留来源，裁决后再标记被替代项，详见[并发写入协议](docs/memory-write-consistency.md)。
+在 AI 工具的 MCP 配置中加一个 server（以 Claude Desktop 的 `claude_desktop_config.json` 为例）：
+
+```json
+{
+  "mcpServers": {
+    "lingshu": {
+      "command": "/绝对路径/target/release/lingshu-mcp",
+      "env": {
+        "LINGSHU_BASE_URL": "http://127.0.0.1:8080"
+      }
+    }
+  }
+}
+```
+
+| 工具 | 作用 |
+|------|------|
+| `lingshu_recall` | 检索记忆，可带业务作用域与记忆层 |
+| `lingshu_store` | 写入记忆（`episode` / `fact` / `experience`） |
+| `lingshu_grant` | 把某条记忆授权给其他 Agent |
+| `lingshu_conflicts` | 列出当前争议 |
+| `lingshu_resolve_conflict` | 人工裁决争议 |
+| `lingshu_stats` | 记忆统计 |
+
+- 鉴权优先读环境变量 `LINGSHU_TOKEN`；未设置时，`lingshu-mcp` 启动时调用本地 `local-session` 自取 owner 令牌。
+- 服务以 stdio 通信，**所有日志写 stderr**，stdout 只走 JSON-RPC，不要把日志重定向到 stdout。
+- 写入后会直接返回状态。**「已记录」不等于「已确认」**：不同主张会保留为争议，检索时显式提示，不能靠重复提交更高置信度来解除。详见[并发写入与冲突治理](docs/memory-write-consistency.md)。
+
+> 本机 MCP 属于免费版能力。Pro 用户在各设备完成端到端加密同步后，本机 MCP 会访问同一套连续记忆；恢复密钥始终留在客户端。
 
 ## 配置
 
@@ -260,9 +296,9 @@ docker compose -f docker/docker-compose.dev.yml --profile full up
 crates/
   lingshu-server/      Rust Axum 后端（API 路由、数据库、LLM、WebSocket、加密、遥测）
   lingshu-vector/      Qdrant 向量搜索客户端
-  lingshu-mcp/         stdio MCP 服务入口
-  lingshu-mcp-core/    共用 MCP 协议与记忆工具
-  lingshu-eval/        独立离线检索与消融评测器
+  lingshu-mcp/         MCP 记忆服务入口（stdio 传输，stdout 只走 JSON-RPC）
+  lingshu-mcp-core/    MCP 协议层与 6 个工具实现（recall / store / grant / conflicts / resolve / stats）
+  lingshu-eval/        离线评测：静态基线、消融、任务完成度与治理指标
 frontend/              React + TypeScript + Vite 单页应用（含 pet 窗口入口）
   src/components/
     avatar/            桌面宠物（PetWindow、AvatarPlaceholder、AvatarControlPanel）
@@ -326,10 +362,10 @@ cd frontend && ./node_modules/.bin/tauri dev
 ## 测试
 
 ```bash
-# 后端测试（部分集成测试需要数据库或网络）
+# Rust workspace 测试（当前 408 passed、19 ignored）
 cargo test --workspace
 
-# 前端单测 + lint + 类型检查 + 构建
+# 前端单测（当前 29 个测试文件、132 项测试）+ lint + 类型检查 + 构建
 cd frontend && npm run test && npm run lint && npm run type-check && npm run build
 
 # Tauri 构建（macOS）
@@ -345,17 +381,22 @@ CI（GitHub Actions）：Rust fmt/clippy/test、前端 lint/type-check/build、W
 
 ## API 文档
 
-OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，覆盖已声明的 API 路径与操作（系统、认证、用户、LLM 设置、对话、会话、记忆网关、评测、人格、思绪、日历、权限、集成、信号、审计、项目管理等）。后端运行时访问 `/swagger-ui`；提交的 `openapi.json` 由契约测试校验。
+OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，当前覆盖 **70 条路径、107 个操作**（系统、认证、用户、LLM 设置、对话、会话、记忆网关、MCP、团队、评测、人格、思绪、日历、权限、集成、信号、审计、项目管理等）。后端运行时访问 `/swagger-ui`；提交的 `openapi.json` 由契约测试校验。
 
 ## 已知局限
 
-- Thought Queue 的「跨会话实体计数」触发器为后续增强。
+- **自动治理未达标**：事实状态自动判定的 Macro-F1 为规则 44.74% / LLM 22.97%，错误淘汰率 23–27%，远高于 <5% 目标。当前依赖保守的争议保留与人工裁决，不自动判定事实真伪。详见[自动治理审计](docs/competition/auto-governance-audit.md)。
+- **Pro 已开放**：个人私有记忆手动增量同步可用，接收后可供免费本机 MCP 使用。远程 MCP 与商业高级治理仍未开放；开发版检索参数的本地持久化保留。团队 MCP 和按席位账单仍属规划能力；有效 Team 订阅已可创建团队工作区，受邀 Free 用户可加入。详见[版本权益实施说明](docs/version-entitlements.md)。
+- 桌面安装包已携带 MCP 二进制，设置页可为支持的客户端一键写入配置；部分客户端仍需手动粘贴配置，源码运行仍需先构建 `lingshu-mcp`。
 - 竞赛评测已增加 LoCoMo 强词法基线、按官方类别规则计分的本地问答、300 查询合成集与消融；尚缺生产检索接入、真实样本、权重路由、百万级并发压测与真实多 Agent 协作。旧版指标口径已纠正，详见[实验报告](docs/competition/experiment-report.md)。
 - 前端暂未提供生成式 API 客户端；当前 OpenAPI 门禁校验代码生成结果与提交的 `openapi.json` 一致性。
 
 ## 文档索引
 
-- [产品需求文档](./AI-PersonalAssistant-PRD.md) — 完整产品规格
+- [产品定位与版本体系](./docs/product-positioning.md) — 客户端、MCP、HTTP API 现有入口、SDK 规划与 Free / Pro / Team 边界
+- [版本权益实施说明](./docs/version-entitlements.md) — 各档当前已开放与尚未开放的能力
+- [并发写入与冲突治理](./docs/memory-write-consistency.md) — MCP 与 REST 共用的写入协议、争议与裁决
+- [产品需求文档](./AI-PersonalAssistant-PRD.md) — 完整产品规格（历史设计稿，不代表当前定位）
 - [中兴 1529 竞赛交付索引](./docs/competition/README.md) — 命题映射、部署演示、架构、创新点与实验报告
 - [竞赛实验报告](./docs/competition/experiment-report.md) — 静态基线、自适应检索、消融实验与证据边界
 - [产品定位与版本体系](./docs/product-positioning.md) · [权益实施说明](./docs/version-entitlements.md)

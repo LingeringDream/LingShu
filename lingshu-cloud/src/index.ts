@@ -19,6 +19,7 @@ import { sendVerificationEmail } from "./email";
 import { HttpError, isHttpError } from "./errors";
 import { teamRequest } from "./teams";
 import { requireSync, syncRequest } from "./sync";
+import { syncRequest as snapshotSyncRequest } from "./snapshotSync";
 import type {
   AppEnv,
   AuthContext,
@@ -355,7 +356,7 @@ function securityHeaders(request: Request, env: AppEnv): Headers {
   const origin = request.headers.get("Origin");
   if (origin && (allowedOrigins(env).has(origin) || allowedOrigins(env).has("*"))) {
     headers.set("Access-Control-Allow-Origin", origin);
-    headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-LingShu-Device-ID");
     headers.set("Access-Control-Expose-Headers", "Retry-After");
     headers.set("Vary", "Origin");
@@ -978,7 +979,7 @@ async function refresh(
     });
 }
 
-async function authenticate(request: Request, env: AppEnv): Promise<AuthContext> {
+export async function authenticate(request: Request, env: AppEnv): Promise<AuthContext> {
   const authorization = request.headers.get("Authorization") || "";
   if (!authorization.startsWith("Bearer ")) {
     throw new HttpError(401, "Bearer access token required", "UNAUTHORIZED");
@@ -1404,6 +1405,11 @@ async function route(
   }
   if (path.startsWith("/api/v1/teams")) {
     const response = await teamRequest(request, env, path);
+    if (response) return response;
+  }
+  if (path === '/api/v1/sync' || path === '/api/v1/sync/history') {
+    const session = await authenticate(request, env);
+    const response = await snapshotSyncRequest(request, env, session, path);
     if (response) return response;
   }
   if (path.startsWith('/api/v1/sync/')) {

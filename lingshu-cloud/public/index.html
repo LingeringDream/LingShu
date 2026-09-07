@@ -264,13 +264,13 @@
               </article>
 
               <article class="plan-card is-featured">
-                <div class="plan-labels"><span class="plan-kicker">进阶</span><span class="plan-state is-upcoming">随同步开放</span></div>
+                <div class="plan-labels"><span class="plan-kicker">进阶</span><span class="plan-state is-live">已开放</span></div>
                 <h3>专业版 <small>Pro</small></h3>
                 <p>适合个人开发者、研究者和需要多设备记忆工作流的重度用户。</p>
                 <ul>
                   <li>包含全部免费版权益</li>
                   <li>加密云端记忆同步</li>
-                  <li>多设备增量同步与冲突历史</li>
+                  <li>多设备合并与冲突历史</li>
                   <li>跨设备 MCP 接入与连续记忆</li>
                   <li>高级经验沉淀与记忆参数自定义</li>
                   <li>优先获得云端新能力</li>
@@ -285,18 +285,18 @@
               </article>
 
               <article class="plan-card is-planned" data-plan-card="team">
-                <div class="plan-labels"><span class="plan-kicker">协作</span><span class="plan-state">规划中</span></div>
+                <div class="plan-labels"><span class="plan-kicker">协作</span><span class="plan-state">测试中</span></div>
                 <h3>团队版 <small>Team</small></h3>
                 <p>适合小型团队、实验室和需要共享记忆边界的组织。</p>
                 <ul>
                   <li>包含全部专业版权益</li>
-                  <li>团队工作区与共享记忆空间</li>
+                  <li>团队工作区与共享记忆空间（测试权益）</li>
                   <li>成员角色和细粒度访问权限</li>
                   <li>团队审计记录与设备治理</li>
-                  <li>按权限访问的团队 MCP 空间</li>
-                  <li>按席位统一管理订阅与账单</li>
+                  <li>按权限访问的团队 MCP 空间（尚未开放）</li>
+                  <li>按席位统一管理订阅与账单（尚未开放）</li>
                 </ul>
-                <span class="plan-price is-muted">价格与开放时间待公布</span>
+                <span class="plan-price is-muted">测试权益定向开放，暂不公开购买</span>
               </article>
             </div>
             <section class="enterprise-contact" aria-labelledby="enterprise-contact-title">
@@ -319,7 +319,7 @@
             </section>
             <div class="plan-principles" aria-label="订阅分级原则">
               <p><strong>本地 MCP 永久免费</strong><span>免费版让同一台电脑上的 Claude、Cursor、Codex 等 AI 共享本机灵枢记忆。</span></p>
-              <p><strong>Pro 扩展跨设备连续性</strong><span>专业版的云同步与跨设备 MCP 权益将在功能正式开放后生效。</span></p>
+              <p><strong>Pro 扩展跨设备连续性</strong><span>在新版桌面端备份并输入恢复密钥，手动同步个人私有记忆，接收后可供本机 MCP 使用。</span></p>
               <p><strong>结账前显示真实价格</strong><span>各档时长与金额以微信支付 / 支付宝收银台最终确认内容为准。</span></p>
             </div>
             <p class="billing-note">
@@ -362,7 +362,7 @@
           <section id="docs-section" class="account-page docs-section" data-page-panel="docs" aria-labelledby="docs-title" hidden>
             <div class="page-intro">
               <h2 id="docs-title">使用文档</h2>
-              <p>安装、账户、设备与订阅的完整操作说明。标注为“尚未开放”的能力不会影响本地使用。</p>
+              <p>安装、账户、设备、加密同步与团队协作的完整操作说明。标注为“尚未开放”的能力不会影响本地使用。</p>
             </div>
             <div class="docs-layout">
               <nav class="docs-index" aria-label="文档目录">
@@ -372,8 +372,9 @@
                 <a href="#device-security"><strong>设备管理</strong><small>识别设备与远程撤销</small></a>
                 <a href="#local-features"><strong>本地功能与模型接入</strong><small>本地会话、多模型与联网搜索</small></a>
                 <a href="#system-capabilities"><strong>记忆、人格与系统能力</strong><small>SoulLedger、权限分级与日历</small></a>
-                <a href="#memory-sync"><strong>记忆同步</strong><small>当前状态与本地数据边界</small></a>
+                <a href="#memory-sync"><strong>记忆同步</strong><small>加密口令、双向合并与自动同步</small></a>
                 <a href="#billing-guide"><strong>订阅与账单</strong><small>升级、管理与付款安全</small></a>
+                <a href="#team-workspace"><strong>团队工作区</strong><small>创建、受邀加入与开放边界</small></a>
                 <a href="#download-verification"><strong>下载与校验</strong><small>网盘与 SHA-256</small></a>
                 <a href="#dev-edition"><strong>开发版与竞赛演示</strong><small>Docker 一键启动与故障排查</small></a>
                 <a href="#troubleshooting"><strong>常见问题</strong><small>启动、模型、权限与数据备份</small></a>
@@ -388,7 +389,7 @@
                       <li><strong>选择安装包。</strong>Windows 10/11 x64 使用 <code>.exe</code>；Apple Silicon Mac 使用 macOS 14+ 的 <code>.dmg</code>。</li>
                       <li><strong>完成文件校验。</strong>下载后先核对下载中心公布的文件名和 SHA-256，再运行安装程序。</li>
                       <li><strong>启动灵枢。</strong>首次启动会初始化内置数据库并创建本地会话。<strong>数据库初始化需要 1–2 分钟</strong>，期间界面保持等待属正常现象，请勿强制结束进程。</li>
-                      <li><strong>按需登录云账户。</strong>只有需要账户、设备或未来跨设备同步能力时，才需要登录本页面的云账户。</li>
+                      <li><strong>按需登录云账户。</strong>只有需要账户、设备、Pro 跨设备同步或团队工作区时，才需要登录云账户。</li>
                     </ol>
                     <ul class="doc-list">
                       <li><strong>重复打开只会聚焦已有窗口：</strong>灵枢为单实例应用，再次启动会显示并聚焦已打开的控制面板，不会产生第二个实例。</li>
@@ -482,16 +483,24 @@
                 <section id="memory-sync">
                   <span class="doc-number">07</span>
                   <div class="doc-content">
-                    <h3>记忆同步：当前尚未开放</h3>
-                    <p>云端已经预留独立的加密记忆存储，但当前账户服务还没有启用记忆上传、下载或冲突合并接口。</p>
+                    <h3>记忆同步：Pro 已开放</h3>
+                    <p>有效的 Pro 或 Team 权益可在桌面端进行端到端加密的双向记忆同步。加密和解密只在设备本地完成；默认协议逐条保存 AES-256-GCM 密文、修订元数据及每条最近 10 个旧版本，无法读取记忆正文。</p>
+                    <ol class="doc-steps">
+                      <li><strong>登录桌面端云账户。</strong>打开“云账户”，确认当前权益中“端到端加密云同步”显示为“可用”。</li>
+                      <li><strong>输入同步加密口令。</strong>口令至少 12 个字符；同一账户的所有设备必须使用完全相同的口令。</li>
+                      <li><strong>首次手动同步。</strong>点击“立即双向同步”。灵枢会先在本机解密云端快照，以记忆修改时间合并两端数据，再上传新的密文修订。</li>
+                      <li><strong>按需开启自动同步。</strong>开启后，完成一次解锁的本次运行会每 5 分钟同步，并在恢复联网时重试。</li>
+                      <li><strong>在其他设备重复操作。</strong>登录同一账户并输入相同口令后执行双向同步；合并完成后，该设备的本机 MCP 会直接使用最新本地记忆。</li>
+                    </ol>
                     <ul class="doc-list">
-                      <li>登录云账户后，现有本地记忆<strong>不会自动上传</strong>。</li>
-                      <li>卸载、换机或重装前，仍需按桌面端现有方式自行备份本地数据。</li>
-                      <li>未来同步只处理加密后的增量数据与同步游标，不会接管本地核心功能。</li>
-                      <li>网络中断时，本地会话和本地数据仍可继续使用。</li>
+                      <li><strong>登录不会直接上传：</strong>必须输入同步加密口令并手动同步一次，才会开始本次运行的同步。</li>
+                      <li><strong>口令不会持久保存：</strong>口令只在软件本次运行期间保存在内存中，重启后需重新输入；云端无法读取、找回或重置它。</li>
+                      <li><strong>删除也会同步：</strong>删除记录以 tombstone 合并，避免旧设备把已删除记忆重新带回。</li>
+                      <li><strong>并发冲突会自动重试：</strong>若多台设备同时写入，客户端会重新拉取并合并；连续冲突时请稍后再次点击同步。</li>
+                      <li><strong>断网不影响本地：</strong>本地会话、记忆与本机 MCP 可继续使用，联网后再同步。</li>
                     </ul>
+                    <p class="doc-warning"><strong>请先备份口令和本地数据：</strong>遗失同步口令后无法解密已有云端快照。云同步用于多设备连续使用，不替代你自己的灾难恢复备份。</p>
                     <p class="doc-note"><strong>本地数据位置（Windows）：</strong>桌面端数据保存在 <code>%APPDATA%\com.lingshu.desktop\embedded-postgresql</code> 目录。重装系统、更换电脑前，请备份整个 <code>com.lingshu.desktop</code> 目录；恢复时放回相同位置即可。</p>
-                    <p class="doc-note"><strong>开放前提：</strong>页面出现明确的“启用同步”入口并展示同步状态后，才表示该能力已正式可用。</p>
                   </div>
                 </section>
                 <section id="billing-guide">
@@ -502,8 +511,8 @@
                     <p class="doc-note"><strong>模型接入不设付费墙：</strong>免费版即可自由接入本地模型（如 Ollama）或自备第三方 API Key，不产生订阅费用；官方托管模型按量计费，与订阅费分开结算。</p>
                     <ul class="doc-list">
                       <li><strong>免费版（当前可用）：</strong>完整本地会话、离线使用、本地基础动态记忆、多模型自由接入（本地模型或自备 API Key）、云账户和设备会话管理。</li>
-                      <li><strong>专业版 Pro（随同步开放）：</strong>在免费版基础上增加加密增量同步、多设备冲突历史、跨设备 MCP、高级经验沉淀和记忆参数自定义。</li>
-                      <li><strong>团队版 Team（规划中）：</strong>增加团队工作区、共享记忆空间、成员权限、团队 MCP 空间、审计记录、设备治理和按席位统一账单。</li>
+                      <li><strong>专业版 Pro：</strong>在免费版基础上增加个人私有记忆加密增量同步与显式冲突处理；远程 MCP、高级经验沉淀仍属规划能力。</li>
+                      <li><strong>团队版 Team：</strong>有效 Team 权益已可创建团队工作区、管理成员与共享记忆；受邀成员无需个人购买 Team。团队 MCP 和按席位统一账单尚未开放，Team 仍不接受公开购买。</li>
                       <li><strong>企业版与嵌入版：</strong>提供企业级上下文治理、MCP Gateway、API / SDK、私有部署与 OEM 能力，通过页面中的企业联系入口咨询。</li>
                     </ul>
                     <p class="doc-note"><strong>开放状态：</strong>只有“订阅与账单”页面显示可用价格和可点击的升级按钮时，在线付款才已开放；团队版当前不接受购买。</p>
@@ -517,8 +526,23 @@
                     <a class="doc-link" href="/billing">查看当前套餐</a>
                   </div>
                 </section>
-                <section id="download-verification">
+                <section id="team-workspace">
                   <span class="doc-number">09</span>
+                  <div class="doc-content">
+                    <h3>团队工作区</h3>
+                    <p>团队工作区目前面向已有有效 Team 测试权益的账户开放创建。受邀成员即使个人账户为 Free 或 Pro，也可以接受邀请并进入已有工作区。</p>
+                    <ol class="doc-steps">
+                      <li><strong>创建工作区：</strong>拥有有效 Team 权益的账户登录后打开“团队工作区”，填写名称并创建；受邀成员不能凭成员身份再创建新工作区。</li>
+                      <li><strong>邀请成员：</strong>所有者或管理员使用成员邮箱发送邀请；对方注册并验证同一邮箱后即可接受。</li>
+                      <li><strong>分配角色：</strong>所有者、管理员、编辑者和只读成员拥有不同的成员管理与记忆写入权限。</li>
+                      <li><strong>管理共享记忆：</strong>记忆可设为私有、定向共享或团队全局；只读成员只能查看有权访问的内容。</li>
+                      <li><strong>查看治理记录：</strong>管理员可查看最近的团队审计事件，并管理团队访问密钥。</li>
+                    </ol>
+                    <p class="doc-note"><strong>当前边界：</strong>团队 MCP 空间和按席位统一账单尚未开放；当前团队工作区不等同于企业私有部署，也不会自动读取个人本地记忆。</p>
+                  </div>
+                </section>
+                <section id="download-verification">
+                  <span class="doc-number">10</span>
                   <div class="doc-content">
                     <h3>下载来源与文件校验</h3>
                     <p>安装包统一通过网盘分发；下载后请先核对文件名与 SHA-256 再安装。Windows 当前版本 <strong>1.6.0</strong> 的校验值如下：</p>
@@ -539,7 +563,7 @@
                   </div>
                 </section>
                 <section id="dev-edition">
-                  <span class="doc-number">10</span>
+                  <span class="doc-number">11</span>
                   <div class="doc-content">
                     <h3>开发版与竞赛演示</h3>
                     <p>灵枢提供面向演示与竞赛的 Windows 开发版：基于 Docker 一键启动完整的“动态记忆引擎”控制台，无需手动安装数据库、向量库或编译环境。</p>
@@ -558,7 +582,7 @@
                   </div>
                 </section>
                 <section id="troubleshooting">
-                  <span class="doc-number">11</span>
+                  <span class="doc-number">12</span>
                   <div class="doc-content">
                     <h3>常见问题</h3>
                     <dl class="doc-faq">
@@ -577,9 +601,11 @@
                       <div><dt>验证链接提示无效或已过期</dt><dd>链接可能超过 24 小时、已经使用过，或复制时不完整。重新提交注册即可在旧记录过期后生成新验证链接。</dd></div>
                       <div><dt>登录后又回到登录页</dt><dd>会话可能已过期或被其他设备撤销。刷新页面并重新登录；若仍失败，确认浏览器未阻止该站点的本地存储。</dd></div>
                       <div><dt>收不到验证邮件</dt><dd>检查垃圾邮件和邮箱拼写。有效期内重复提交不会再次发送；请使用首次收到的邮件，或等待旧链接过期后重新注册。</dd></div>
-                      <div><dt>断网后还能使用吗</dt><dd>桌面端本地核心功能可以继续使用；账户网页、设备管理、订阅查询和未来云同步需要联网。</dd></div>
+                      <div><dt>断网后还能使用吗</dt><dd>桌面端本地核心功能可以继续使用；账户网页、设备管理、订阅查询和云同步需要联网。</dd></div>
                       <div><dt>撤销设备会删除记忆吗</dt><dd>不会。撤销只让该设备的云会话失效，不会删除桌面端本地数据，也不会删除账户。</dd></div>
-                      <div><dt>网页目前不能做什么</dt><dd>当前尚不提供忘记密码、修改密码、删除账户和记忆同步。这些能力开放后会在账户中心提供明确入口。</dd></div>
+                      <div><dt>更换设备后为什么无法解密云端记忆</dt><dd>先确认登录的是同一云账户，并逐字输入原设备使用的同步加密口令。云端不保存口令，无法代为找回；若口令遗失，只能继续使用仍可访问的本地数据与已有备份。</dd></div>
+                      <div><dt>Free 账户为什么能进入团队工作区</dt><dd>受邀成员由所在团队授予工作区访问权，不要求个人购买 Team；可执行的操作仍由团队角色与记忆访问范围决定。创建新的工作区需要有效 Team 权益。</dd></div>
+                      <div><dt>网页目前不能做什么</dt><dd>当前尚不提供忘记密码、修改密码和删除账户。记忆同步在桌面端完成，因为加密口令不会交给网页或云端。</dd></div>
                     </dl>
                   </div>
                 </section>

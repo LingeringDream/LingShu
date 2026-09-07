@@ -109,11 +109,11 @@ export class CloudAccountClient {
     return next;
   }
 
-  private async request<T>(path: string, body?: unknown, token?: string): Promise<T> {
+  private async request<T>(path: string, body?: unknown, token?: string, method?: string): Promise<T> {
     let response: Response;
     try {
       response = await this.fetcher(`${CLOUD_ACCOUNT_URL}/api/v1${path}`, {
-        method: body === undefined ? 'GET' : 'POST',
+        method: method || (body === undefined ? 'GET' : 'POST'),
         credentials: 'omit',
         cache: 'no-store',
         redirect: 'error',
@@ -189,6 +189,35 @@ export class CloudAccountClient {
         throw retryError;
       }
     }
+  }
+
+  private async authorizedRequest<T>(path: string, method: 'GET' | 'PUT', userId: string, body?: unknown): Promise<T> {
+    if ((!this.tokens || Date.now() >= this.expiresAt - 60_000) && !await this.refresh()) {
+      throw new CloudAccountError('请先登录云账户。', 401);
+    }
+    if (this.tokens?.user.id !== userId) throw new CloudAccountError('云账户已切换，请重新开启同步。', 401);
+    const send = () => {
+      if (this.tokens?.user.id !== userId) throw new CloudAccountError('云账户已切换，请重新开启同步。', 401);
+      return this.request<T>(path, body, this.tokens.access_token, method);
+    };
+    try { return await send(); }
+    catch (error) {
+      if (!(error instanceof CloudAccountError) || error.status !== 401) throw error;
+      await this.refresh();
+      return send();
+    }
+  }
+
+  readEncryptedSync<T>(userId: string): Promise<T> {
+    return this.serial(() => this.authorizedRequest<T>('/sync', 'GET', userId));
+  }
+
+  writeEncryptedSync<T>(body: unknown, userId: string): Promise<T> {
+    return this.serial(() => this.authorizedRequest<T>('/sync', 'PUT', userId, body));
+  }
+
+  readSyncHistory<T>(userId: string): Promise<T> {
+    return this.serial(() => this.authorizedRequest<T>('/sync/history', 'GET', userId));
   }
 
   private async overview(): Promise<CloudAccount> {

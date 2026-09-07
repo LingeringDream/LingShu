@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-07
+
+### Version 1.6.1
+
+- `build(desktop)`: release the 1.6.1 installer — a self-contained macOS package (`.app` + `.dmg`) that bundles the PostgreSQL-backed `lingshu-server` sidecar and the local `lingshu-mcp` sidecar, so no database or runtime needs to be installed first.
+- `chore(release)`: roll the version across the Cargo workspace, the Tauri desktop manifest, the frontend manifest, and the committed OpenAPI contract.
+
 ## 2026-09-06
 
 ### Version 1.6.1
@@ -21,6 +28,13 @@
 - `fix(entitlements)`: show team entitlements to invited members. Membership now grants the team feature set even when the member keeps a free personal plan — only creating a *new* workspace requires a paid team subscription.
 - `feat(desktop)`: add an "AI tools" settings panel and bundle the `lingshu-mcp` sidecar in the desktop installer.
 - `feat(memory)`: add write coordination for concurrent memory writes and a dedicated team memory space.
+
+## 2026-09-05
+
+### Version 1.5.3
+
+- `feat(macOS)`: add a self-contained macOS package with embedded PostgreSQL and a platform-correct application-data directory.
+- `build(macOS)`: add package and notarization scripts, enable embedded PostgreSQL in sidecar builds by default, and reduce release binary size.
 
 ## 2026-09-04
 

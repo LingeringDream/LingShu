@@ -7,7 +7,7 @@
 
 [中文](./README.md)
 
-LingShu is a user-controlled memory layer for individuals and small teams, with a desktop companion and MCP access for compatible AI tools. Enterprise and Embedded / OEM are separate product plans; packaged APIs and SDKs are not presented as delivered features. See the [product positioning](docs/product-positioning.md).
+LingShu is a user-controlled memory layer that connects AI tools for individuals, teams, and enterprises, while also providing its own desktop companion. Users can work in the LingShu client, connect Claude, Cursor, Codex, and other tools through MCP, or embed its memory capabilities through the current HTTP API; Python and TypeScript SDKs are planned. See the [product positioning and editions](docs/product-positioning.md) for the complete model.
 
 > **LingShu is not another AI. It is the memory layer connecting all of your AIs.**
 
@@ -28,7 +28,7 @@ These editions are independent of subscription tiers:
 | Tier | Available now | Not yet enabled |
 |------|---------------|-----------------|
 | Free | Local chat, memory, MCP, backup; accept team invitations | — |
-| Pro | Free local capabilities | Encrypted personal sync, cross-device MCP, advanced governance |
+| Pro | Free local capabilities and encrypted private-memory sync | Remote cross-device MCP and advanced governance |
 | Team | Free local capabilities plus workspace creation and role-based team access | Planned Pro capabilities and per-seat billing |
 
 Invited Free users receive team-member access, but creating another workspace requires their own valid Team subscription. Expiry does not remove local memory or local MCP, and existing teams are not automatically deleted. Team sharing does not imply personal cross-device sync. See [entitlements](docs/version-entitlements.md).
@@ -61,6 +61,8 @@ See the [experiment report](docs/competition/experiment-report.md) for protocols
 
 | Category | Capability | Status |
 |----------|-----------|--------|
+| MCP Memory Service | stdio MCP server with 6 tools (`lingshu_recall` / `lingshu_store` / `lingshu_grant` / `lingshu_conflicts` / `lingshu_resolve_conflict` / `lingshu_stats`), letting Claude, Cursor, Codex and others share one memory layer | ✅ Implemented |
+| Concurrent Writes & Adjudication | Fact-level transactional locks, `context_scope` isolation, competing claims preserved as `disputed`, human adjudication with retained records | ✅ Implemented |
 | Desktop Pet | Transparent overlay, draggable, snappable floating window; Tauri `startDragging` native drag | ✅ Tauri 2 shell ready |
 | SoulLedger | Layered memory, dedup, forgetting decay (with provenance guardrails), personality evolution, offline LLM semantic consolidation, vector retrieval | ✅ Backend complete |
 | Apple Calendar | Natural-language scheduling, L1 confirmation flow, event CRUD, EventKit system calendar write-back/delete, external_event_id sync | ✅ Backend + bridge complete |
@@ -73,14 +75,17 @@ See the [experiment report](docs/competition/experiment-report.md) for protocols
 | Role Prompts | User-customizable system role prompts, integrated into chat workspace | ✅ Implemented |
 | Markdown Rendering | MessageBubble supports formatted Markdown display | ✅ Implemented |
 | LLM Settings Persistence | LLM config (model, max_tokens, context_messages, etc.) stored in PostgreSQL, survives restarts | ✅ Implemented |
-| MCP and Team Memory | Local MCP, AI-tool configuration, memberships, roles, Agent credentials, shared memory, and audit | ✅ Implemented |
-| Cloud Account | Optional browser PKCE login, device sessions, subscription overview, and download center | ✅ Deployed; personal encrypted sync is not enabled |
+| Cloud Account & Entitlements | Optional browser PKCE login, device sessions, subscription overview, and download center; Free / Pro / Team entitlements computed centrally in the cloud | ✅ Deployed; encrypted private-memory sync is enabled; remote MCP and advanced governance remain unreleased |
+| Team Workspaces | Valid Team subscriptions can create workspaces; invited Free users can join, with team operations governed by roles and memory grants | ✅ Implemented; team MCP and per-seat billing are not enabled |
 
 ## Project Status
 
-**The current source includes local memory, MCP, team workspaces, and a runnable competition prototype.** Evaluation evidence is still being developed. Test results should be taken from the matching commit or local run rather than historical counts.
+**Core features and cross-platform desktop infrastructure are complete; the current work is evidence and cloud-account polish.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and platform-adapted calendar export are implemented. The Rust workspace carries **408 passed and 19 ignored tests**; the frontend has **29 test files and 132 passing tests**; the cloud Worker has **55 passing tests**.
 
-- ✅ Rust + Axum backend (API, WebSocket, team and write-coordination migrations)
+- ✅ Rust + Axum backend (API, WebSocket, 29 database migrations)
+- ✅ MCP memory service (`lingshu-mcp` + `lingshu-mcp-core`): stdio transport, 6 tools sharing the same Memory Gateway, permissions, and audit trail as REST
+- ✅ Concurrent writes & adjudication: fact-level transactional locks, `context_scope` isolation, competing claims preserved as `disputed`, human adjudication retains records
+- ✅ Entitlements: Free / Pro / Team tiers computed centrally in the cloud; the client only renders results and the backend re-validates restricted actions
 - ✅ React + TypeScript + Vite frontend (chat + memory/personality/calendar/thought centers + settings + role prompts + workspace)
 - ✅ PostgreSQL + Redis + Qdrant development environment
 - ✅ SoulLedger: memory extraction/dedup, forgetting decay + provenance guardrails, personality evolution, offline LLM semantic consolidation
@@ -91,8 +96,8 @@ See the [experiment report](docs/competition/experiment-report.md) for protocols
 - ✅ Signal telemetry event layer, wired into core business paths
 - ✅ Tauri 2 desktop shell (main + pet windows) + EventKit bridge (macOS 14+ `NSCalendarsFullAccessUsageDescription`)
 - ✅ Calendar: EventKit write-back/delete on macOS, ICS export on Windows/Linux/Web, with NL parsing, CRUD, L1 confirmation, and external_event_id sync where applicable
-- ✅ Windows / macOS self-contained packages with embedded PostgreSQL and backend/MCP sidecars
-- ✅ Cloud account: browser PKCE login, device sessions, subscription overview, and download center; cloud memory sync is not enabled
+- ✅ macOS and Windows self-contained packages with an embedded PostgreSQL runtime
+- ✅ Cloud account: browser PKCE login, device sessions, subscription overview, and download center; encrypted private-memory sync is enabled; remote MCP and advanced governance remain unreleased
 - ✅ Chat: tool-use loop, role prompts, Markdown rendering, streaming SSE responses
 - ✅ Web search: separate L1 permission, result parsing, source preservation, timeout and response-size limits
 - ✅ LLM settings persisted to PostgreSQL (model, max_tokens, context_messages, etc. — survives restarts)
@@ -106,6 +111,7 @@ Full product spec: [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) 
 |-------|-----------|
 | Backend | Rust 1.88, Axum 0.7, Tokio, sqlx (PostgreSQL), fred (Redis), reqwest |
 | Frontend | React 18, TypeScript, Zustand, Vite 6 |
+| Integration | MCP (stdio / JSON-RPC 2.0): Claude, Cursor, Codex, Cline, VS Code, Zed, etc. |
 | Data | PostgreSQL 16, Redis 7, Qdrant |
 | LLM | Ollama (local, default) or any OpenAI-compatible endpoint (DeepSeek, etc.) |
 | Desktop | Tauri 2 + macOS EventKit; platform fallback and ICS export elsewhere |
@@ -117,7 +123,7 @@ Full product spec: [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) 
 - [Node.js](https://nodejs.org) 22+ with npm
 - [Docker](https://docker.com) Desktop (infrastructure services)
 - [Ollama](https://ollama.com) (local LLM): pull a chat model and the `nomic-embed-text` embedding model
-- macOS 14+ Apple Silicon supports EventKit; Windows 10/11 x64 has a self-contained package; Linux works for CI and backend-only
+- macOS 14+ Apple Silicon supports EventKit and a self-contained package; Windows 10/11 x64 has a self-contained package; Linux works for CI and backend-only
 
 ## Quick Start
 
@@ -190,13 +196,43 @@ cd frontend && npm ci && npm run dev      # http://localhost:5173, /api proxied 
 docker compose -f docker/docker-compose.dev.yml --profile full up
 ```
 
-## MCP and Team Memory
+## MCP Integration
 
-Start LingShu, then use Settings → AI tools to generate a configuration for a compatible MCP client. Supported desktop tools can write their configuration directly; other tools require copying it manually. The installer bundles `lingshu-mcp`; source developers can build it with `cargo build -p lingshu-mcp --release`.
+MCP is one of the core entry points. Once the backend is running, any MCP-capable AI tool can read and write LingShu as a shared long-term memory layer, without opening the LingShu client.
 
-Local stdio MCP connects to `http://127.0.0.1:8080` by default. It accepts `LINGSHU_BASE_URL` and `LINGSHU_TOKEN`, obtaining a local-session token when none is supplied. Tools are `lingshu_recall`, `lingshu_store`, `lingshu_grant`, `lingshu_conflicts`, `lingshu_resolve_conflict`, and `lingshu_stats`, subject to Agent identity and memory permissions. Remote access requires the corresponding service endpoint and credentials; never expose the passwordless local-session endpoint.
+```bash
+cargo build --release -p lingshu-mcp     # → target/release/lingshu-mcp
+```
 
-Team workspaces support membership, roles, invitations, Agent credentials, shared memory, and auditing.
+Add a server to your AI tool's MCP configuration (example: Claude Desktop's `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "lingshu": {
+      "command": "/absolute/path/to/target/release/lingshu-mcp",
+      "env": {
+        "LINGSHU_BASE_URL": "http://127.0.0.1:8080"
+      }
+    }
+  }
+}
+```
+
+| Tool | Purpose |
+|------|---------|
+| `lingshu_recall` | Retrieve memories, optionally scoped by context and layer |
+| `lingshu_store` | Write memories (`episode` / `fact` / `experience`) |
+| `lingshu_grant` | Grant another agent access to a memory |
+| `lingshu_conflicts` | List current disputes |
+| `lingshu_resolve_conflict` | Adjudicate a dispute |
+| `lingshu_stats` | Memory statistics |
+
+- Authentication reads `LINGSHU_TOKEN` first; when unset, `lingshu-mcp` calls the local `local-session` endpoint at startup to obtain an owner token.
+- The service speaks stdio. **All logs go to stderr** and stdout carries JSON-RPC only — never redirect logs into stdout.
+- Write status is returned directly. **"Recorded" is not "confirmed"**: competing claims are preserved as disputes and surfaced during retrieval; re-submitting a higher confidence does not resolve them. See [concurrent memory writes](docs/memory-write-consistency.md).
+
+> Local MCP is a Free-tier capability. Pro users synchronize end-to-end encrypted memory to each device, where local MCP clients use the same continuous memory layer.
 
 ## Configuration
 
@@ -228,9 +264,9 @@ Layered loading: `config.toml` first, then environment variable overrides (`.env
 crates/
   lingshu-server/      Rust Axum backend (API routes, DB, LLM, WebSocket, crypto, telemetry)
   lingshu-vector/      Qdrant vector search client
-  lingshu-mcp/         stdio MCP entry point
-  lingshu-mcp-core/    Shared MCP protocol and memory tools
-  lingshu-eval/        Offline retrieval and ablation harness
+  lingshu-mcp/         MCP memory service entry (stdio transport)
+  lingshu-mcp-core/    MCP protocol layer and the 6 tool implementations
+  lingshu-eval/        Offline evaluation: baselines, ablations, task completion, governance metrics
 frontend/              React + TypeScript + Vite SPA (includes pet window entry)
   src/components/
     avatar/            Desktop pet (PetWindow, AvatarPlaceholder, AvatarControlPanel)
@@ -291,10 +327,10 @@ cd frontend && ./node_modules/.bin/tauri dev
 ## Testing
 
 ```bash
-# Backend tests (some integration tests require a database or network)
+# Rust workspace tests (408 passed, 19 DB-gated or network-gated ignored)
 cargo test --workspace
 
-# Frontend unit tests + lint + type-check + build
+# Frontend unit tests (29 test files, 132 tests) + lint + type-check + build
 cd frontend && npm run test && npm run lint && npm run type-check && npm run build
 
 # Tauri build (macOS)
@@ -310,16 +346,21 @@ CI (GitHub Actions): Rust fmt/clippy/test, frontend lint/type-check/build, Windo
 
 ## API Documentation
 
-OpenAPI 3.1 generated by [utoipa](https://github.com/juhaku/utoipa), covering the declared API paths and operations (system, auth, users, LLM settings, chat, sessions, memories, personality, thoughts, calendar, permissions, integrations, signals, audit, project management, etc.). The committed `openapi.json` is checked by a contract test; Swagger UI is available at `/swagger-ui` while the backend is running.
+OpenAPI 3.1 generated by [utoipa](https://github.com/juhaku/utoipa), covering **70 paths and 107 operations** (system, auth, users, LLM settings, chat, sessions, memory gateway, MCP, teams, evaluation, personality, thoughts, calendar, permissions, integrations, signals, audit, project management, etc.). The committed `openapi.json` is checked by a contract test; Swagger UI is available at `/swagger-ui` while the backend is running.
 
 ## Known Limitations
 
-- Thought Queue "cross-session entity count" trigger is a future enhancement.
+- **Automated governance does not meet its target**: fact-state classification reaches Macro-F1 44.74% (rules) / 22.97% (LLM) with a 23–27% wrong-discard rate, far above the <5% goal. The system therefore relies on conservative dispute preservation and human adjudication rather than automatically deciding truth. See the [governance audit](docs/competition/auto-governance-audit.md).
+- **Pro is enabled**: manual encrypted private-memory sync is available to updated clients, and synchronized memories can be read by free local MCP. Remote MCP and commercial advanced governance remain unreleased; development-edition retrieval settings remain locally persistent. Team MCP and per-seat billing remain planned. Valid Team subscriptions can already create workspaces, and invited Free users can join. See [version entitlements](docs/version-entitlements.md).
+- Desktop packages include the MCP binary, and Settings can write configuration for supported clients in one step. Some clients still require manual configuration; source builds must build `lingshu-mcp` first.
 - A generated frontend API client is not included yet; the current OpenAPI gate checks the committed spec against the Rust-generated document.
 
 ## Documentation
 
-- [Product Requirements Document](./AI-PersonalAssistant-PRD.md) — full product spec (Chinese)
+- [Product Positioning and Editions](./docs/product-positioning.md) — current client, MCP, and HTTP API entry points, planned SDKs, and Free / Pro / Team boundaries
+- [Version Entitlements](./docs/version-entitlements.md) — what is enabled today versus still planned per tier
+- [Concurrent Memory Writes](./docs/memory-write-consistency.md) — the write protocol shared by MCP and REST, disputes, and adjudication
+- [Product Requirements Document](./AI-PersonalAssistant-PRD.md) — full product spec (Chinese; historical, not current positioning)
 - [SoulLedger Design Decisions](./docs/soulledger-design-decisions.md)
 - [MVP Status](./docs/mvp-status.md)
 - [Contributing Guide](./CONTRIBUTING.md) · [Changelog](./CHANGELOG.md)

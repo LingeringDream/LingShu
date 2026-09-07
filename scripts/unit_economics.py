@@ -435,7 +435,7 @@ def build_html() -> str:
     # ---- 4 用量假设
     a('<section><h2>四、每用户每月用量假设（基准情景）</h2>')
     a('<p class="small">依据现有代码实测特征推导：access token TTL 900 秒（活跃时约每 15 分钟刷新一次）、'
-      'refresh token 30 天、D1 存 users/devices/sessions/login_attempts 四表、R2 桶 MEMORY_BUCKET 尚未启用（随同步开放）。</p>')
+      'refresh token 30 天、D1 存账户与同步修订元数据、R2 桶 MEMORY_BUCKET 保存 Pro 端到端加密快照。</p>')
     a('<table><tr><th>驱动项</th>' + "".join(f'<th class="n">{t["name"]}</th>' for t in TIERS) + '<th>推导依据</th></tr>')
     fields = [
         ("Worker 请求（次）", "req", "登录/刷新/设备列表/同步上报；刷新按 16–24 活跃天 × 6 次/天"),

@@ -3,7 +3,23 @@ import { AppLayout, type AppSectionKey } from './components/layout/AppLayout';
 import { ChatWindow } from './components/chat/ChatWindow';
 import { ChatSettings } from './components/chat/ChatSettings';
 import { MemoryCenter } from './components/memory/MemoryCenter';
-import { MemoryEvolutionLab } from './components/memory/MemoryEvolutionLab';
+function MemoryLabRoute() {
+  const [El, setEl] = useState<React.FC | null>(null);
+  useEffect(() => {
+    if (isMemoryLabAvailable) {
+      import('./components/memory/MemoryEvolutionLab').then((m) => setEl(() => m.MemoryEvolutionLab));
+    }
+  }, []);
+  if (!El) {
+    return (
+      <section className="dashboard-card page-tool-card">
+        <div className="card-title-row"><h3>功能未开放</h3></div>
+        <p>此功能在当前版本中不可用。</p>
+      </section>
+    );
+  }
+  return <El />;
+}
 import { WorkspacePage } from './components/workspace/WorkspacePage';
 import { PermissionSettings } from './components/settings/PermissionSettings';
 import { AiToolsPanel } from './components/settings/AiToolsPanel';
@@ -574,7 +590,7 @@ export default function App() {
           </section>
         );
       case 'memory-lab':
-        return isMemoryLabAvailable ? <MemoryEvolutionLab /> : renderHome();
+        return isMemoryLabAvailable ? <MemoryLabRoute /> : renderHome();
       case 'personality':
         return (
           <section className="dashboard-card page-tool-card narrow-tool-card">

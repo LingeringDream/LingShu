@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { apiFetch } from '../../lib/api';
 import './MemoryEvolutionLab.css';
 import { TeamWorkspace } from './TeamWorkspace';
@@ -144,6 +144,16 @@ const INITIAL_WEIGHTS: Record<WeightKey, number> = {
   frequency: 8,
   importance: 11,
 };
+export const RETRIEVAL_WEIGHTS_KEY = 'lingshu_pro_retrieval_weights';
+
+function loadRetrievalWeights(): Record<WeightKey, number> {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(RETRIEVAL_WEIGHTS_KEY) || 'null');
+    const value = stored?.value;
+    if (value && Object.keys(INITIAL_WEIGHTS).every(key => Number.isFinite(value[key]))) return value;
+  } catch { /* keep safe defaults */ }
+  return INITIAL_WEIGHTS;
+}
 
 const INITIAL_MEMORY: MemoryDraft = {
   memory_layer: 'fact',
@@ -230,7 +240,8 @@ export function MemoryEvolutionLab() {
   const [shareTarget, setShareTarget] = useState('');
   const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
   const [lastCreatedOwner, setLastCreatedOwner] = useState('lingshu');
-  const [weights, setWeights] = useState<Record<WeightKey, number>>(INITIAL_WEIGHTS);
+  const [weights, setWeights] = useState<Record<WeightKey, number>>(loadRetrievalWeights);
+  const didInitializeWeights = useRef(false);
   const [newMemory, setNewMemory] = useState<MemoryDraft>(INITIAL_MEMORY);
 
   const loadOverview = useCallback(async () => {
@@ -254,6 +265,14 @@ export function MemoryEvolutionLab() {
     () => Object.values(weights).reduce((sum, value) => sum + value, 0),
     [weights],
   );
+
+  useEffect(() => {
+    if (!didInitializeWeights.current) {
+      didInitializeWeights.current = true;
+      return;
+    }
+    window.localStorage.setItem(RETRIEVAL_WEIGHTS_KEY, JSON.stringify({ value: weights, updated_at: new Date().toISOString() }));
+  }, [weights]);
 
   const selectedMemory = useMemo(() => {
     if (!adaptiveRun?.results.length) return null;
