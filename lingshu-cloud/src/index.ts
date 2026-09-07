@@ -18,6 +18,7 @@ import {
 import { sendVerificationEmail } from "./email";
 import { HttpError, isHttpError } from "./errors";
 import { teamRequest } from "./teams";
+import { syncRequest } from "./sync";
 import type {
   AppEnv,
   AuthContext,
@@ -977,7 +978,7 @@ async function refresh(
     });
 }
 
-async function authenticate(request: Request, env: AppEnv): Promise<AuthContext> {
+export async function authenticate(request: Request, env: AppEnv): Promise<AuthContext> {
   const authorization = request.headers.get("Authorization") || "";
   if (!authorization.startsWith("Bearer ")) {
     throw new HttpError(401, "Bearer access token required", "UNAUTHORIZED");
@@ -1403,6 +1404,10 @@ async function route(
   }
   if (path.startsWith("/api/v1/teams")) {
     const response = await teamRequest(request, env, path);
+    if (response) return response;
+  }
+  if (path.startsWith("/api/v1/sync")) {
+    const response = await syncRequest(request, env, await authenticate(request, env), path);
     if (response) return response;
   }
   throw new HttpError(404, "Not found", "NOT_FOUND");

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-09-06
+
+### Version 1.6.0
+
+- `feat(mcp)`: add the local stdio memory MCP service with six tools, bundle it with desktop packages, and add one-step configuration for supported AI clients.
+- `feat(teams)`: add Team workspace creation, invited-member access, member roles, and memory authorization; invited Free users can join existing workspaces.
+- `feat(entitlements)`: centralize Free / Pro / Team entitlement calculation and keep unreleased cloud sync, cross-device MCP, advanced governance, team MCP, and per-seat billing disabled.
+- `feat(evaluation)`: add the 660-turn / 300-query synthetic v3 evaluation, LoCoMo retrieval and question-answering comparisons, and the automated-governance audit.
+- `fix(downloads)`: update desktop download metadata and Windows distribution links.
+
+## 2026-09-05
+
+### Version 1.5.3
+
+- `feat(macOS)`: add a self-contained macOS package with embedded PostgreSQL and a platform-correct application-data directory.
+- `build(macOS)`: add package and notarization scripts, enable embedded PostgreSQL in sidecar builds by default, and reduce release binary size.
+
 ## 2026-09-04
 
 ### Version 1.5.2
