@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-07
+
+### Version 1.6.1
+
+- `build(desktop)`: release the 1.6.1 installer — a self-contained macOS package (`.app` + `.dmg`) that bundles the PostgreSQL-backed `lingshu-server` sidecar and the local `lingshu-mcp` sidecar, so no database or runtime needs to be installed first.
+- `chore(release)`: roll the version across the Cargo workspace, the Tauri desktop manifest, the frontend manifest, and the committed OpenAPI contract.
+
 ## 2026-09-06
 
 ### Version 1.6.0

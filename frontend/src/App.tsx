@@ -3,7 +3,23 @@ import { AppLayout, type AppSectionKey } from './components/layout/AppLayout';
 import { ChatWindow } from './components/chat/ChatWindow';
 import { ChatSettings } from './components/chat/ChatSettings';
 import { MemoryCenter } from './components/memory/MemoryCenter';
-import { MemoryEvolutionLab } from './components/memory/MemoryEvolutionLab';
+function MemoryLabRoute() {
+  const [El, setEl] = useState<React.FC | null>(null);
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      import('./components/memory/MemoryEvolutionLab').then((m) => setEl(() => m.MemoryEvolutionLab));
+    }
+  }, []);
+  if (!El) {
+    return (
+      <section className="dashboard-card page-tool-card">
+        <div className="card-title-row"><h3>功能未开放</h3></div>
+        <p>此功能在当前版本中不可用。</p>
+      </section>
+    );
+  }
+  return <El />;
+}
 import { WorkspacePage } from './components/workspace/WorkspacePage';
 import { PermissionSettings } from './components/settings/PermissionSettings';
 import { AiToolsPanel } from './components/settings/AiToolsPanel';
@@ -76,13 +92,12 @@ export default function App() {
   const cloudAccountName = useCloudAccountStore((state) => state.account?.user.display_name);
   const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<AppSectionKey>(() =>
-    new URLSearchParams(window.location.search).get('section') === 'memory-lab'
-      ? 'memory-lab'
-      : new URLSearchParams(window.location.search).get('section') === 'ai-tools'
-        ? 'ai-tools'
-        : 'home',
-  );
+  const [activeSection, setActiveSection] = useState<AppSectionKey>(() => {
+    const section = new URLSearchParams(window.location.search).get('section');
+    if (import.meta.env.DEV && section === 'memory-lab') return 'memory-lab';
+    if (section === 'ai-tools') return 'ai-tools';
+    return 'home';
+  });
   const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>(() => loadAvatarControlSettings());
 
   // Dashboard state
@@ -573,7 +588,7 @@ export default function App() {
           </section>
         );
       case 'memory-lab':
-        return <MemoryEvolutionLab />;
+        return <MemoryLabRoute />;
       case 'personality':
         return (
           <section className="dashboard-card page-tool-card narrow-tool-card">

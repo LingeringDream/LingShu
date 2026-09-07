@@ -1,7 +1,7 @@
 # LingShu Cloud
 
-独立的 LingShu 云账户 Worker。它只负责云账户和设备会话，不替换现有
-`lingshu-server` 的 PostgreSQL 用户表或 `local-session`，因此桌面端离线能力保持不变。
+独立的 LingShu 云服务 Worker。它负责云账户、设备会话、订阅权益、端到端加密同步和团队工作区，
+但不替换现有 `lingshu-server` 的 PostgreSQL 用户表或 `local-session`，因此桌面端离线能力保持不变。
 
 ## 远端环境
 
@@ -22,6 +22,7 @@
 - `/devices`：设备与会话
 - `/docs`：使用文档
 - `/download`：下载中心
+- `/team`：团队工作区（仅有效 Team 权益或已有团队成员可进入）
 
 下载中心只提供网盘分发入口。版本、文件名、校验值、网盘链接和提取码集中维护在
 `public/downloads.json`；只有有效的 HTTPS 网盘地址才会开放对应入口。未配置网盘链接时页面
@@ -49,6 +50,13 @@
 | POST | `/api/v1/billing/checkout` | 创建支付下单（通道为可替换实现） |
 | POST | `/api/v1/billing/portal` | 创建账单管理会话（通道为可替换实现） |
 | POST | `/api/v1/billing/webhook` | 接收支付渠道回调并同步权益 |
+| GET | `/api/v1/sync` | 读取当前加密快照与修订元数据（Pro / Team） |
+| PUT | `/api/v1/sync` | 以修订号并发控制写入加密快照（Pro / Team） |
+| GET | `/api/v1/sync/history` | 查询最近 50 次同步修订（Pro / Team） |
+| GET/POST | `/api/v1/teams` | 列出团队或创建团队工作区 |
+| POST | `/api/v1/teams/invites/:invite_id/accept` | 接受发送到当前验证邮箱的邀请 |
+| GET/PATCH/DELETE | `/api/v1/teams/:team_id/members...` | 查询及管理团队成员与角色 |
+| GET/POST | `/api/v1/teams/:team_id/memories...` | 按作用域读取、写入、搜索或共享团队记忆 |
 
 Access Token 通过 `Authorization: Bearer <token>` 传递。Refresh Token 只在请求体中
 传递，桌面端接入时应保存到系统安全存储，不要放进普通 `localStorage`。
@@ -82,8 +90,8 @@ npm run dev
 - 专业版 Pro（已开放）：在免费版基础上增加端到端加密同步、多设备合并与冲突历史、高级经验沉淀、
   记忆参数自定义与跨设备 MCP 接入；以时长卡形式购买（1 个月 / 3 个月 / 6 个月 / 1 年），到期
   提醒手动续费。
-- 团队版 Team（规划中）：增加团队工作区、共享记忆空间、成员权限、审计记录、设备治理、团队
-  MCP 空间和按席位统一账单；当前不开放购买。
+- 团队版 Team：有效测试权益已可创建团队工作区、管理成员、共享记忆与审计记录；受邀成员无需
+  单独购买 Team 即可进入已有工作区。团队 MCP 空间和按席位统一账单尚未开放，当前不公开购买。
 
 本地核心能力和本地 MCP 不设付费墙，付费方案扩展云同步、跨设备连续性与协作治理。多模型接入属于本地能力，免费版同样可用：
 用户可接入本地模型（如 Ollama）或自备第三方 API Key，不产生订阅费用；官方托管模型按量计费，与订阅费独立核算。
@@ -120,14 +128,21 @@ Webhook 地址为 `https://account.lingeringdream.com/api/v1/billing/webhook`，
 `checkout.session.completed`、`customer.subscription.created`、
 `customer.subscription.updated` 和 `customer.subscription.deleted`。
 
-## 存储边界
+## 加密同步与存储边界
 
-- D1 `lingshu-cloud-dev`：待验证注册、云用户、设备、Refresh Token 会话和登录限流记录。
-- R2 `lingshu-memory-dev`：已预留为 `MEMORY_BUCKET` 绑定，首批账号接口不会读写记忆对象。
+- D1 `lingshu-cloud-dev`：待验证注册、云用户、设备、Refresh Token 会话、登录限流、订阅、同步修订
+  元数据，以及团队成员、邀请、记忆权限和审计记录。
+- R2 `lingshu-memory-dev`：通过 `MEMORY_BUCKET` 保存客户端生成的 AES-256-GCM 密文快照。Worker 不持有
+  同步口令，不能解密记忆正文；每个账户最多保留最近 50 次修订对象。
 - 邮箱验证 Token 与 Refresh Token 只保存 SHA-256 哈希；密码使用 Worker Web Crypto 的 PBKDF2-HMAC-SHA-256。
 - Refresh Token 按会话家族轮换；检测到旧 Token 重放时，会撤销整个家族。
 
-## 当前刻意不做的事
+桌面端 Pro 同步先读取云端密文，在本机解密并按记忆 `updated_at` 合并，再以当前修订号写回新密文；
+删除使用 tombstone 传播。同步加密口令至少 12 个字符，只在软件本次运行期间保存在内存中，同一账户
+的各设备必须使用相同口令。跨设备 MCP 由“每台设备同步到本地，再由免费本机 MCP 读取”实现，
+云端不提供持有明文的 MCP。
+
+## 当前产品边界
 
 桌面控制台现已增加「云账户」入口，使用本站已验证的邮箱与密码登录，可显示账户、
 订阅和本机设备，并打开网页账户中心、账单与设备管理。Windows 凭据管理器、macOS
@@ -138,8 +153,9 @@ Keychain 和 Linux Secret Service 保存 Refresh Token；Access Token 仅保存�
 下一次检查会要求重新登录。断网不会删除凭据或阻止本地控制台，退出云账户需联网完成撤销，
 失败时保留会话并允许重试。网页与软件共用账号，但分别维护会话，不自动交换网页 Cookie。
 
-现有 Rust 本地认证路由与 `local-session` 保持独立。本阶段不包含忘记密码、账号删除、
-记忆同步和冲突合并。登录与退出不会迁移、合并或删除本地数据。
+现有 Rust 本地认证路由与 `local-session` 保持独立。网页登录本身不会上传、迁移、合并或删除本地数据；
+只有桌面端在用户输入同步加密口令并执行双向同步后才会读写加密快照。本阶段不包含忘记密码、修改密码、
+账号删除、团队 MCP 和按席位统一账单。
 
 ## 通过网页登录软件
 

@@ -34,14 +34,14 @@ const navItems: { key: AppSectionKey; label: string }[] = [
   { key: 'settings', label: '模型配置' },
   { key: 'account', label: '云账户' },
   { key: 'ai-tools', label: '接入 AI 工具' },
-];
+].filter((item) => import.meta.env.DEV || item.key !== 'memory-lab') as { key: AppSectionKey; label: string }[];
 
 const competitionNavItems: { key: AppSectionKey; label: string }[] = [
   { key: 'memory-lab', label: '动态记忆引擎' },
   { key: 'chat', label: '对话演示' },
   { key: 'settings', label: '模型配置' },
   { key: 'home', label: '返回个人助理' },
-];
+].filter((item) => import.meta.env.DEV || item.key !== 'memory-lab') as { key: AppSectionKey; label: string }[];
 
 export function AppLayout({ children, activeSection = 'home', onNavigate, accountName }: AppLayoutProps) {
   const isMemoryLab = activeSection === 'memory-lab';

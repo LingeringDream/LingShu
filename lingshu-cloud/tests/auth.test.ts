@@ -263,6 +263,10 @@ describe("lingshu-cloud account service", () => {
     expect(html).toContain("注册与邮箱验证");
     expect(html).toContain("设备管理与远程撤销");
     expect(html).toContain("记忆同步：Pro 已开放");
+    expect(html).toContain("立即双向同步");
+    expect(html).toContain("团队工作区目前面向已有有效 Team 测试权益");
+    expect(html).toContain("团队 MCP 空间和按席位统一账单尚未开放");
+    expect(html).not.toContain("还没有启用记忆上传、下载或冲突合并接口");
     expect(html).toContain("Get-FileHash -Algorithm SHA256");
     expect(html).toContain("当前尚不提供忘记密码、修改密码和删除账户");
   });

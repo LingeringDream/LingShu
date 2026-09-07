@@ -588,7 +588,7 @@ function renderBilling() {
   if (isInvitedTeamMember) {
     elements.currentPlanDetail.textContent = "已加入团队版工作区；创建新的团队需要单独开通团队版订阅";
   } else if (subscription.plan_code === "team") {
-    elements.currentPlanDetail.textContent = "团队版测试权益已生效，包含团队工作区、共享记忆与团队 MCP 空间";
+    elements.currentPlanDetail.textContent = "团队版测试权益已生效，可使用团队工作区、成员权限、共享记忆与审计治理";
   } else if (subscription.cancel_at_period_end && periodEnd) {
     elements.currentPlanDetail.textContent = `已取消自动续费，可使用至 ${periodEnd}`;
   } else if (subscription.billing_interval && periodEnd) {
@@ -614,10 +614,10 @@ function renderBilling() {
     const activeTeam = subscription.plan_code === "team" && subscription.entitlement_active;
     teamCard.classList.toggle("is-planned", !activeTeam);
     if (teamState) {
-      teamState.textContent = activeTeam ? "当前生效" : "规划中";
+      teamState.textContent = activeTeam ? "当前生效" : "测试中";
       teamState.classList.toggle("is-live", activeTeam);
     }
-    if (teamPrice) teamPrice.textContent = activeTeam ? "测试权益已生效" : "价格与开放时间待公布";
+    if (teamPrice) teamPrice.textContent = activeTeam ? "测试权益已生效" : "测试权益定向开放，暂不公开购买";
   }
 
   // interval → 按钮元素 映射（与后端 DEVELOPER_OPTIONS 对齐）
