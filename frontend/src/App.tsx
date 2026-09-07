@@ -22,6 +22,7 @@ import {
 } from './components/avatar/avatarControls';
 import { ensureLocalSession, apiFetch } from './lib/api';
 import { isTauri, MAIN_NAVIGATE_EVENT } from './lib/tauri';
+import { isMemoryLabAvailable } from './lib/edition';
 import {
   DESKTOP_BACKEND_STARTUP_TIMEOUT_MS,
   WEB_BACKEND_STARTUP_TIMEOUT_MS,
@@ -76,13 +77,13 @@ export default function App() {
   const cloudAccountName = useCloudAccountStore((state) => state.account?.user.display_name);
   const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<AppSectionKey>(() =>
-    new URLSearchParams(window.location.search).get('section') === 'memory-lab'
-      ? 'memory-lab'
-      : new URLSearchParams(window.location.search).get('section') === 'ai-tools'
-        ? 'ai-tools'
-        : 'home',
-  );
+  const [activeSection, setActiveSection] = useState<AppSectionKey>(() => {
+    const requestedSection = new URLSearchParams(window.location.search).get('section');
+    // 动态记忆引擎只在开发版 / 竞赛版开放；客户端即使带参数也回落到首页。
+    if (requestedSection === 'memory-lab') return isMemoryLabAvailable ? 'memory-lab' : 'home';
+    if (requestedSection === 'ai-tools') return 'ai-tools';
+    return 'home';
+  });
   const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>(() => loadAvatarControlSettings());
 
   // Dashboard state
@@ -573,7 +574,7 @@ export default function App() {
           </section>
         );
       case 'memory-lab':
-        return <MemoryEvolutionLab />;
+        return isMemoryLabAvailable ? <MemoryEvolutionLab /> : renderHome();
       case 'personality':
         return (
           <section className="dashboard-card page-tool-card narrow-tool-card">
@@ -614,7 +615,7 @@ export default function App() {
       <div className="workspace dashboard-workspace">
         <div
           id={`section-${activeSection}`}
-          className={`dashboard-scroll ${activeSection === 'memory-lab' ? 'dashboard-scroll--memory-lab' : ''}`}
+          className={`dashboard-scroll ${activeSection === 'memory-lab' && isMemoryLabAvailable ? 'dashboard-scroll--memory-lab' : ''}`}
         >
           {renderActivePanel()}
         </div>

@@ -9,13 +9,35 @@
 
 [English](./README.en.md)
 
-灵枢是连接不同 AI 工具的个人、团队与企业记忆层，同时提供桌面宠物式 AI 助手。用户既可以直接使用灵枢客户端，也可以通过 MCP 让 Claude、Cursor、Codex 等工具共享同一套记忆，或通过 API / SDK 将记忆能力嵌入其他产品。完整的产品定位、版本权益与付费边界见[产品定位与版本体系](docs/product-positioning.md)。
+灵枢是连接不同 AI 工具的长期记忆层，当前软件面向个人与小团队，同时提供桌面宠物式 AI 助手。用户可以直接使用灵枢客户端，也可以通过 MCP 让支持该协议的 AI 工具按权限读写同一套记忆。企业版与 Embedded / OEM 属于独立产品规划，API / SDK 产品化不作为当前软件已交付能力。完整定位见[产品定位与版本体系](docs/product-positioning.md)。
 
 > **灵枢不是另一个 AI。灵枢是连接所有 AI 的记忆层。**
 
 桌面客户端具备长期记忆（SoulLedger）、可控人格、主动建议（Thought Queue）、分级系统权限和平台适配的日程能力；记忆内核已扩展出面向多智能体协同的动态记忆沉淀、冲突治理与自适应检索原型。
 
 ---
+
+## 当前版本与使用入口
+
+当前源码版本为 **1.6.1**。安装包版本、平台和校验值以账户中心的[下载清单](lingshu-cloud/public/downloads.json)及下载页面为准；源码版本不代表所有平台已同步发布。
+
+| 入口 | 用途 | 运行方式 |
+|------|------|----------|
+| 个人客户端 | 日常聊天、记忆管理、桌宠、AI 工具接入、团队工作区 | Windows x64 / macOS Apple Silicon 桌面安装包；内置 PostgreSQL 与后端、MCP sidecar，无需 Docker 或外置数据库 |
+| 开发版 / 竞赛版 | 动态记忆引擎、Agent 治理、检索对照与评测演示 | Docker 全栈或源码启动，在浏览器访问 |
+| 云账户与团队网页 | 登录、设备管理、订阅、下载、团队成员与共享记忆 | 云账户服务；与桌面本地会话隔离 |
+
+当前工作树已将 Memory Console 限定在开发版 / 竞赛版，桌面构建使用 `npm run build:client`；开发构建使用 `npm run build`。这属于发行形态区分，与 Free / Pro / Team 订阅档位独立。模型仍需配置本地 Ollama 或自备 OpenAI 兼容服务。
+
+## Free / Pro / Team 权益
+
+| 档位 | 当前可用 | 尚未开放 |
+|------|----------|----------|
+| Free | 本地聊天、动态记忆、本地 MCP、备份；可接受团队邀请 | — |
+| Pro | Free 本地能力 | 加密云同步、跨设备 MCP、高级记忆治理 |
+| Team | Free 本地能力、创建团队工作区；成员按角色和授权访问团队记忆 | Pro 规划能力、按席位账单 |
+
+免费账号受邀后显示“团队版 Team（受邀成员）”，可使用所属团队；创建新团队仍需账号自身有效的 Team 订阅。权益由服务端校验，订阅失效不删除本地记忆或关闭本地 MCP，现有团队也不会因此自动删除。团队共享记忆与个人跨设备同步是两项独立能力，后者尚未开放。详见[权益实施说明](docs/version-entitlements.md)。
 
 ## 产业赛道作品
 
@@ -24,7 +46,7 @@
 | 企业 | 中兴通讯股份有限公司 |
 | 正式命题 | **面向智能体自主进化的动态记忆沉淀与自适应检索系统** |
 | 命题编号 | 1529 |
-| 原型名称 | **灵枢 · Memory Evolution Lab** |
+| 原型名称 | **灵枢——面向多智能体协同的动态记忆与自适应检索系统** |
 | 作品形态 | Rust/Axum 后端 + React/Tauri 可视化原型 + PostgreSQL/Qdrant 数据层 |
 
 原型已经打通赛题要求的核心链路：
@@ -33,25 +55,27 @@
 - **多 Agent Memory Gateway**：提供私有、定向共享、全局公共空间，以及按记忆授权、权限隔离和访问审计。
 - **动态冲突治理**：按业务作用域、可见权限和有效时间识别矛盾；并发写入在事实级事务锁内处理，不同主张保留为争议，人工裁决后标记被替代记忆并保留记录。详见[并发写入协议](docs/memory-write-consistency.md)。
 - **自适应检索**：融合语义、词法、时序、可信度、频次和重要性进行重排，支持与传统静态 RAG 使用同一数据和接口对照。
-- **可运行评测**：内置 60 轮记忆、12 个时序查询的标准化自建回归集，并输出完整模型、静态基线、消融实验和阈值判定结果。
-- **可视化演示**：在侧栏进入“记忆进化实验台”，可查看分层记忆、权限空间、冲突事件、检索评分和基线对比。
+- **可运行评测**：独立 `lingshu-eval` 评测器复用生产排序代码；保留 v1/v2 回归集，新增 v3 合成集（660 轮、300 查询）及 LoCoMo 离线检索与问答实验。
+- **可视化演示**：开发版 / 竞赛版提供 Memory Console、Agent Governance、Benchmark & Integration 三视图，可查看分层记忆、权限空间、冲突事件、检索评分和基线对比。
 
-当前自建回归集 v1 的可复现结果（历史评分策略的离线实验；不代表当前保守写入裁决策略的端到端效果）：
+截至 2026-09-06 的离线实验摘要（详见[实验报告](docs/competition/experiment-report.md)）：
 
-| 指标 | 静态 RAG 基线 | 自适应检索 | 变化 |
-|------|--------------:|-----------:|-----:|
-| Top-1 长时序准确率 | 50.00% | 91.67% | +41.67 个百分点 |
-| Top-K Precision（P@5） | 75.00% | 91.67% | +16.67 个百分点 |
-| 冲突/过期记忆过滤率 | 0.00% | 100.00% | +100.00 个百分点 |
-| 开放域任务完成率 | 33.33% | 100.00% | +66.67 个百分点 |
-| 估算上下文 Token | 83.0 | 35.0 | -57.83% |
+| 数据与指标 | Static 基线 | 对照方案 | 结果 |
+|------------|------------:|----------|-----:|
+| v3 测试集 100 查询 Top-1 | 62.00% | LingShu Full | 94.00% |
+| v3 测试集 50 个事实变更查询 Top-1 | 30.00% | LingShu Full | 96.00% |
+| LoCoMo 1,977 QA 证据 R@5 | 26.82% | BM25 正文＋说话人 | 52.31% |
+| LoCoMo 测试部分分层 100 题问答得分 | 28.24 | BM25 检索＋同模型生成 | 37.20 |
 
-```bash
-# 无需启动数据库，现场重算静态基线、自适应检索、消融与任务完成度
-cargo run -p lingshu-eval --release -- --json output/eval_results.json
+```powershell
+# 在仓库根目录运行；使用已提交数据，无需启动数据库或模型
+cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test.json --json output/zte_v3_test_results.json
 ```
 
-> **评测进展与边界：**新增 300 查询的合成回归集（150 个事实变更键）；统一 Top-5 下，LoCoMo 全量证据召回率由纯向量 26.82% 提至 BM25 52.31%，测试部分 100 题的类别均衡问答得分为 28.24 → 37.20。新增公开检索策略目前为离线实验。已纠正旧版 F1 / P@K 命名并撤回“五项全部达标”的结论；真实协作与百万级并发压测仍待完成。详见[实验报告](docs/competition/experiment-report.md)。
+- v3 的记忆状态为 oracle 真值，查询共享模板，衡量治理后的检索；相似度＋状态过滤的测试 Top-1 为 **99%**，优于完整多特征策略的 94%，不能据此宣称已学得最优权重或完成自动治理。
+- LoCoMo 采用回溯式划分；100 题问答是类别均衡混合得分（含拒答准确率），不是全量官方 F1。BM25 / RRF / 抽取式事实候选尚未接入在线服务；收益证明强词法基线的价值。
+- 标准 P@K 为命中不同相关证据数 / K；旧 `hits / min(K, gold数)` 已改名 `capped_recall`。旧 31% / 32% 为 yes/no judge accuracy，旧“五项全部达标”及不等预算 Token 节省结论不再使用。
+- [自动治理 v4 审计](docs/competition/auto-governance-audit.md)属于诊断实验：129 轮、73 查询，标签与构造线索仍待复核，不能替代固定检索下的自动治理验收。真实多 Agent 协作、百万级并发和学习权重仍待验证。
 
 ## 功能概览
 
@@ -59,7 +83,7 @@ cargo run -p lingshu-eval --release -- --json output/eval_results.json
 |------|------|------|
 | 桌面宠物 | 透明浮层、可拖拽、贴边浮窗；Tauri `startDragging` 原生拖动 | ✅ Tauri 2 壳就位 |
 | SoulLedger | 分层记忆、去重、遗忘衰减（含来源护栏）、人格演化、离线 LLM 语义合并、向量检索 | ✅ 后端完成 |
-| Memory Evolution Lab | 三层异构记忆、多 Agent 权限空间、冲突治理、自适应检索、静态 RAG 基线与消融评测 | ✅ 全链路原型完成 |
+| Memory Evolution Lab | 三层异构记忆、多 Agent 权限空间、冲突治理、自适应检索、静态 RAG 基线与消融评测 | ✅ 可运行原型；自动治理仍待验收 |
 | Apple Calendar | 自然语言排程、L1 权限确认流、事件 CRUD、EventKit 写入/删除系统日历、external_event_id 回写 | ✅ 后端 + 桥接完成 |
 | 权限分级 | L0–L4 逐级系统权限 + 审计日志，权限设置持久化至 PostgreSQL | ✅ 后端完成 |
 | 思考队列 | 状态机 + 防打扰抑制 + 生命周期守卫 + 每日维护 + 可解释置信度 | ✅ 后端完成 |
@@ -70,13 +94,14 @@ cargo run -p lingshu-eval --release -- --json output/eval_results.json
 | 角色提示词 | 用户自定义系统角色提示词，集成进对话工作区 | ✅ 已实现 |
 | Markdown 渲染 | MessageBubble 支持 Markdown 格式化展示 | ✅ 已实现 |
 | LLM 设置持久化 | LLM 配置（模型、max_tokens、context_messages 等）存 PostgreSQL，重启保留 | ✅ 已实现 |
-| 云账户与设备会话 | 可选云账户、网页登录、设备撤销、订阅概览与下载中心 | ✅ 已部署；记忆同步暂未开放 |
+| MCP 与团队记忆 | 本地 MCP、AI 工具配置、团队成员与角色、Agent 凭证、共享记忆和审计 | ✅ 已实现 |
+| 云账户与设备会话 | 可选云账户、网页登录、设备撤销、订阅概览与下载中心 | ✅ 已部署；个人加密云同步暂未开放 |
 
 ## 项目状态
 
-**核心功能与跨平台桌面基础设施已完成，当前进入竞赛证据完善和云账户配套收尾阶段。** SoulLedger 记忆系统、Memory Gateway、冲突治理、自适应检索、人格、思考队列、权限分级、工具调用、日历平台适配等均已实现。当前后端测试结果为 **383 passed、17 ignored**，前端为 **28 个测试文件、124 项测试通过**，云账户 Worker 为 **21 项测试通过**。
+**当前源码已具备本地记忆、MCP、团队工作区和竞赛演示原型，重点转向评测证据完善。** 代码实现与实验验收分开记录；测试结果以对应提交的 CI 或本地运行输出为准，不沿用旧版本的测试数量。
 
-- ✅ Rust + Axum 后端（API、WebSocket、27 个数据库迁移）
+- ✅ Rust + Axum 后端（API、WebSocket、团队工作区与并发写入迁移）
 - ✅ React + TypeScript + Vite 前端（聊天 + 记忆/人格/日历/思绪中心 + 设置 + 角色提示词 + 工作区）
 - ✅ PostgreSQL + Redis + Qdrant 开发环境
 - ✅ SoulLedger：记忆提取/去重、遗忘衰减 + 来源护栏、人格演化、离线 LLM 语义合并
@@ -88,8 +113,8 @@ cargo run -p lingshu-eval --release -- --json output/eval_results.json
 - ✅ 信号埋点事件层，已接入核心业务路径
 - ✅ Tauri 2 桌面壳（main + pet 窗口）+ EventKit 桥接（macOS 14+ `NSCalendarsFullAccessUsageDescription`）
 - ✅ Apple Calendar：macOS 使用 EventKit；Windows、Linux 和 Web 使用 ICS 导出；均支持自然语言解析、CRUD 与 L1 确认
-- ✅ Windows 独立版：Sidecar 内置 PostgreSQL 运行时，安装包可独立启动，不依赖 Docker 或外部数据库
-- ✅ 云账户：网页登录 PKCE、设备会话、订阅概览和下载中心；云端记忆同步与账户管理暂未开放
+- ✅ Windows / macOS 独立版：Sidecar 内置 PostgreSQL 运行时，安装包可独立启动，不依赖 Docker 或外部数据库
+- ✅ 云账户：网页登录 PKCE、设备会话、订阅概览和下载中心；个人加密云同步与跨设备 MCP 暂未开放；团队工作区已实现
 - ✅ Chat：工具调用（tool-use loop）、角色提示词、Markdown 渲染、流式 SSE 响应
 - ✅ 联网搜索：独立 L1 权限开关、网页结果解析、来源链接保留、超时与响应大小限制
 - ✅ LLM 设置持久化至 PostgreSQL（模型、max_tokens、context_messages 等，重启保留）
@@ -108,7 +133,7 @@ cargo run -p lingshu-eval --release -- --json output/eval_results.json
 | 桌面 | Tauri 2 + macOS EventKit；Windows/Linux/Web 使用平台降级和 ICS 导出 |
 | CI/CD | GitHub Actions, Docker Compose |
 
-## 环境要求
+## 源码开发环境要求
 
 - [Rust](https://rustup.rs) 1.88 — `rustup default 1.88`
 - [Node.js](https://nodejs.org) 22+ 与 npm
@@ -118,7 +143,7 @@ cargo run -p lingshu-eval --release -- --json output/eval_results.json
 
 ## 快速开始
 
-### Windows 一键启动（推荐用于演示）
+### Windows 一键启动（开发版 / 竞赛演示）
 
 安装并启动 Docker Desktop 后，直接双击仓库根目录的：
 
@@ -197,6 +222,14 @@ cd frontend && npm ci && npm run dev      # http://localhost:5173，/api 代理�
 docker compose -f docker/docker-compose.dev.yml --profile full up
 ```
 
+## MCP 接入与团队记忆
+
+先启动灵枢本地服务，再在客户端设置的「AI 工具」面板选择目标工具和传输方式，生成配置；支持的桌面工具可直接写入配置文件，其余工具手动复制。桌面安装包包含 `lingshu-mcp`，源码开发可运行 `cargo build -p lingshu-mcp --release` 生成它。
+
+本地 stdio MCP 默认连接 `http://127.0.0.1:8080`，支持 `LINGSHU_BASE_URL` 和 `LINGSHU_TOKEN`；未提供令牌时通过本地会话获取身份。提供 `lingshu_recall`、`lingshu_store`、`lingshu_grant`、`lingshu_conflicts`、`lingshu_resolve_conflict`、`lingshu_stats` 六个工具，按 Agent 身份与记忆权限执行。
+
+团队工作区支持创建/加入、成员角色、邀请、Agent 凭证、共享记忆和访问审计。远程接入需使用对应服务的地址与凭证，不能把本地免密会话直接暴露到网络。并发写入通过事实级事务锁协调，冲突主张保留来源，裁决后再标记被替代项，详见[并发写入协议](docs/memory-write-consistency.md)。
+
 ## 配置
 
 分层加载：先 `config.toml`，再环境变量覆盖（后端启动时自动加载 `.env`）。关键变量：
@@ -227,6 +260,9 @@ docker compose -f docker/docker-compose.dev.yml --profile full up
 crates/
   lingshu-server/      Rust Axum 后端（API 路由、数据库、LLM、WebSocket、加密、遥测）
   lingshu-vector/      Qdrant 向量搜索客户端
+  lingshu-mcp/         stdio MCP 服务入口
+  lingshu-mcp-core/    共用 MCP 协议与记忆工具
+  lingshu-eval/        独立离线检索与消融评测器
 frontend/              React + TypeScript + Vite 单页应用（含 pet 窗口入口）
   src/components/
     avatar/            桌面宠物（PetWindow、AvatarPlaceholder、AvatarControlPanel）
@@ -241,6 +277,9 @@ frontend/              React + TypeScript + Vite 单页应用（含 pet 窗口�
   src/stores/          Zustand 状态管理（chatStore、memoryStore、projectStore）
   src/lib/             API 客户端、EventKit 桥接、Tauri 工具函数
 src-tauri/             Tauri 2 桌面壳（独立 Cargo workspace）：main + pet 窗口，EventKit 桥接
+lingshu-cloud/         云账户、订阅权益与团队网页（Cloudflare Worker）
+eval/                  Python 检索、问答与自动治理实验
+datasets/              自建回归集及公开评测数据
 docker/                Docker Compose 开发环境与配置
 docs/                  设计决策、MVP 状态等文档
 poc/                   技术验证（AGE 图、LLM 流式、Qdrant）
@@ -248,7 +287,7 @@ poc/                   技术验证（AGE 图、LLM 流式、Qdrant）
 
 SoulLedger 关键模块（`crates/lingshu-server/src/llm/`）：`memory.rs`（抽取/去重）、`evolutionary_memory.rs`（记忆协议、权限判定、冲突评分与自适应重排）、`forgetting.rs`（衰减 + 来源护栏）、`personality.rs`（人格演化）、`consolidation.rs`（离线语义合并）、`thoughts.rs`（主动建议）、`dedup.rs`、`prompts.rs`、`semantic.rs`（语义检索）、`client.rs`（Ollama/OpenAI + 嵌入 + 工具调用）。
 
-后端路由（`crates/lingshu-server/src/routes/`）：`chat.rs`（对话 + 工具调用）、`memories.rs`、`memory_gateway.rs`（Agent、分层空间、权限、冲突与检索）、`memory_benchmark.rs`（基线、完整模型与消融评测）、`calendar.rs`、`personality.rs`、`thoughts.rs`、`permissions.rs`、`settings.rs`（LLM 设置 + 角色提示词）、`integrations.rs`、`signals.rs`、`audit.rs`、`conversations.rs`、`projects.rs`、`tasks.rs`、`users.rs`、`auth.rs`、`system.rs`、`sessions.rs`、`project_members.rs`、`task_dependencies.rs`。
+后端路由（`crates/lingshu-server/src/routes/`）：`chat.rs`（对话 + 工具调用）、`memories.rs`、`memory_gateway.rs`（Agent、分层空间、权限、冲突与检索）、`memory_benchmark.rs`（基线、完整模型与消融评测）、`mcp.rs`（MCP 接入）、`teams.rs`（团队成员、记忆与审计）、`calendar.rs`、`personality.rs`、`thoughts.rs`、`permissions.rs`、`settings.rs`（LLM 设置 + 角色提示词）、`integrations.rs`、`signals.rs`、`audit.rs`、`conversations.rs`、`projects.rs`、`tasks.rs`、`users.rs`、`auth.rs`、`system.rs`、`sessions.rs`、`project_members.rs`、`task_dependencies.rs`。
 
 ## Tauri 桌面应用
 
@@ -287,10 +326,10 @@ cd frontend && ./node_modules/.bin/tauri dev
 ## 测试
 
 ```bash
-# 后端测试（当前 383 passed、17 ignored）
+# 后端测试（部分集成测试需要数据库或网络）
 cargo test --workspace
 
-# 前端单测（当前 28 个测试文件、124 项测试）+ lint + 类型检查 + 构建
+# 前端单测 + lint + 类型检查 + 构建
 cd frontend && npm run test && npm run lint && npm run type-check && npm run build
 
 # Tauri 构建（macOS）
@@ -306,7 +345,7 @@ CI（GitHub Actions）：Rust fmt/clippy/test、前端 lint/type-check/build、W
 
 ## API 文档
 
-OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，当前覆盖 **58 条路径、90 个操作**（系统、认证、用户、LLM 设置、对话、会话、记忆网关、评测、人格、思绪、日历、权限、集成、信号、审计、项目管理等）。后端运行时访问 `/swagger-ui`；提交的 `openapi.json` 由契约测试校验。
+OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，覆盖已声明的 API 路径与操作（系统、认证、用户、LLM 设置、对话、会话、记忆网关、评测、人格、思绪、日历、权限、集成、信号、审计、项目管理等）。后端运行时访问 `/swagger-ui`；提交的 `openapi.json` 由契约测试校验。
 
 ## 已知局限
 
@@ -319,6 +358,9 @@ OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，当前覆盖
 - [产品需求文档](./AI-PersonalAssistant-PRD.md) — 完整产品规格
 - [中兴 1529 竞赛交付索引](./docs/competition/README.md) — 命题映射、部署演示、架构、创新点与实验报告
 - [竞赛实验报告](./docs/competition/experiment-report.md) — 静态基线、自适应检索、消融实验与证据边界
+- [产品定位与版本体系](./docs/product-positioning.md) · [权益实施说明](./docs/version-entitlements.md)
+- [并发写入协议](./docs/memory-write-consistency.md) · [自动治理审计](./docs/competition/auto-governance-audit.md)
+- [开发版使用说明](./开发版使用说明.md)
 - [SoulLedger 设计决策](./docs/soulledger-design-decisions.md)
 - [MVP 完成度](./docs/mvp-status.md)
 - [贡献指南](./CONTRIBUTING.md) · [更新日志](./CHANGELOG.md)

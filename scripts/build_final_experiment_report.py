@@ -206,7 +206,7 @@ def main():
     meta = doc.add_paragraph()
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta.paragraph_format.space_after = Pt(24)
-    set_run_font(meta.add_run("原型名称  灵枢 Memory Evolution Lab\n实验日期  2026年9月6日"), size=10, color=(85, 85, 85))
+    set_run_font(meta.add_run("原型名称  灵枢——面向多智能体协同的动态记忆与自适应检索系统\n实验日期  2026年9月6日"), size=10, color=(85, 85, 85))
 
     add_heading(doc, "报告摘要", 1)
     add_body(doc, "本报告验证灵枢在长时序记忆、公开长对话问答、过期与冲突治理、多智能体权限以及端侧检索性能方面的阶段性能力。核心结果显示：在包含660轮记忆和300条查询的自建回归集上，系统测试集Top-1准确率为94%，静态RAG基线为62%，提升32个百分点；在LoCoMo公开数据的278题类别分层样本上，问答得分由27.45提升至34.88；在10万条记忆规模下，单查询P99时延为195.19毫秒。")

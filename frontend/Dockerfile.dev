@@ -7,6 +7,9 @@ RUN npm install
 
 COPY . .
 
+# dev = 开发版 / 竞赛版：开放 Memory Console（动态记忆引擎）等调试页面
+ENV VITE_LINGSHU_EDITION=dev
+
 EXPOSE 5173
 
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

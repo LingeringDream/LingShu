@@ -1,4 +1,5 @@
 import { ReactNode } from 'react';
+import { isMemoryLabAvailable } from '../../lib/edition';
 
 export type AppSectionKey =
   | 'home'
@@ -23,7 +24,9 @@ interface AppLayoutProps {
 
 const navItems: { key: AppSectionKey; label: string }[] = [
   { key: 'home', label: '首页' },
-  { key: 'memory-lab', label: '动态记忆引擎' },
+  // 写成条件展开而不是过滤，客户端构建里 isMemoryLabAvailable 会被折叠成 false，
+  // 连这条导航文案都不会进客户端产物。
+  ...(isMemoryLabAvailable ? [{ key: 'memory-lab' as AppSectionKey, label: '动态记忆引擎' }] : []),
   { key: 'chat', label: '聊天' },
   { key: 'workspace', label: '工作台' },
   { key: 'memory', label: '记忆中心' },
@@ -44,7 +47,8 @@ const competitionNavItems: { key: AppSectionKey; label: string }[] = [
 ];
 
 export function AppLayout({ children, activeSection = 'home', onNavigate, accountName }: AppLayoutProps) {
-  const isMemoryLab = activeSection === 'memory-lab';
+  // 动态记忆引擎（Memory Console）只在开发版 / 竞赛版开放，桌面客户端不显示入口。
+  const isMemoryLab = activeSection === 'memory-lab' && isMemoryLabAvailable;
   const displayedNavItems = isMemoryLab ? competitionNavItems : navItems;
 
   return (

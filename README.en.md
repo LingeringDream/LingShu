@@ -7,13 +7,55 @@
 
 [中文](./README.md)
 
-LingShu is a user-controlled memory layer that connects AI tools for individuals, teams, and enterprises, while also providing its own desktop companion. Users can work in the LingShu client, connect Claude, Cursor, Codex, and other tools through MCP, or embed its memory capabilities through APIs and SDKs. See the [product positioning and editions](docs/product-positioning.md) for the complete model.
+LingShu is a user-controlled memory layer for individuals and small teams, with a desktop companion and MCP access for compatible AI tools. Enterprise and Embedded / OEM are separate product plans; packaged APIs and SDKs are not presented as delivered features. See the [product positioning](docs/product-positioning.md).
 
 > **LingShu is not another AI. It is the memory layer connecting all of your AIs.**
 
 The desktop client provides long-term memory (SoulLedger), an adjustable personality, proactive suggestions (Thought Queue), tiered system permissions, and platform-adapted calendar scheduling.
 
 ---
+
+## Current Version and Editions
+
+The source version is **1.6.1**. Installer versions and checksums follow the [download manifest](lingshu-cloud/public/downloads.json); platform releases may differ from the source version.
+
+- **Desktop client:** daily chat, memory, pet, AI-tool integration, and team workspaces. Windows x64 and macOS Apple Silicon packages include PostgreSQL, the backend, and the MCP sidecar; Docker and an external database are unnecessary. Configure Ollama or your own OpenAI-compatible model service separately.
+- **Development / competition edition:** Docker or source-based browser app with Memory Console, Agent Governance, and Benchmark & Integration. In the current working tree, desktop builds use `npm run build:client` and omit Memory Console; development builds use `npm run build`.
+- **Cloud account / team web app:** login, device management, subscriptions, downloads, and shared team memory; separate from the desktop local session.
+
+These editions are independent of subscription tiers:
+
+| Tier | Available now | Not yet enabled |
+|------|---------------|-----------------|
+| Free | Local chat, memory, MCP, backup; accept team invitations | — |
+| Pro | Free local capabilities | Encrypted personal sync, cross-device MCP, advanced governance |
+| Team | Free local capabilities plus workspace creation and role-based team access | Planned Pro capabilities and per-seat billing |
+
+Invited Free users receive team-member access, but creating another workspace requires their own valid Team subscription. Expiry does not remove local memory or local MCP, and existing teams are not automatically deleted. Team sharing does not imply personal cross-device sync. See [entitlements](docs/version-entitlements.md).
+
+## Competition Prototype and Evidence
+
+The ZTE challenge 1529 prototype implements episode/fact/experience memory, Agent access controls, conflict tracking, and adaptive retrieval. Concurrent writes use fact-level transaction locks; conflicting claims retain provenance and await resolution. See the [write protocol](docs/memory-write-consistency.md) and [competition index](docs/competition/README.md).
+
+Offline results reported on 2026-09-06:
+
+| Evaluation | Static baseline | Comparison | Result |
+|------------|----------------:|------------|-------:|
+| Synthetic v3 test Top-1, 100 queries | 62.00% | LingShu Full | 94.00% |
+| v3 changed-fact test Top-1, 50 queries | 30.00% | LingShu Full | 96.00% |
+| LoCoMo evidence R@5, 1,977 QA | 26.82% | BM25 with speaker metadata | 52.31% |
+| Stratified LoCoMo test QA score, 100 questions | 28.24 | BM25 + same generation model | 37.20 |
+
+The v3 corpus has 660 turns and 300 templated queries, split into 200 dev / 100 test by project. States are oracle labels, so this evaluates retrieval after governance. Similarity plus state filtering achieves **99%** test Top-1, outperforming the full scorer. LoCoMo uses a retrospective split, and the 100-question score mixes category F1 with refusal accuracy; it is not full-dataset official F1. BM25, RRF, and extractive fact candidates remain offline experiments.
+
+Standard P@K is distinct relevant hits / K; the old hits / min(K, gold count) metric is now `capped_recall`. Old 31% / 32% results were yes/no judge accuracy. Claims that all five targets passed or that unequal-budget token savings establish efficiency have been withdrawn. The [v4 governance audit](docs/competition/auto-governance-audit.md) is diagnostic; labels and construction artifacts still need review. Learned weights, real multi-Agent collaboration, and million-scale concurrent service tests remain outstanding.
+
+```powershell
+# Run from the repository root; no database or model service required
+cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test.json --json output/zte_v3_test_results.json
+```
+
+See the [experiment report](docs/competition/experiment-report.md) for protocols, ablations, evidence, and full reproduction commands.
 
 ## Features
 
@@ -31,13 +73,14 @@ The desktop client provides long-term memory (SoulLedger), an adjustable persona
 | Role Prompts | User-customizable system role prompts, integrated into chat workspace | ✅ Implemented |
 | Markdown Rendering | MessageBubble supports formatted Markdown display | ✅ Implemented |
 | LLM Settings Persistence | LLM config (model, max_tokens, context_messages, etc.) stored in PostgreSQL, survives restarts | ✅ Implemented |
-| Cloud Account | Optional browser PKCE login, device sessions, subscription overview, and download center | ✅ Deployed; memory sync is not enabled |
+| MCP and Team Memory | Local MCP, AI-tool configuration, memberships, roles, Agent credentials, shared memory, and audit | ✅ Implemented |
+| Cloud Account | Optional browser PKCE login, device sessions, subscription overview, and download center | ✅ Deployed; personal encrypted sync is not enabled |
 
 ## Project Status
 
-**Core features and cross-platform desktop infrastructure are complete; the current work is evidence and cloud-account polish.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and platform-adapted calendar export are implemented. Backend carries **383 passed and 17 ignored tests**; the frontend has **28 test files and 124 passing tests**; the cloud Worker has **21 passing tests**.
+**The current source includes local memory, MCP, team workspaces, and a runnable competition prototype.** Evaluation evidence is still being developed. Test results should be taken from the matching commit or local run rather than historical counts.
 
-- ✅ Rust + Axum backend (API, WebSocket, DB migrations 001–0027)
+- ✅ Rust + Axum backend (API, WebSocket, team and write-coordination migrations)
 - ✅ React + TypeScript + Vite frontend (chat + memory/personality/calendar/thought centers + settings + role prompts + workspace)
 - ✅ PostgreSQL + Redis + Qdrant development environment
 - ✅ SoulLedger: memory extraction/dedup, forgetting decay + provenance guardrails, personality evolution, offline LLM semantic consolidation
@@ -48,7 +91,7 @@ The desktop client provides long-term memory (SoulLedger), an adjustable persona
 - ✅ Signal telemetry event layer, wired into core business paths
 - ✅ Tauri 2 desktop shell (main + pet windows) + EventKit bridge (macOS 14+ `NSCalendarsFullAccessUsageDescription`)
 - ✅ Calendar: EventKit write-back/delete on macOS, ICS export on Windows/Linux/Web, with NL parsing, CRUD, L1 confirmation, and external_event_id sync where applicable
-- ✅ Windows self-contained package with an embedded PostgreSQL runtime
+- ✅ Windows / macOS self-contained packages with embedded PostgreSQL and backend/MCP sidecars
 - ✅ Cloud account: browser PKCE login, device sessions, subscription overview, and download center; cloud memory sync is not enabled
 - ✅ Chat: tool-use loop, role prompts, Markdown rendering, streaming SSE responses
 - ✅ Web search: separate L1 permission, result parsing, source preservation, timeout and response-size limits
@@ -68,7 +111,7 @@ Full product spec: [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) 
 | Desktop | Tauri 2 + macOS EventKit; platform fallback and ICS export elsewhere |
 | CI/CD | GitHub Actions, Docker Compose |
 
-## Prerequisites
+## Source Development Prerequisites
 
 - [Rust](https://rustup.rs) 1.88 — `rustup default 1.88`
 - [Node.js](https://nodejs.org) 22+ with npm
@@ -77,6 +120,10 @@ Full product spec: [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) 
 - macOS 14+ Apple Silicon supports EventKit; Windows 10/11 x64 has a self-contained package; Linux works for CI and backend-only
 
 ## Quick Start
+
+### Windows Competition Launcher
+
+Start Docker Desktop, then double-click `启动灵枢竞赛版.cmd` at the repository root. It builds the full stack and opens the memory console at `http://127.0.0.1:5173/?section=memory-lab`. Use `打开灵枢控制台.cmd` if the browser does not open, and `停止灵枢开发版.cmd` to stop containers while preserving data volumes. See the [development guide](开发版使用说明.md).
 
 ### 1. Start Infrastructure
 
@@ -143,6 +190,14 @@ cd frontend && npm ci && npm run dev      # http://localhost:5173, /api proxied 
 docker compose -f docker/docker-compose.dev.yml --profile full up
 ```
 
+## MCP and Team Memory
+
+Start LingShu, then use Settings → AI tools to generate a configuration for a compatible MCP client. Supported desktop tools can write their configuration directly; other tools require copying it manually. The installer bundles `lingshu-mcp`; source developers can build it with `cargo build -p lingshu-mcp --release`.
+
+Local stdio MCP connects to `http://127.0.0.1:8080` by default. It accepts `LINGSHU_BASE_URL` and `LINGSHU_TOKEN`, obtaining a local-session token when none is supplied. Tools are `lingshu_recall`, `lingshu_store`, `lingshu_grant`, `lingshu_conflicts`, `lingshu_resolve_conflict`, and `lingshu_stats`, subject to Agent identity and memory permissions. Remote access requires the corresponding service endpoint and credentials; never expose the passwordless local-session endpoint.
+
+Team workspaces support membership, roles, invitations, Agent credentials, shared memory, and auditing.
+
 ## Configuration
 
 Layered loading: `config.toml` first, then environment variable overrides (`.env` auto-loaded at backend startup). Key variables:
@@ -173,6 +228,9 @@ Layered loading: `config.toml` first, then environment variable overrides (`.env
 crates/
   lingshu-server/      Rust Axum backend (API routes, DB, LLM, WebSocket, crypto, telemetry)
   lingshu-vector/      Qdrant vector search client
+  lingshu-mcp/         stdio MCP entry point
+  lingshu-mcp-core/    Shared MCP protocol and memory tools
+  lingshu-eval/        Offline retrieval and ablation harness
 frontend/              React + TypeScript + Vite SPA (includes pet window entry)
   src/components/
     avatar/            Desktop pet (PetWindow, AvatarPlaceholder, AvatarControlPanel)
@@ -187,6 +245,9 @@ frontend/              React + TypeScript + Vite SPA (includes pet window entry)
   src/stores/          Zustand state management (chatStore, memoryStore, projectStore)
   src/lib/             API client, EventKit bridge, Tauri utilities
 src-tauri/             Tauri 2 desktop shell (standalone Cargo workspace): main + pet windows, EventKit bridge
+lingshu-cloud/         Cloud account, subscriptions, and team web app
+eval/                  Python retrieval, QA, and governance experiments
+datasets/              Synthetic regression and public evaluation data
 docker/                Docker Compose dev environment and configs
 docs/                  Design decisions, MVP status, and other documents
 poc/                   Technology proofs of concept (AGE graph, LLM streaming, Qdrant)
@@ -230,10 +291,10 @@ cd frontend && ./node_modules/.bin/tauri dev
 ## Testing
 
 ```bash
-# Backend tests (383 passed, 17 DB-gated or network-gated ignored)
+# Backend tests (some integration tests require a database or network)
 cargo test --workspace
 
-# Frontend unit tests (28 test files, 124 tests) + lint + type-check + build
+# Frontend unit tests + lint + type-check + build
 cd frontend && npm run test && npm run lint && npm run type-check && npm run build
 
 # Tauri build (macOS)
@@ -249,7 +310,7 @@ CI (GitHub Actions): Rust fmt/clippy/test, frontend lint/type-check/build, Windo
 
 ## API Documentation
 
-OpenAPI 3.1 generated by [utoipa](https://github.com/juhaku/utoipa), covering **58 paths and 90 operations** (system, auth, users, LLM settings, chat, sessions, memories, personality, thoughts, calendar, permissions, integrations, signals, audit, project management, etc.). The committed `openapi.json` is checked by a contract test; Swagger UI is available at `/swagger-ui` while the backend is running.
+OpenAPI 3.1 generated by [utoipa](https://github.com/juhaku/utoipa), covering the declared API paths and operations (system, auth, users, LLM settings, chat, sessions, memories, personality, thoughts, calendar, permissions, integrations, signals, audit, project management, etc.). The committed `openapi.json` is checked by a contract test; Swagger UI is available at `/swagger-ui` while the backend is running.
 
 ## Known Limitations
 

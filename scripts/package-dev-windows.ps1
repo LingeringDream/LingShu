@@ -7,6 +7,20 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Resolve robocopy.exe. Some sandboxed shells run PowerShell with a stripped
+# PATH that omits System32, so fall back to well-known absolute locations.
+$robocopyExe = Get-Command robocopy -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+if (-not $robocopyExe) {
+    $robocopyCandidates = @(
+        'C:\Windows\System32\robocopy.exe'
+        'C:\Windows\Sysnative\robocopy.exe'
+    )
+    $robocopyExe = $robocopyCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
+if (-not $robocopyExe) {
+    throw 'robocopy.exe was not found on this system.'
+}
+
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $cargoManifest = Join-Path $projectRoot 'Cargo.toml'
 $distDirectory = Join-Path $projectRoot 'dist'
@@ -66,9 +80,13 @@ try {
         '/XD'
     ) + $excludedDirectories + @('/XF') + $excludedFiles
 
-    & robocopy @copyArguments
-    if ($LASTEXITCODE -ge 8) {
-        throw "File collection failed with robocopy exit code $LASTEXITCODE."
+    & $robocopyExe @copyArguments
+    # Read LASTEXITCODE defensively: some restricted shells do not expose it
+    # after an external call, which would otherwise fail under StrictMode.
+    $robocopyExit = (Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue).Value
+    if (-not $robocopyExit) { $robocopyExit = 0 }
+    if ($robocopyExit -ge 8) {
+        throw "File collection failed with robocopy exit code $robocopyExit."
     }
 
     if (Test-Path -LiteralPath $resolvedOutput -PathType Leaf) {
