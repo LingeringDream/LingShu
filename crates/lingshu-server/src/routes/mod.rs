@@ -2,6 +2,7 @@ pub mod audit;
 pub mod auth;
 pub mod calendar;
 pub mod chat;
+pub mod cloud_sync;
 pub mod conversations;
 pub mod integrations;
 pub mod mcp;

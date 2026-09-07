@@ -30,6 +30,19 @@ describe('cloud account lifecycle', () => {
   });
   const overview = () => [ok(identity), ok({ subscription })];
 
+  it('binds sync requests to their originating account and the fixed cloud issuer', async () => {
+    stored = 'refresh-existing';
+    fetcher.mockResolvedValueOnce(ok(tokens())).mockResolvedValueOnce(ok({ vault: null }));
+    await client.syncRequest(identity.user.id, '/sync/vault');
+    expect(fetcher.mock.calls[1][0]).toBe(`${CLOUD_ACCOUNT_URL}/api/v1/sync/vault`);
+    expect(fetcher.mock.calls[1][1]?.headers).toEqual({ Authorization: 'Bearer access-1' });
+    await expect(client.syncRequest('different-user', '/sync/vault')).rejects.toThrow('云账户已切换');
+    expect(fetcher.mock.calls.filter(call => String(call[0]).endsWith('/sync/vault'))).toHaveLength(1);
+    for (const path of ['https://other.example/sync/vault', '/sync/../account', '/sync/records?after=bad&redirect=other']) {
+      await expect(client.syncRequest(identity.user.id, path)).rejects.toThrow('无效的同步接口路径');
+    }
+  });
+
   it('team requests never use the local session and send only a short-lived cloud access token', async () => {
     stored = 'refresh-existing';
     window.localStorage.setItem('lingshu_auth_token', 'local-secret');

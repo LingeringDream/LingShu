@@ -189,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(routes::sessions::router())
         .merge(routes::chat::router())
         .merge(routes::memories::router())
+        .merge(routes::cloud_sync::router())
         .merge(routes::memory_gateway::router())
         .merge(routes::mcp::router())
         .merge(routes::teams::router())

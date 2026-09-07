@@ -961,3 +961,63 @@ describe("team page gate", () => {
     }
   });
 });
+
+describe('encrypted memory sync API', () => {
+  async function client(email = 'sync@example.com', paid = true) {
+    const { login } = await loginVerifiedAccount(email);
+    const user = login.user.id;
+    if (paid) {
+      const now = new Date().toISOString();
+      await env.DB.prepare("INSERT INTO billing_customers VALUES (?, 'stripe', ?, ?, ?)").bind(user, `cus_${user}`, now, now).run();
+      await env.DB.prepare(`INSERT INTO subscriptions (user_id, provider, provider_customer_id, provider_subscription_id, plan_code, status, created_at, updated_at)
+        VALUES (?, 'stripe', ?, ?, 'pro', 'active', ?, ?)`).bind(user, `cus_${user}`, `sub_${user}`, now, now).run();
+    }
+    return { user, login, call: (path: string, body?: unknown) => request('/api/v1/sync/' + path, {
+      ...(body === undefined ? {} : jsonInit(body)), headers: { Authorization: `Bearer ${login.access_token}`, 'Content-Type': 'application/json', Origin: 'http://localhost:5173' },
+    }) };
+  }
+  const id = '11111111-1111-4111-8111-111111111111';
+  const keyId = 'a'.repeat(64);
+  const envelope = { version: 1, key_id: keyId, iv: 'AAAAAAAAAAAAAAAA', ciphertext: 'AAAAAAAAAAAAAAAAAAAAAA==' };
+  it('requires authenticated, active entitlements for every read and write', async () => {
+    expect((await request('/api/v1/sync/vault')).status).toBe(401);
+    const free = await client('free-sync@example.com', false);
+    expect((await free.call('vault', { key_id: keyId, plan_code: 'pro' })).status).toBe(403);
+    const pro = await client();
+    expect((await pro.call('vault', { key_id: keyId })).status).toBe(200);
+    await env.DB.prepare("UPDATE subscriptions SET current_period_end = '2020-01-01T00:00:00Z' WHERE user_id = ?").bind(pro.user).run();
+    for (const path of ['vault', 'records', `records/${id}/history`]) expect((await pro.call(path)).status).toBe(403);
+    expect((await pro.call(`records/${id}`, { base_revision: 0, envelope })).status).toBe(403);
+  });
+  it('isolates vaults, pins the recovery key, validates envelopes and applies atomic version checks', async () => {
+    const a = await client(), b = await client('other-sync@example.com');
+    expect((await a.call('vault', { key_id: keyId })).status).toBe(200);
+    expect((await b.call('vault', { key_id: keyId })).status).toBe(200);
+    expect((await a.call('vault', { key_id: 'b'.repeat(64) })).status).toBe(409);
+    expect((await a.call(`records/${id}`, { base_revision: 0, envelope: { ...envelope, iv: 'bad' } })).status).toBe(400);
+    const attempts = await Promise.all([1, 2].map(() => a.call(`records/${id}`, { base_revision: 0, envelope })));
+    expect(attempts.map(r => r.status).sort()).toEqual([200, 409]);
+    expect((await b.call(`records/${id}`)).status).toBe(404);
+    expect((await responseJson(await b.call('records'))).records).toEqual([]);
+    expect((await a.call(`records/${id}`, { base_revision: 0, envelope })).status).toBe(409);
+    const manifest = await responseJson(await a.call('records'));
+    expect(manifest.records[0]).toMatchObject({ id, revision: 1 });
+    expect(manifest.records[0].envelope).toBeUndefined();
+    expect((await responseJson(await a.call(`records/${id}`))).envelope).toEqual(envelope);
+    expect((await a.call('records?after=invalid')).status).toBe(400);
+    expect((await a.call(`records/${id}`, { base_revision: 1, envelope: { ...envelope, ciphertext: 'A'.repeat(48004) } })).status).toBe(400);
+    expect((await a.call('records')).headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173');
+  });
+  it('retains only ten previous encrypted revisions and rejects revoked devices', async () => {
+    const a = await client();
+    await a.call('vault', { key_id: keyId });
+    for (let base_revision = 0; base_revision < 13; base_revision++) {
+      expect((await a.call(`records/${id}`, { base_revision, envelope })).status).toBe(200);
+    }
+    const history = await responseJson(await a.call(`records/${id}/history`));
+    expect(history.records.map((r: {revision: number}) => r.revision)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+    expect(history.records.every((r: {envelope: unknown}) => JSON.stringify(r.envelope) === JSON.stringify(envelope))).toBe(true);
+    await env.DB.prepare('UPDATE devices SET revoked_at = ? WHERE id = ?').bind(new Date().toISOString(), a.login.device.id).run();
+    expect((await a.call('records')).status).toBe(401);
+  });
+});

@@ -79,6 +79,10 @@ export class CloudAccountError extends Error {
 }
 
 const messages: Record<string, string> = {
+  SYNC_PLAN_REQUIRED: '加密云同步需要有效的 Pro 或 Team 权益。',
+  SYNC_KEY_MISMATCH: '恢复密钥不匹配，请使用首次开启同步时保存的密钥。',
+  SYNC_CONFLICT: '云端记录已变化或空间已满，请重新同步。',
+  INVALID_SYNC: '同步内容无效或单条记忆超过同步大小限制。',
   INVALID_CREDENTIALS: '邮箱或密码不正确；新账号请先完成邮件验证。',
   LOGIN_RATE_LIMITED: '登录尝试过于频繁，请稍后再试。',
   INVALID_PASSWORD: '请输入有效密码。',
@@ -222,6 +226,28 @@ export class CloudAccountClient {
       if (response.status !== 401) return response;
       if (!await this.refresh()) throw new CloudAccountError('请重新登录云账户。', 401);
       return send();
+    });
+  }
+
+  syncRequest<T>(userId: string, path: string, body?: unknown): Promise<T> {
+    if (!/^\/sync\/(vault|records(?:\/[0-9a-f-]+(?:\/history)?)?)(?:\?after=[0-9a-f-]+)?$/.test(path)) {
+      return Promise.reject(new CloudAccountError('无效的同步接口路径'));
+    }
+    return this.serial(async () => {
+      if ((!this.tokens || Date.now() >= this.expiresAt - 60_000) && !await this.refresh()) {
+        throw new CloudAccountError('请先登录云账户。', 401);
+      }
+      if (this.tokens?.user.id !== userId) throw new CloudAccountError('云账户已切换，请重新开启同步。', 401);
+      const send = () => {
+        if (this.tokens?.user.id !== userId) throw new CloudAccountError('云账户已切换，请重新开启同步。', 401);
+        return this.request<T>(path, body, this.tokens.access_token);
+      };
+      try { return await send(); }
+      catch (error) {
+        if (!(error instanceof CloudAccountError) || error.status !== 401) throw error;
+        if (!await this.refresh()) throw error;
+        return send();
+      }
     });
   }
 

@@ -18,6 +18,7 @@ import {
 import { sendVerificationEmail } from "./email";
 import { HttpError, isHttpError } from "./errors";
 import { teamRequest } from "./teams";
+import { requireSync, syncRequest } from "./sync";
 import type {
   AppEnv,
   AuthContext,
@@ -1404,6 +1405,12 @@ async function route(
   if (path.startsWith("/api/v1/teams")) {
     const response = await teamRequest(request, env, path);
     if (response) return response;
+  }
+  if (path.startsWith('/api/v1/sync/')) {
+    const session = await authenticate(request, env);
+    await requireSync(env, session.userId);
+    const body = request.method === 'POST' ? await readJson(request, env) : {};
+    return jsonResponse(request, env, 200, await syncRequest(env, session, url, request.method, body));
   }
   throw new HttpError(404, "Not found", "NOT_FOUND");
 }

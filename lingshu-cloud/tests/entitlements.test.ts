@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { canCreateTeam, getEntitlements, subscriptionIsEntitled } from "../src/entitlements";
 
 describe("product entitlements", () => {
+  it('enables encrypted sync independently of the unreleased remote MCP capability', () => {
+    for (const plan_code of ['pro', 'team', 'developer']) {
+      const { features } = getEntitlements({ plan_code, status: 'active', current_period_end: null });
+      expect(features.find(f => f.code === 'cloud_sync')?.enabled).toBe(true);
+      expect(features.find(f => f.code === 'cross_device_mcp')?.enabled).toBe(false);
+    }
+    expect(getEntitlements(null).features.find(f => f.code === 'cloud_sync')?.enabled).toBe(false);
+  });
   const now = Date.parse("2026-09-06T00:00:00Z");
   it.each(["developer", "pro", "team", "enterprise", "embedded"])("expires stale active %s subscriptions", plan_code => {
     for (const status of ["active", "trialing", "past_due"]) {

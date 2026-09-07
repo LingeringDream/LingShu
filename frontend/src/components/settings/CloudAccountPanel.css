@@ -21,3 +21,10 @@
 .cloud-account-note { padding: 16px 20px; background: var(--accent-light); border-radius: 12px; }
 .cloud-account-note strong { display: block; margin-bottom: 5px; font-size: 13px; }
 .cloud-account-error { background: #fff2f0; color: #a82920; padding: 12px 16px; border-radius: 10px; line-height: 1.7; }
+.cloud-sync-panel { border-top: 1px solid var(--border); padding-top: 18px; min-width: 0; }
+.cloud-sync-key { display: block; padding: 12px; overflow-wrap: anywhere; user-select: all; }
+.cloud-account-form .cloud-sync-confirm { display: flex; align-items: center; gap: 8px; }
+.cloud-account-form .cloud-sync-confirm input { width: auto; }
+.cloud-sync-conflict { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; }
+.cloud-sync-conflict p, .cloud-sync-history li { overflow-wrap: anywhere; white-space: pre-wrap; }
+.cloud-sync-properties { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }

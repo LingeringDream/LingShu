@@ -26,7 +26,8 @@ const features = [
   { code: "local_memory", name: "本地聊天与动态记忆", plans: ["free", "pro", "team"], available: true },
   { code: "local_mcp", name: "本地 MCP 接入", plans: ["free", "pro", "team"], available: true },
   { code: "local_backup", name: "本地数据备份", plans: ["free", "pro", "team"], available: true },
-  { code: "cloud_sync", name: "加密云同步与跨设备 MCP", plans: ["pro", "team"], available: false },
+  { code: "cloud_sync", name: "加密云同步", plans: ["pro", "team"], available: true },
+  { code: "cross_device_mcp", name: "跨设备 MCP", plans: ["pro", "team"], available: false },
   { code: "advanced_governance", name: "高级记忆治理", plans: ["pro", "team"], available: false },
   { code: "team_create", name: "创建团队工作区", plans: ["team"], available: true },
 ] as const;

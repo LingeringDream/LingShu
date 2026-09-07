@@ -583,6 +583,9 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             cloud_account::cloud_credential_load,
+            cloud_account::sync_key_load,
+            cloud_account::sync_key_save,
+            cloud_account::sync_key_clear,
             cloud_account::cloud_credential_save,
             cloud_account::cloud_credential_clear,
             cloud_account::cloud_browser_login_start,

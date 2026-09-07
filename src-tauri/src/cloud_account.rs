@@ -99,6 +99,37 @@ pub fn cloud_browser_login_cancel(window: tauri::WebviewWindow, login: tauri::St
 }
 
 const SERVICE: &str = "com.lingshu.desktop.cloud-account";
+
+fn sync_entry(user_id: &str) -> Result<Entry, String> {
+    if user_id.len() != 36 || !user_id.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-') {
+        return Err("无效的云账户标识".into());
+    }
+    Entry::new("com.lingshu.desktop.sync-key", user_id).map_err(|_| "无法访问同步密钥保险库".into())
+}
+
+#[tauri::command]
+pub fn sync_key_load(window: tauri::WebviewWindow, user_id: String) -> Result<Option<String>, String> {
+    require_main(&window)?;
+    match sync_entry(&user_id)?.get_password() {
+        Ok(value) => Ok(Some(value)), Err(Error::NoEntry) => Ok(None),
+        Err(_) => Err("无法读取同步密钥".into()),
+    }
+}
+
+#[tauri::command]
+pub fn sync_key_save(window: tauri::WebviewWindow, user_id: String, value: String) -> Result<(), String> {
+    require_main(&window)?;
+    if value.len() != 64 || !value.bytes().all(|c| c.is_ascii_hexdigit()) { return Err("无效的同步密钥".into()); }
+    sync_entry(&user_id)?.set_password(&value).map_err(|_| "无法安全保存同步密钥".into())
+}
+
+#[tauri::command]
+pub fn sync_key_clear(window: tauri::WebviewWindow, user_id: String) -> Result<(), String> {
+    require_main(&window)?;
+    match sync_entry(&user_id)?.delete_credential() {
+        Ok(()) | Err(Error::NoEntry) => Ok(()), Err(_) => Err("无法移除本机同步密钥".into()),
+    }
+}
 const ACCOUNT: &str = "account.lingeringdream.com";
 
 fn entry() -> Result<Entry, String> {
