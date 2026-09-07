@@ -3,6 +3,7 @@ import { cloudErrorMessage, openCloudAccount } from '../../lib/cloudAccount';
 import { getPlatformCapabilities, isTauri } from '../../lib/tauri';
 import { useCloudAccountStore } from '../../stores/cloudAccountStore';
 import './CloudAccountPanel.css';
+import { ProSyncPanel } from './ProSyncPanel';
 
 function planLabel(code?: string) {
   if (code === 'team') return '团队版 Team';
@@ -59,6 +60,7 @@ export function CloudAccountPanel() {
             <p>受邀加入团队不要求个人购买团队版，团队内操作仍受成员角色限制。</p>
           </div>}
           {account.subscriptionError && <p className="cloud-account-muted" role="status">订阅信息暂未更新：{account.subscriptionError}</p>}
+          {account.entitlements?.features.some(feature => feature.code === 'cloud_sync' && feature.enabled) && <ProSyncPanel userId={account.user.id} />}
           <div className="cloud-account-actions">
             <button className="cloud-account-primary" type="button" onClick={() => void open('/account')}>打开网页账户中心</button>
             <button type="button" onClick={() => void open('/billing')}>订阅与账单</button>
@@ -94,7 +96,7 @@ export function CloudAccountPanel() {
           <p className="cloud-account-muted">新账号需先在网页注册并完成邮箱验证，再回到软件登录。{isTauri() ? '登录状态将安全保存，重启软件后自动恢复。' : '浏览器开发模式仅在当前页面保留登录状态。'}</p>
         </>
       )}
-      <div className="cloud-account-note"><strong>本地数据由你掌握</strong><p>云账户用于身份、订阅和设备管理。聊天与记忆仍保存在本机，云端同步尚未开放；登录或退出不会迁移、删除本地数据。</p></div>
+      <div className="cloud-account-note"><strong>本地数据由你掌握</strong><p>{account?.entitlements?.features.some(feature => feature.code === 'cloud_sync' && feature.enabled) ? '只有你使用同步加密口令解锁后，记忆才会在设备间合并；云端只保存无法读取的密文。' : '聊天与记忆保存在本机；登录或退出不会迁移、删除本地数据。Pro 可启用端到端加密同步。'}</p></div>
     </section>
   );
 }

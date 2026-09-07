@@ -28,10 +28,19 @@ interface EncryptedSnapshot {
 
 function nowIso(): string { return new Date().toISOString(); }
 
-function response(status: number, body?: unknown): Response {
+function response(request: Request, env: AppEnv, status: number, body?: unknown): Response {
+  const headers = new Headers(body === undefined ? undefined : { "Content-Type": "application/json; charset=utf-8" });
+  headers.set("Cache-Control", "no-store");
+  headers.set("X-Content-Type-Options", "nosniff");
+  const origin = request.headers.get("Origin");
+  const allowed = new Set((env.CORS_ORIGINS || "").split(",").map(value => value.trim()).filter(Boolean));
+  if (origin && (allowed.has(origin) || allowed.has("*"))) {
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Vary", "Origin");
+  }
   return new Response(body === undefined ? null : JSON.stringify(body), {
     status,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+    headers,
   });
 }
 
@@ -86,10 +95,10 @@ export async function syncRequest(request: Request, env: AppEnv, auth: AuthConte
 
   if (request.method === "GET" && path === "/api/v1/sync") {
     const row = await current(env, auth.userId);
-    if (!row) return response(200, { revision: 0, snapshot: null });
+    if (!row) return response(request, env, 200, { revision: 0, snapshot: null });
     const object = await env.MEMORY_BUCKET.get(row.object_key);
     if (!object) throw new HttpError(503, "Sync object is temporarily unavailable", "SYNC_OBJECT_MISSING");
-    return response(200, { ...metadata(row), snapshot: await object.json<EncryptedSnapshot>() });
+    return response(request, env, 200, { ...metadata(row), snapshot: await object.json<EncryptedSnapshot>() });
   }
 
   if (request.method === "GET" && path === "/api/v1/sync/history") {
@@ -97,14 +106,14 @@ export async function syncRequest(request: Request, env: AppEnv, auth: AuthConte
       key_version, algorithm, device_id AS updated_by_device_id, created_at AS updated_at
       FROM user_sync_history WHERE user_id = ? ORDER BY revision DESC LIMIT 50`)
       .bind(auth.userId).all<SyncRow>();
-    return response(200, { history: rows.results.map(metadata) });
+    return response(request, env, 200, { history: rows.results.map(metadata) });
   }
 
   if (request.method === "PUT" && path === "/api/v1/sync") {
     const { base_revision, snapshot } = await readPayload(request);
     const prior = await current(env, auth.userId);
     const revision = prior ? Number(prior.revision) : 0;
-    if (revision !== base_revision) return response(409, { error: { code: "SYNC_CONFLICT", message: "Remote data changed" }, current: prior ? metadata(prior) : { revision: 0 } });
+    if (revision !== base_revision) return response(request, env, 409, { error: { code: "SYNC_CONFLICT", message: "Remote data changed" }, current: prior ? metadata(prior) : { revision: 0 } });
 
     const next = revision + 1;
     const objectKey = `users/${auth.userId}/sync/${next}.json`;
@@ -121,18 +130,26 @@ export async function syncRequest(request: Request, env: AppEnv, auth: AuthConte
       WHERE user_sync_state.revision = ?`)
       .bind(auth.userId, next, objectKey, snapshot.checksum, encoded.length, snapshot.item_count,
         snapshot.key_version, snapshot.algorithm, auth.deviceId, updatedAt, base_revision);
-    const history = env.DB.prepare(`INSERT INTO user_sync_history
+    const result = await write.run();
+    if ((result.meta.changes || 0) !== 1) {
+      await env.MEMORY_BUCKET.delete(objectKey);
+      const latest = await current(env, auth.userId);
+      return response(request, env, 409, { error: { code: "SYNC_CONFLICT", message: "Remote data changed" }, current: latest ? metadata(latest) : { revision: 0 } });
+    }
+    await env.DB.prepare(`INSERT INTO user_sync_history
       (user_id, revision, object_key, checksum, byte_size, item_count, key_version, algorithm, device_id, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(auth.userId, next, objectKey, snapshot.checksum, encoded.length, snapshot.item_count,
-        snapshot.key_version, snapshot.algorithm, auth.deviceId, updatedAt);
-    const results = await env.DB.batch([write, history]);
-    if ((results[0].meta.changes || 0) !== 1) {
-      await env.MEMORY_BUCKET.delete(objectKey);
-      const latest = await current(env, auth.userId);
-      return response(409, { error: { code: "SYNC_CONFLICT", message: "Remote data changed" }, current: latest ? metadata(latest) : { revision: 0 } });
+        snapshot.key_version, snapshot.algorithm, auth.deviceId, updatedAt).run();
+    const expired = await env.DB.prepare(
+      "SELECT revision, object_key FROM user_sync_history WHERE user_id = ? AND revision <= ?",
+    ).bind(auth.userId, next - 50).all<{ revision: number; object_key: string }>();
+    if (expired.results.length) {
+      await Promise.allSettled(expired.results.map(item => env.MEMORY_BUCKET.delete(item.object_key)));
+      await env.DB.prepare("DELETE FROM user_sync_history WHERE user_id = ? AND revision <= ?")
+        .bind(auth.userId, next - 50).run();
     }
-    return response(200, { revision: next, checksum: snapshot.checksum, updated_at: updatedAt });
+    return response(request, env, 200, { revision: next, checksum: snapshot.checksum, updated_at: updatedAt });
   }
 
   throw new HttpError(405, "Method not allowed", "METHOD_NOT_ALLOWED");

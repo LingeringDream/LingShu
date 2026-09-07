@@ -61,6 +61,8 @@ async function responseJson(response: Response): Promise<Record<string, any>> {
 
 async function resetDatabase(): Promise<void> {
   await env.DB.batch([
+    env.DB.prepare("DELETE FROM user_sync_history"),
+    env.DB.prepare("DELETE FROM user_sync_state"),
     env.DB.prepare("DELETE FROM desktop_authorization_codes"),
     env.DB.prepare("DELETE FROM billing_events"),
     env.DB.prepare("DELETE FROM subscriptions"),
@@ -260,9 +262,9 @@ describe("lingshu-cloud account service", () => {
     const html = await response.text();
     expect(html).toContain("注册与邮箱验证");
     expect(html).toContain("设备管理与远程撤销");
-    expect(html).toContain("记忆同步：当前尚未开放");
+    expect(html).toContain("记忆同步：Pro 已开放");
     expect(html).toContain("Get-FileHash -Algorithm SHA256");
-    expect(html).toContain("当前尚不提供忘记密码、修改密码、删除账户和记忆同步");
+    expect(html).toContain("当前尚不提供忘记密码、修改密码和删除账户");
   });
 
   it("publishes the corrected product editions and enterprise contact entry", async () => {
@@ -555,7 +557,7 @@ describe("lingshu-cloud account service", () => {
       "developer",
       "team",
     ]);
-    expect(overview.plans[1].availability).toBe("upcoming");
+    expect(overview.plans[1].availability).toBe("available");
     expect(overview.plans[2]).toMatchObject({
       code: "team",
       availability: "planned",
@@ -607,6 +609,48 @@ describe("lingshu-cloud account service", () => {
       status: "active",
       entitlement_active: true,
     });
+  });
+
+  it("gates encrypted sync to Pro and keeps revision history on conflicts", async () => {
+    const { verified, login } = await loginVerifiedAccount("pro-sync@example.com");
+    const auth = { Authorization: `Bearer ${login.access_token}` };
+    expect((await request("/api/v1/sync", { headers: auth })).status).toBe(403);
+
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO billing_customers
+        (user_id, provider, provider_customer_id, created_at, updated_at)
+        VALUES (?, 'stripe', ?, ?, ?)`).bind(verified.user.id, "cus_pro_sync", now, now),
+      env.DB.prepare(`INSERT INTO subscriptions
+        (user_id, provider, provider_customer_id, provider_subscription_id, price_id, plan_code,
+         billing_interval, status, current_period_end, cancel_at_period_end, created_at, updated_at)
+        VALUES (?, 'stripe', ?, ?, NULL, 'pro', 'month', 'active', NULL, 0, ?, ?)`)
+        .bind(verified.user.id, "cus_pro_sync", "sub_pro_sync", now, now),
+    ]);
+
+    const empty = await responseJson(await request("/api/v1/sync", { headers: auth }));
+    expect(empty).toEqual({ revision: 0, snapshot: null });
+    const snapshot = { algorithm: "AES-256-GCM", key_version: 1, iv: "YWJjZGVmZ2hpamts",
+      ciphertext: "ZW5jcnlwdGVk", checksum: "a".repeat(64), item_count: 7 };
+    const written = await request("/api/v1/sync", {
+      method: "PUT", headers: { ...auth, "Content-Type": "application/json", Origin: "http://localhost:5173" },
+      body: JSON.stringify({ base_revision: 0, snapshot }),
+    });
+    expect(written.status).toBe(200);
+    expect(written.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:5173");
+    expect((await responseJson(written)).revision).toBe(1);
+    const read = await responseJson(await request("/api/v1/sync", { headers: auth }));
+    expect(read).toMatchObject({ revision: 1, snapshot });
+
+    const stale = await request("/api/v1/sync", {
+      method: "PUT", headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ base_revision: 0, snapshot }),
+    });
+    expect(stale.status).toBe(409);
+    expect((await responseJson(stale)).current.revision).toBe(1);
+    const history = await responseJson(await request("/api/v1/sync/history", { headers: auth }));
+    expect(history.history).toHaveLength(1);
+    expect(history.history[0]).toMatchObject({ revision: 1, item_count: 7 });
   });
 
   it("shows an invited free account as Team without granting team creation", async () => {

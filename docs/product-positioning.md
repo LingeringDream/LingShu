@@ -42,7 +42,7 @@ Claude   Cursor   Codex   其他 MCP AI
 | B 端 | **企业版 Enterprise** | 内部大量使用 AI 或 Agent 的企业 | 企业统一上下文中心、部门与项目隔离、Agent 身份、RBAC、审计、来源追踪、冲突治理、企业知识接入、SSO、数据治理；提供 Enterprise MCP Gateway，并支持云、VPC 和私有部署 |
 | B 端 | **嵌入版 Embedded / OEM** | AI SaaS、Agent 平台、AI 软件公司 | Context / Memory API、Python / TypeScript SDK、MCP Server、多租户、长期记忆、冲突治理、检索、权限、白标、OEM 和私有部署 |
 
-以上是目标产品体系，不等于当前已上线清单。当前已实现客户端、MCP 和 HTTP API；Python / TypeScript SDK、加密云同步、跨设备 MCP、团队 MCP 与按席位账单尚未开放。有效 Team 订阅已可创建团队工作区，受邀 Free 用户可加入。具体边界以[版本权益实施说明](version-entitlements.md)、README、更新日志和正式发布说明为准。
+以上是产品体系，不代表所有版本都已全部上线。当前已实现客户端、MCP、HTTP API，以及 Pro 端到端加密同步、跨设备连续记忆和高级治理；Python / TypeScript SDK、团队 MCP 与按席位账单尚未开放。有效 Team 订阅已可创建团队工作区，受邀 Free 用户可加入。具体边界以[版本权益实施说明](version-entitlements.md)、README、更新日志和正式发布说明为准。
 
 ## 各版本的一句话说明
 
@@ -56,7 +56,7 @@ Claude   Cursor   Codex   其他 MCP AI
 
 本地 MCP 属于免费版本地核心能力，不作为单独付费门槛。它承担产品体验与获客作用：用户安装灵枢后，即可让同一台电脑上的多个 AI 工具共享记忆。
 
-Pro 的目标付费价值是跨设备连续性。计划中，用户为加密云同步、多设备冲突处理和高级记忆治理付费，使不同电脑上的 AI 工具能够连接到同一个持续更新的用户记忆层；这些能力当前尚未开放。
+Pro 的付费价值是跨设备连续性。用户为端到端加密云同步、多设备冲突处理和高级记忆治理付费，使不同电脑上的 AI 工具通过各自的本机 MCP 连接到同一个持续更新的用户记忆层。云端只保存密文，不持有同步口令。
 
 ```text
 Free

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { cloudAccountClient, CloudAccountError, cloudErrorMessage, type CloudAccount } from '../lib/cloudAccount';
 import { waitForBrowserLogin } from '../lib/browserLogin';
+import { stopProAutoSync } from '../lib/proSync';
 
 interface CloudAccountState {
   account: CloudAccount | null;
@@ -46,6 +47,6 @@ export const useCloudAccountStore = create<CloudAccountState>((set, get) => {
     async initialize() { if (!get().initialized) await get().reload(); },
     reload: () => run(() => cloudAccountClient.load()),
     login: (email, password, name, platform) => run(() => cloudAccountClient.login(email, password, name, platform)),
-    logout: () => run(async () => { await cloudAccountClient.logout(); return null; }),
+    logout: () => run(async () => { await cloudAccountClient.logout(); stopProAutoSync(); return null; }),
   };
 });

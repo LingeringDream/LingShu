@@ -15,7 +15,7 @@
 |------|------|------|
 | 跨平台桌面壳 + 桌面宠物 | ✅ | Tauri 2，main 控制面板窗口 + pet 透明置顶可拖拽浮窗；macOS 使用 EventKit，Windows/Linux/Web 对系统日历降级为 ICS，浏览器模式优雅降级 |
 | Apple Calendar / ICS | ✅ | 自然语言解析 → 落 PG → L1 逐次确认流；macOS 写入/删除 EventKit，其他平台导出 ICS；macOS 14+ `NSCalendarsFullAccessUsageDescription` 已配置 |
-| 云账户与设备会话 | ✅ | 可选云账户、浏览器 PKCE 登录、设备撤销、订阅概览和下载中心；记忆同步、忘记密码和账户删除仍未开放 |
+| 云账户、设备会话与 Pro 同步 | ✅ | 可选云账户、浏览器 PKCE 登录、设备撤销、订阅概览、端到端加密记忆同步、冲突历史和下载中心；忘记密码和账户删除仍未开放 |
 | SoulLedger | ✅ | 见第三节，七项机制全部落地 |
 | 权限分级 L0–L4 | ✅ | 数据模型 + API + 日历处 L1 强制 + 审计日志；**权限设置已持久化至 PostgreSQL**（migration 0022，`users.permissions` JSONB，重启保留） |
 

@@ -35,7 +35,7 @@ describe('CloudAccountPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '登录云账户' }));
     await waitFor(() => expect(useCloudAccountStore.getState().login).toHaveBeenCalledWith('alice@example.com', 'a-private-password', '我的灵枢电脑', 'windows'));
     expect(screen.getByLabelText('密码')).toHaveValue('');
-    expect(screen.getByText(/云端同步尚未开放/)).toBeInTheDocument();
+    expect(screen.getByText(/Pro 可启用端到端加密同步/)).toBeInTheDocument();
   });
 
   it('shows errors and a recovery action after an offline restart', () => {

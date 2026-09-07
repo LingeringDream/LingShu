@@ -21,3 +21,16 @@
 .cloud-account-note { padding: 16px 20px; background: var(--accent-light); border-radius: 12px; }
 .cloud-account-note strong { display: block; margin-bottom: 5px; font-size: 13px; }
 .cloud-account-error { background: #fff2f0; color: #a82920; padding: 12px 16px; border-radius: 10px; line-height: 1.7; }
+.pro-sync-panel { display: grid; gap: 14px; }
+.pro-sync-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.pro-sync-secret { display: grid; gap: 7px; font-size: 13px; font-weight: 600; }
+.pro-sync-secret input { width: 100%; padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px; color: var(--text-primary); background: var(--surface-solid); }
+.pro-sync-secret span { color: var(--text-secondary); font-size: 12px; font-weight: 400; line-height: 1.6; }
+.pro-sync-auto { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
+.pro-sync-auto input { accent-color: var(--accent); }
+.pro-sync-result { margin: 0; color: #168243; font-size: 13px; }
+.pro-sync-history summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+.pro-sync-history ol { display: grid; gap: 8px; margin: 12px 0 0; padding-left: 20px; }
+.pro-sync-history li { padding-left: 4px; font-size: 12px; }
+.pro-sync-history li span, .pro-sync-history li time { display: block; }
+.pro-sync-history li time { margin-top: 2px; color: var(--text-secondary); }

@@ -264,13 +264,13 @@
               </article>
 
               <article class="plan-card is-featured">
-                <div class="plan-labels"><span class="plan-kicker">进阶</span><span class="plan-state is-upcoming">随同步开放</span></div>
+                <div class="plan-labels"><span class="plan-kicker">进阶</span><span class="plan-state is-live">已开放</span></div>
                 <h3>专业版 <small>Pro</small></h3>
                 <p>适合个人开发者、研究者和需要多设备记忆工作流的重度用户。</p>
                 <ul>
                   <li>包含全部免费版权益</li>
                   <li>加密云端记忆同步</li>
-                  <li>多设备增量同步与冲突历史</li>
+                  <li>多设备合并与冲突历史</li>
                   <li>跨设备 MCP 接入与连续记忆</li>
                   <li>高级经验沉淀与记忆参数自定义</li>
                   <li>优先获得云端新能力</li>
@@ -319,7 +319,7 @@
             </section>
             <div class="plan-principles" aria-label="订阅分级原则">
               <p><strong>本地 MCP 永久免费</strong><span>免费版让同一台电脑上的 Claude、Cursor、Codex 等 AI 共享本机灵枢记忆。</span></p>
-              <p><strong>Pro 扩展跨设备连续性</strong><span>专业版的云同步与跨设备 MCP 权益将在功能正式开放后生效。</span></p>
+              <p><strong>Pro 扩展跨设备连续性</strong><span>在桌面端输入仅由用户掌握的同步加密口令，即可让各设备和本机 MCP 使用同一套连续记忆。</span></p>
               <p><strong>结账前显示真实价格</strong><span>各档时长与金额以微信支付 / 支付宝收银台最终确认内容为准。</span></p>
             </div>
             <p class="billing-note">
@@ -482,16 +482,16 @@
                 <section id="memory-sync">
                   <span class="doc-number">07</span>
                   <div class="doc-content">
-                    <h3>记忆同步：当前尚未开放</h3>
+                    <h3>记忆同步：Pro 已开放</h3>
                     <p>云端已经预留独立的加密记忆存储，但当前账户服务还没有启用记忆上传、下载或冲突合并接口。</p>
                     <ul class="doc-list">
                       <li>登录云账户后，现有本地记忆<strong>不会自动上传</strong>。</li>
                       <li>卸载、换机或重装前，仍需按桌面端现有方式自行备份本地数据。</li>
-                      <li>未来同步只处理加密后的增量数据与同步游标，不会接管本地核心功能。</li>
+                      <li>云端只处理 AES-256-GCM 加密后的快照、修订号与同步游标，不会接管本地核心功能。</li>
                       <li>网络中断时，本地会话和本地数据仍可继续使用。</li>
                     </ul>
                     <p class="doc-note"><strong>本地数据位置（Windows）：</strong>桌面端数据保存在 <code>%APPDATA%\com.lingshu.desktop\embedded-postgresql</code> 目录。重装系统、更换电脑前，请备份整个 <code>com.lingshu.desktop</code> 目录；恢复时放回相同位置即可。</p>
-                    <p class="doc-note"><strong>开放前提：</strong>页面出现明确的“启用同步”入口并展示同步状态后，才表示该能力已正式可用。</p>
+                    <p class="doc-note"><strong>使用方式：</strong>在桌面端「云账户」中输入至少 12 个字符的同步加密口令；所有设备须使用相同口令，云端无法读取或找回该口令。</p>
                   </div>
                 </section>
                 <section id="billing-guide">
@@ -502,7 +502,7 @@
                     <p class="doc-note"><strong>模型接入不设付费墙：</strong>免费版即可自由接入本地模型（如 Ollama）或自备第三方 API Key，不产生订阅费用；官方托管模型按量计费，与订阅费分开结算。</p>
                     <ul class="doc-list">
                       <li><strong>免费版（当前可用）：</strong>完整本地会话、离线使用、本地基础动态记忆、多模型自由接入（本地模型或自备 API Key）、云账户和设备会话管理。</li>
-                      <li><strong>专业版 Pro（随同步开放）：</strong>在免费版基础上增加加密增量同步、多设备冲突历史、跨设备 MCP、高级经验沉淀和记忆参数自定义。</li>
+                      <li><strong>专业版 Pro：</strong>在免费版基础上增加端到端加密同步、多设备合并与冲突历史、跨设备连续 MCP、高级经验沉淀和记忆参数自定义。</li>
                       <li><strong>团队版 Team（规划中）：</strong>增加团队工作区、共享记忆空间、成员权限、团队 MCP 空间、审计记录、设备治理和按席位统一账单。</li>
                       <li><strong>企业版与嵌入版：</strong>提供企业级上下文治理、MCP Gateway、API / SDK、私有部署与 OEM 能力，通过页面中的企业联系入口咨询。</li>
                     </ul>
@@ -577,9 +577,9 @@
                       <div><dt>验证链接提示无效或已过期</dt><dd>链接可能超过 24 小时、已经使用过，或复制时不完整。重新提交注册即可在旧记录过期后生成新验证链接。</dd></div>
                       <div><dt>登录后又回到登录页</dt><dd>会话可能已过期或被其他设备撤销。刷新页面并重新登录；若仍失败，确认浏览器未阻止该站点的本地存储。</dd></div>
                       <div><dt>收不到验证邮件</dt><dd>检查垃圾邮件和邮箱拼写。有效期内重复提交不会再次发送；请使用首次收到的邮件，或等待旧链接过期后重新注册。</dd></div>
-                      <div><dt>断网后还能使用吗</dt><dd>桌面端本地核心功能可以继续使用；账户网页、设备管理、订阅查询和未来云同步需要联网。</dd></div>
+                      <div><dt>断网后还能使用吗</dt><dd>桌面端本地核心功能可以继续使用；账户网页、设备管理、订阅查询和云同步需要联网。</dd></div>
                       <div><dt>撤销设备会删除记忆吗</dt><dd>不会。撤销只让该设备的云会话失效，不会删除桌面端本地数据，也不会删除账户。</dd></div>
-                      <div><dt>网页目前不能做什么</dt><dd>当前尚不提供忘记密码、修改密码、删除账户和记忆同步。这些能力开放后会在账户中心提供明确入口。</dd></div>
+                      <div><dt>网页目前不能做什么</dt><dd>当前尚不提供忘记密码、修改密码和删除账户。记忆同步在桌面端完成，因为加密口令不会交给网页或云端。</dd></div>
                     </dl>
                   </div>
                 </section>

@@ -83,7 +83,7 @@ cargo run -p lingshu-eval --release -- --json output/eval_results.json
 | 角色提示词 | 用户自定义系统角色提示词，集成进对话工作区 | ✅ 已实现 |
 | Markdown 渲染 | MessageBubble 支持 Markdown 格式化展示 | ✅ 已实现 |
 | LLM 设置持久化 | LLM 配置（模型、max_tokens、context_messages 等）存 PostgreSQL，重启保留 | ✅ 已实现 |
-| 云账户与版本权益 | 可选云账户、网页登录、设备撤销、订阅概览与下载中心；Free / Pro / Team 权益由云端统一计算 | ✅ 已部署；加密云同步、跨设备 MCP 与高级记忆治理尚未开放 |
+| 云账户与版本权益 | 可选云账户、网页登录、设备撤销、订阅概览与下载中心；Free / Pro / Team 权益由云端统一计算 | ✅ 已部署；Pro 端到端加密同步、跨设备连续 MCP 与高级记忆治理已开放 |
 | 团队工作区 | 有效 Team 订阅可创建工作区；受邀 Free 用户可加入，团队内按角色和记忆授权执行 | ✅ 已实现；团队 MCP、统一账单尚未开放 |
 
 ## 项目状态
@@ -106,7 +106,7 @@ cargo run -p lingshu-eval --release -- --json output/eval_results.json
 - ✅ Tauri 2 桌面壳（main + pet 窗口）+ EventKit 桥接（macOS 14+ `NSCalendarsFullAccessUsageDescription`）
 - ✅ Apple Calendar：macOS 使用 EventKit；Windows、Linux 和 Web 使用 ICS 导出；均支持自然语言解析、CRUD 与 L1 确认
 - ✅ macOS / Windows 独立版：Sidecar 内置 PostgreSQL 运行时，安装包可独立启动，不依赖 Docker 或外部数据库
-- ✅ 云账户：网页登录 PKCE、设备会话、订阅概览和下载中心；加密云同步、跨设备 MCP 与高级记忆治理尚未开放
+- ✅ 云账户：网页登录 PKCE、设备会话、订阅概览和下载中心；Pro 提供端到端加密同步、跨设备连续 MCP 与高级记忆治理
 - ✅ Chat：工具调用（tool-use loop）、角色提示词、Markdown 渲染、流式 SSE 响应
 - ✅ 联网搜索：独立 L1 权限开关、网页结果解析、来源链接保留、超时与响应大小限制
 - ✅ LLM 设置持久化至 PostgreSQL（模型、max_tokens、context_messages 等，重启保留）
@@ -251,7 +251,7 @@ cargo build --release -p lingshu-mcp     # → target/release/lingshu-mcp
 - 服务以 stdio 通信，**所有日志写 stderr**，stdout 只走 JSON-RPC，不要把日志重定向到 stdout。
 - 写入后会直接返回状态。**「已记录」不等于「已确认」**：不同主张会保留为争议，检索时显式提示，不能靠重复提交更高置信度来解除。详见[并发写入与冲突治理](docs/memory-write-consistency.md)。
 
-> 本机 MCP 属于免费版能力，仅限本机访问。跨设备 MCP 属于 Pro 规划能力，**尚未开放**。
+> 本机 MCP 属于免费版能力。Pro 用户在各设备完成端到端加密同步后，本机 MCP 会访问同一套连续记忆；同步口令始终留在客户端。
 
 ## 配置
 
@@ -370,7 +370,7 @@ OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，当前覆盖
 ## 已知局限
 
 - **自动治理未达标**：事实状态自动判定的 Macro-F1 为规则 44.74% / LLM 22.97%，错误淘汰率 23–27%，远高于 <5% 目标。当前依赖保守的争议保留与人工裁决，不自动判定事实真伪。详见[自动治理审计](docs/competition/auto-governance-audit.md)。
-- **部分付费能力尚未开放**：加密云同步、跨设备 MCP、高级记忆治理、团队 MCP 和按席位账单均属规划能力。有效 Team 订阅已可创建团队工作区，受邀 Free 用户可加入。详见[版本权益实施说明](docs/version-entitlements.md)。
+- **Pro 已开放**：端到端加密云同步、跨设备连续 MCP、高级记忆治理和检索权重自定义均可用。团队 MCP 和按席位账单仍属规划能力；有效 Team 订阅已可创建团队工作区，受邀 Free 用户可加入。详见[版本权益实施说明](docs/version-entitlements.md)。
 - 桌面安装包已携带 MCP 二进制，设置页可为支持的客户端一键写入配置；部分客户端仍需手动粘贴配置，源码运行仍需先构建 `lingshu-mcp`。
 - 竞赛评测已增加 LoCoMo 强词法基线、按官方类别规则计分的本地问答、300 查询合成集与消融；尚缺生产检索接入、真实样本、权重路由、百万级并发压测与真实多 Agent 协作。旧版指标口径已纠正，详见[实验报告](docs/competition/experiment-report.md)。
 - 前端暂未提供生成式 API 客户端；当前 OpenAPI 门禁校验代码生成结果与提交的 `openapi.json` 一致性。

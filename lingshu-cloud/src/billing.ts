@@ -208,9 +208,9 @@ export async function getBillingOverview(
       {
         code: "developer",
         name: "专业版 Pro",
-        availability: "upcoming",
-        description: "为多设备和高级记忆工作流准备",
-        features: ["全部免费版权益", "加密云端记忆同步", "多设备增量同步与冲突历史", "跨设备 MCP 接入", "高级经验沉淀与记忆参数自定义"],
+        availability: "available",
+        description: "端到端加密的多设备连续记忆",
+        features: ["全部免费版权益", "端到端加密记忆同步", "多设备合并与冲突历史", "跨设备 MCP 连续记忆", "高级经验沉淀与记忆参数自定义"],
         options: DEVELOPER_OPTIONS.map((spec) => ({
           interval: spec.interval,
           label: displayLabel(

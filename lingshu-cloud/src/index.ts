@@ -355,7 +355,7 @@ function securityHeaders(request: Request, env: AppEnv): Headers {
   const origin = request.headers.get("Origin");
   if (origin && (allowedOrigins(env).has(origin) || allowedOrigins(env).has("*"))) {
     headers.set("Access-Control-Allow-Origin", origin);
-    headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-LingShu-Device-ID");
     headers.set("Access-Control-Expose-Headers", "Retry-After");
     headers.set("Vary", "Origin");

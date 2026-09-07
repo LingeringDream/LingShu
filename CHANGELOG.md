@@ -4,6 +4,7 @@
 
 ### Version 1.6.0
 
+- `feat(pro)`: ship client-side AES-256-GCM memory sync, deterministic multi-device merge with tombstones and revision history, cross-device local MCP continuity, and persisted retrieval-weight customization.
 - `feat(mcp)`: add the local stdio memory MCP service with six tools, bundle it with desktop packages, and add one-step configuration for supported AI clients.
 - `feat(teams)`: add Team workspace creation, invited-member access, member roles, and memory authorization; invited Free users can join existing workspaces.
 - `feat(entitlements)`: centralize Free / Pro / Team entitlement calculation and keep unreleased cloud sync, cross-device MCP, advanced governance, team MCP, and per-seat billing disabled.
