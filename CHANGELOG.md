@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 2026-09-08
+
+- Unify chat and Gateway/MCP recall with indexed Chinese/English lexical candidates and scored vector candidates; remove the recent-500-row candidate restriction.
+- Make extracted facts, provenance and conflict handling transactional; add durable, retryable vector indexing with edit/delete reconciliation (eventual consistency, not exactly-once).
+- Add explicit `as_of` valid-time queries using current ACLs; superseded claims remain separate from confirmed results.
+- Bound consolidation input and revalidate sources before commit. Propagate source changes to pending-review derived summaries; exclude them from recall and avoid repeated source demotion on replacement.
+- Add production-path regression fixtures and database tests. These are not real-model quality or large-scale performance benchmarks.
+- Upgrade notice: four new migrations; index backfill can incur embedding work. Existing derived summaries are preserved but marked pending review because source revision snapshots are unavailable. No new installer, deployment or migration on a business database is implied by this source update.
+
 ## 2026-09-07
 
 ### Version 1.6.1

@@ -1,8 +1,7 @@
 //! Offline memory consolidation (LLM-as-judge).
 //!
-//! This is the only place the LLM is allowed to *judge* — because it sees
-//! **all of a user's memories at once**.  The engine periodically scans the
-//! memory pool, asks the LLM to suggest semantically-overlapping groups worth
+//! The engine samples a bounded set of current, private LingShu memories,
+//! asks the LLM to suggest semantically-overlapping groups worth
 //! merging, and produces "derived" summaries while soft-demoting (never
 //! deleting) the source memories.
 //!
@@ -14,7 +13,6 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::llm::client::{ChatMessage, LlmClient};
-use crate::llm::memory::upsert_memory_vector;
 use crate::models::memory::Memory;
 use lingshu_vector::search::QdrantClient;
 use sqlx::PgPool;
@@ -93,7 +91,16 @@ pub fn validate_merge_groups<'a>(
         if accepted.len() >= MAX_MERGES {
             break;
         }
-        if c.confidence < MIN_CONFIDENCE || c.source_ids.len() < 2 {
+        if !c.confidence.is_finite()
+            || !(MIN_CONFIDENCE..=1.0).contains(&c.confidence)
+            || !c.importance.is_finite()
+            || !(0.0..=1.0).contains(&c.importance)
+            || c.merged_content.trim().is_empty()
+            || c.merged_content.chars().count() > 4000
+            || !["preference", "fact", "goal", "context"].contains(&c.memory_type.as_str())
+            || c.source_ids.len() < 2
+            || c.source_ids.iter().collect::<HashSet<_>>().len() != c.source_ids.len()
+        {
             continue;
         }
         // All source IDs must be in the loaded set
@@ -142,20 +149,40 @@ async fn try_consolidate(
     db: &PgPool,
     llm: &LlmClient,
     model: &str,
-    embed_model: &str,
-    vector: &Option<QdrantClient>,
+    _embed_model: &str,
+    _vector: &Option<QdrantClient>,
     user_id: Uuid,
 ) -> anyhow::Result<usize> {
-    // 1. Load all active memories
+    // 1. Bound DB loading and prompt size. Shared/global and non-default scopes
+    // are deliberately excluded until derived ACL inheritance is supported.
     let memories: Vec<Memory> = sqlx::query_as(
-        "SELECT * FROM memories \
-         WHERE user_id = $1 AND deleted_at IS NULL \
-         ORDER BY importance DESC, updated_at DESC",
+        "SELECT m.* FROM memories m
+         WHERE m.user_id=$1 AND m.deleted_at IS NULL AND m.tier='raw'
+         AND m.owner_agent_id='lingshu' AND m.memory_scope='private' AND m.context_scope='default'
+         AND m.conflict_status='active' AND m.retention_status='active' AND NOT m.derivation_stale
+         AND m.valid_from<=NOW() AND (m.valid_to IS NULL OR m.valid_to>NOW())
+         AND char_length(m.content)<=4000
+         AND NOT EXISTS (SELECT 1 FROM memories d WHERE d.user_id=$1 AND d.tier='derived'
+           AND d.deleted_at IS NULL AND NOT d.derivation_stale AND d.source_memory_ids @> ARRAY[m.id])
+         ORDER BY m.updated_at DESC, m.id LIMIT 64",
     )
     .bind(user_id)
     .fetch_all(db)
     .await?;
 
+    let mut budget = 24000usize;
+    let memories: Vec<Memory> = memories
+        .into_iter()
+        .filter(|m| {
+            let cost = m.content.chars().count() + 100;
+            if cost > budget {
+                false
+            } else {
+                budget -= cost;
+                true
+            }
+        })
+        .collect();
     if memories.len() < MIN_MEMORIES_FOR_CONSOLIDATION {
         return Ok(0);
     }
@@ -169,7 +196,11 @@ async fn try_consolidate(
     let messages = vec![ChatMessage::user(prompt)];
 
     // 3. Call LLM
-    let response = llm.chat(model, messages, None).await?;
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        llm.chat(model, messages, None),
+    )
+    .await??;
     let candidates = parse_merge_candidates(&response)?;
 
     // 4. Validate
@@ -181,7 +212,7 @@ async fn try_consolidate(
     // 5. Apply each merge group in a transaction
     let mut created = 0usize;
     for group in valid_groups {
-        if let Err(e) = apply_merge_group(db, llm, embed_model, vector, user_id, group).await {
+        if let Err(e) = apply_merge_group(db, user_id, group, &memories).await {
             tracing::warn!(%user_id, %e, "Failed to apply merge group, continuing with next");
             continue;
         }
@@ -217,7 +248,7 @@ fn build_consolidation_prompt(memory_list: &str) -> String {
         r###"你是 灵枢（LingShu）的记忆离线整理引擎。
 
 ## 你的任务
-在下面这个用户的全量记忆列表中，找出语义高度重叠的记忆组，用一条简洁、准确的记忆来概括它们。
+在下面这个用户的有限候选记忆列表中，找出语义高度重叠的记忆组，用一条简洁、准确的记忆来概括它们。
 这不是"改写"，而是从多条相似的片段中提炼出一条更能代表它们的语义记忆。
 
 ## 合并约束
@@ -270,19 +301,52 @@ fn parse_merge_candidates(raw: &str) -> anyhow::Result<Vec<MergeCandidate>> {
 
 async fn apply_merge_group(
     db: &PgPool,
-    llm: &LlmClient,
-    embed_model: &str,
-    vector: &Option<QdrantClient>,
     user_id: Uuid,
     group: &MergeCandidate,
+    snapshots: &[Memory],
 ) -> anyhow::Result<()> {
     let mut tx = db.begin().await?;
+
+    // Lock in a stable order, then revalidate the evidence seen by the LLM.
+    let sources: Vec<Memory> = sqlx::query_as(
+        "SELECT * FROM memories WHERE user_id=$1 AND id=ANY($2)
+         AND deleted_at IS NULL AND tier='raw' AND owner_agent_id='lingshu'
+         AND memory_scope='private' AND context_scope='default'
+         AND conflict_status='active' AND retention_status='active' AND NOT derivation_stale
+         AND valid_from<=NOW() AND (valid_to IS NULL OR valid_to>NOW())
+         ORDER BY id FOR UPDATE",
+    )
+    .bind(user_id)
+    .bind(&group.source_ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    anyhow::ensure!(
+        sources.len() == group.source_ids.len() && sources.len() >= 2,
+        "Sources unavailable"
+    );
+    anyhow::ensure!(
+        sources.iter().all(|m| m.memory_type == group.memory_type
+            && snapshots
+                .iter()
+                .any(|s| s.id == m.id && s.updated_at == m.updated_at && s.content == m.content)),
+        "Source changed or mixed memory types"
+    );
+    let already_merged: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM memories WHERE user_id=$1 AND tier='derived'
+         AND deleted_at IS NULL AND NOT derivation_stale AND source_memory_ids && $2)",
+    )
+    .bind(user_id)
+    .bind(&group.source_ids)
+    .fetch_one(&mut *tx)
+    .await?;
+    anyhow::ensure!(!already_merged, "Sources already summarized");
+    let valid_to = sources.iter().filter_map(|m| m.valid_to).min();
 
     // 1. Insert the derived memory
     let derived: Memory = sqlx::query_as(
         "INSERT INTO memories \
-         (user_id, memory_type, content, importance, source_memory_ids, tier, memory_layer, source_type) \
-         VALUES ($1, $2, $3, $4, $5, 'derived', 'experience', 'consolidation') \
+         (user_id, memory_type, content, importance, source_memory_ids, tier, memory_layer, source_type, valid_to) \
+         VALUES ($1, $2, $3, $4, $5, 'derived', 'experience', 'consolidation', $6) \
          RETURNING *",
     )
     .bind(user_id)
@@ -290,47 +354,27 @@ async fn apply_merge_group(
     .bind(&group.merged_content)
     .bind(group.importance)
     .bind(&group.source_ids)
+    .bind(valid_to)
     .fetch_one(&mut *tx)
     .await?;
 
     // 2. Soft-demote source memories (never soft-delete)
     sqlx::query(
         "UPDATE memories SET importance = importance * $1, updated_at = NOW() \
-         WHERE id = ANY($2) AND user_id = $3 AND deleted_at IS NULL",
+         WHERE id = ANY($2) AND user_id = $3 AND deleted_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM memories d WHERE d.user_id=$3 AND d.tier='derived'
+           AND d.id<>$4 AND d.source_memory_ids @> ARRAY[memories.id])",
     )
     .bind(DEMOTE_FACTOR)
     .bind(&group.source_ids)
     .bind(user_id)
+    .bind(derived.id)
     .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
 
-    // 3. Best-effort vector indexing (outside transaction, fire-and-forget)
-    if let Some(qdrant) = vector {
-        let embed_model = embed_model.to_string();
-        let db_clone = db.clone();
-        let llm_clone = llm.clone();
-        let qdrant_clone = qdrant.clone();
-        let content = group.merged_content.clone();
-        let memory_id = derived.id;
-
-        tokio::spawn(async move {
-            if let Err(e) = upsert_memory_vector(
-                &db_clone,
-                &qdrant_clone,
-                &llm_clone,
-                &embed_model,
-                user_id,
-                memory_id,
-                &content,
-            )
-            .await
-            {
-                tracing::warn!(%memory_id, %e, "Failed to index derived memory vector (non-fatal)");
-            }
-        });
-    }
+    // The transactional database trigger enqueues durable vector indexing.
 
     // 4. Telemetry: reference each source + consolidation event
     for source_id in &group.source_ids {
@@ -367,6 +411,114 @@ async fn apply_merge_group(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn rejects_duplicate_sources_and_nonfinite_confidence() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let loaded = HashSet::from([a, b]);
+        let mut candidate = MergeCandidate {
+            merged_content: "summary".into(),
+            memory_type: "fact".into(),
+            importance: 0.5,
+            source_ids: vec![a, a],
+            confidence: 0.9,
+        };
+        assert!(validate_merge_groups(std::slice::from_ref(&candidate), &loaded).is_empty());
+        candidate.source_ids = vec![a, b];
+        candidate.confidence = f32::NAN;
+        assert!(validate_merge_groups(std::slice::from_ref(&candidate), &loaded).is_empty());
+        candidate.confidence = 0.9;
+        assert_eq!(validate_merge_groups(&[candidate], &loaded).len(), 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires dedicated MEMORY_TEST_DATABASE_URL; applies migrations"]
+    async fn consolidation_revalidates_sources() {
+        let db = PgPool::connect(&std::env::var("MEMORY_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&db).await.unwrap();
+        let user = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'test','unused')",
+        )
+        .bind(user)
+        .bind(format!("{user}@test.local"))
+        .execute(&db)
+        .await
+        .unwrap();
+        let sources: Vec<Memory> = sqlx::query_as("INSERT INTO memories(user_id,memory_type,content,importance) SELECT $1,'fact','source ' || n,0.8 FROM generate_series(1,2) n RETURNING *")
+            .bind(user).fetch_all(&db).await.unwrap();
+        let group = MergeCandidate {
+            merged_content: "summary".into(),
+            memory_type: "fact".into(),
+            importance: 0.8,
+            source_ids: sources.iter().map(|m| m.id).collect(),
+            confidence: 0.9,
+        };
+        sqlx::query("UPDATE memories SET context_scope='other' WHERE id=$1")
+            .bind(sources[0].id)
+            .execute(&db)
+            .await
+            .unwrap();
+        assert!(apply_merge_group(&db, user, &group, &sources)
+            .await
+            .is_err());
+        sqlx::query("UPDATE memories SET context_scope='default',content='edited' WHERE id=$1")
+            .bind(sources[0].id)
+            .execute(&db)
+            .await
+            .unwrap();
+        assert!(apply_merge_group(&db, user, &group, &sources)
+            .await
+            .is_err());
+        let refreshed: Vec<Memory> = sqlx::query_as("SELECT * FROM memories WHERE user_id=$1")
+            .bind(user)
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        apply_merge_group(&db, user, &group, &refreshed)
+            .await
+            .unwrap();
+        assert!(apply_merge_group(&db, user, &group, &refreshed)
+            .await
+            .is_err());
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM memories WHERE user_id=$1 AND tier='derived'")
+                .bind(user)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+        let importance: f32 = sqlx::query_scalar("SELECT importance FROM memories WHERE id=$1")
+            .bind(sources[0].id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(importance, 0.4);
+        sqlx::query("UPDATE memories SET content='corrected source' WHERE id=$1")
+            .bind(sources[0].id)
+            .execute(&db)
+            .await
+            .unwrap();
+        let current: Vec<Memory> =
+            sqlx::query_as("SELECT * FROM memories WHERE user_id=$1 AND tier='raw'")
+                .bind(user)
+                .fetch_all(&db)
+                .await
+                .unwrap();
+        apply_merge_group(&db, user, &group, &current)
+            .await
+            .unwrap();
+        let importance: f32 = sqlx::query_scalar("SELECT importance FROM memories WHERE id=$1")
+            .bind(sources[0].id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(importance, 0.4, "replacement must not demote sources again");
+        db.close().await;
+    }
 
     // ── should_run_consolidation_at ────────────────────────────────
 

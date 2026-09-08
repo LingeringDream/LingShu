@@ -162,26 +162,7 @@ async fn apply(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
-    // Rebuild the receiving device's vector using its own embedding provider.
-    if let Some(vector) = &state.vector {
-        if !req.data["deleted_at"].is_null() {
-            if let Err(error) = vector.delete_points("memories", &[id]).await {
-                tracing::warn!(%error, "Sync vector deletion failed");
-            }
-        } else if let Err(error) = crate::llm::memory::upsert_memory_vector(
-            &state.db,
-            vector,
-            &state.llm,
-            &state.config.llm.embed_model,
-            user,
-            id,
-            req.data["content"].as_str().unwrap(),
-        )
-        .await
-        {
-            tracing::warn!(%error, "Sync vector rebuild deferred; memory is stored locally");
-        }
-    }
+    // The receiving device's durable index worker rebuilds or removes vectors.
     Ok(Json(json!({"token": token})))
 }
 

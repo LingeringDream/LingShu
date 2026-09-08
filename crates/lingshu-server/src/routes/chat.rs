@@ -1636,11 +1636,10 @@ type MemoryDecayRow = (Uuid, f32, Option<DateTime<Utc>>, DateTime<Utc>);
 /// Best-effort background maintenance: failures are logged only and never
 /// propagate to the caller.
 ///
-/// After a PG soft-delete, this also best-effort removes the memory's vector
-/// point from Qdrant so the vector store stays consistent with the PG state.
+/// Soft-deletion atomically enqueues vector removal for the durable worker.
 async fn run_forgetting_sweep(
     db: &sqlx::PgPool,
-    vector: &crate::state::OptionalVector,
+    _vector: &crate::state::OptionalVector,
     user_id: Uuid,
 ) {
     // Load protected IDs from active personality snapshots and derived-memory
@@ -1729,15 +1728,7 @@ async fn run_forgetting_sweep(
             Ok(affected) => {
                 if affected.rows_affected() > 0 {
                     forgotten += 1;
-                    // Best-effort: remove the vector point from Qdrant
-                    if let Some(qdrant) = vector {
-                        if let Err(e) = qdrant.delete_points("memories", &[id]).await {
-                            tracing::warn!(
-                                %user_id, memory_id = %id, %e,
-                                "Failed to delete vector point for forgotten memory (non-fatal)"
-                            );
-                        }
-                    }
+                    // Vector deletion is durably enqueued by the database trigger.
                     // Record telemetry for each forgotten memory
                     crate::telemetry::record(
                         db,
@@ -2124,10 +2115,9 @@ async fn load_chat_history_before(
 ///
 /// When Qdrant is available and `user_message` is non-empty, this function
 /// performs semantic retrieval: embed the user message, search Qdrant for
-/// similar memories (user-scoped), then load those rows from PG. On any
-/// vector-path failure or when Qdrant is unavailable, it falls back to the
-/// legacy SQL ordering (`importance DESC, updated_at DESC LIMIT 5`).
-async fn fetch_memory_context(
+/// similar and lexical memories through the same service as Memory Gateway.
+/// PostgreSQL enforces visibility and current validity before final ranking.
+pub(crate) async fn fetch_memory_context(
     db: &sqlx::PgPool,
     vector: &Option<lingshu_vector::search::QdrantClient>,
     llm: &crate::llm::client::LlmClient,
@@ -2135,60 +2125,43 @@ async fn fetch_memory_context(
     user_id: Uuid,
     user_message: &str,
 ) -> String {
-    // ── Semantic path ────────────────────────────────────────────
-    let rows = if let Some(qdrant) = vector {
-        try_semantic_fetch(qdrant, llm, embed_model, user_id, user_message).await
-    } else {
-        None
+    let req = crate::routes::memory_gateway::GatewaySearchRequest {
+        as_of: None,
+        query: user_message.to_string(),
+        agent_id: "lingshu".to_string(),
+        context_scope: None,
+        mode: "adaptive".to_string(),
+        top_k: 5,
+        layer: None,
+        scene_tags: Vec::new(),
+        weights: None,
     };
-
-    // ── Fallback path ────────────────────────────────────────────
-    let rows = match rows {
-        Some(ids) if !ids.is_empty() => {
-            // Load the specific rows from PG, preserving Qdrant rank order
-            load_memories_by_ids(db, user_id, &ids, user_message).await
-        }
-        _ => {
-            // No semantic results — use legacy importance+recency query
-            legacy_fetch_memories(db, user_id).await
-        }
-    };
-
-    if rows.is_empty() {
-        return String::new();
-    }
-
-    // Bump access metadata
-    let ids: Vec<Uuid> = rows.iter().map(|(id, _, _, _)| *id).collect();
-
-    // Signal: memory_retrieval_hit for each memory injected into context
-    for memory_id in &ids {
-        crate::telemetry::record(
-            db,
-            user_id,
-            crate::telemetry::SignalEventType::MemoryRetrievalHit,
-            Some("memory"),
-            Some(*memory_id),
-            serde_json::json!({}),
-        )
-        .await;
-    }
-
-    if let Err(error) = sqlx::query(
-        "UPDATE memories SET access_count = access_count + 1, last_accessed_at = NOW() \
-         WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL",
-    )
-    .bind(&ids)
-    .bind(user_id)
-    .execute(db)
-    .await
-    {
-        tracing::warn!(%user_id, %error, "Failed to record memory access for chat context");
-    }
+    let recalled =
+        match crate::llm::retrieval::search(db, vector, llm, embed_model, user_id, req).await {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::warn!(%user_id, %error, "Failed to retrieve chat memory");
+                return String::new();
+            }
+        };
+    let rows: Vec<_> = recalled
+        .results
+        .into_iter()
+        .map(|result| {
+            let m = result.memory;
+            (m.id, m.memory_type, m.content, m.created_at)
+        })
+        .collect();
 
     let mut ctx = String::new();
     for (_, mtype, content, created_at) in &rows {
         ctx.push_str(&memory_context_line(mtype, content, *created_at));
+    }
+    for memory in recalled.disputed_memories {
+        ctx.push_str(&format!(
+            "- [待裁决主张，不可作为已确认事实] {}\n",
+            memory.content
+        ));
     }
     ctx
 }
@@ -2207,136 +2180,6 @@ fn memory_context_line(memory_type: &str, content: &str, recorded_at: DateTime<U
     };
     let date = recorded_at.with_timezone(&Local).format("%Y-%m-%d");
     format!("- [{label}·记于{date}] {content}\n")
-}
-
-/// Try the semantic path via the shared [`crate::llm::semantic::semantic_memory_search`].
-/// Returns `None` on any failure so the caller can fall back to legacy SQL.
-async fn try_semantic_fetch(
-    qdrant: &lingshu_vector::search::QdrantClient,
-    llm: &crate::llm::client::LlmClient,
-    embed_model: &str,
-    user_id: Uuid,
-    user_message: &str,
-) -> Option<Vec<Uuid>> {
-    crate::llm::semantic::semantic_memory_search(
-        qdrant,
-        llm,
-        embed_model,
-        user_id,
-        user_message,
-        20, // top-k for chat context
-    )
-    .await
-}
-
-/// Load memories from PG by a set of IDs, preserving the given ID order and
-/// enforcing the `user_id` / `deleted_at IS NULL` / `importance >= 0.5` gates.
-#[derive(sqlx::FromRow)]
-struct AdaptiveMemoryContextRow {
-    id: Uuid,
-    memory_type: String,
-    content: String,
-    created_at: DateTime<Utc>,
-    importance: f32,
-    access_count: i32,
-    occurred_at: DateTime<Utc>,
-    valid_to: Option<DateTime<Utc>>,
-    source_trust: f32,
-    conflict_status: String,
-    retention_status: String,
-}
-
-async fn load_memories_by_ids(
-    db: &sqlx::PgPool,
-    user_id: Uuid,
-    ids: &[Uuid],
-    query: &str,
-) -> Vec<(Uuid, String, String, DateTime<Utc>)> {
-    let rows: Vec<AdaptiveMemoryContextRow> = match sqlx::query_as(
-        "SELECT id, memory_type, content, created_at, importance, access_count, occurred_at, valid_to, \
-                source_trust, conflict_status, retention_status \
-         FROM memories WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL AND importance >= 0.5 \
-           AND (owner_agent_id = 'lingshu' OR memory_scope = 'global' OR EXISTS ( \
-               SELECT 1 FROM memory_access_grants g WHERE g.memory_id = memories.id \
-               AND g.grantee_agent_id = 'lingshu' AND g.can_read))",
-    )
-    .bind(ids)
-    .bind(user_id)
-    .fetch_all(db)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::warn!(%user_id, %error, "Failed to load memories by IDs from semantic search");
-            return Vec::new();
-        }
-    };
-
-    let rank_by_id: std::collections::HashMap<Uuid, usize> = ids
-        .iter()
-        .enumerate()
-        .map(|(rank, id)| (*id, rank))
-        .collect();
-    let weights = crate::llm::evolutionary_memory::RetrievalWeights::for_query(query);
-    let now = Utc::now();
-    let mut ranked = Vec::new();
-    for row in rows {
-        let vector_rank = rank_by_id.get(&row.id).copied().unwrap_or(ids.len());
-        let semantic_score = 1.0 - vector_rank as f32 / ids.len().max(1) as f32;
-        let candidate = crate::llm::evolutionary_memory::RankableMemory {
-            id: row.id,
-            content: row.content.clone(),
-            importance: row.importance,
-            access_count: row.access_count,
-            occurred_at: row.occurred_at,
-            valid_to: row.valid_to,
-            source_trust: row.source_trust,
-            conflict_status: row.conflict_status,
-            retention_status: row.retention_status,
-            semantic_score,
-        };
-        if !crate::llm::evolutionary_memory::is_retrieval_eligible(&candidate, now) {
-            continue;
-        }
-        let score =
-            crate::llm::evolutionary_memory::score_memory(query, &candidate, &weights, now).total;
-        ranked.push((score, row.id, row.memory_type, row.content, row.created_at));
-    }
-    ranked.sort_by(|left, right| right.0.total_cmp(&left.0));
-    ranked
-        .into_iter()
-        .take(5)
-        .map(|(_, id, memory_type, content, created_at)| (id, memory_type, content, created_at))
-        .collect()
-}
-
-/// Legacy fallback: top-N memories by importance + recency.
-async fn legacy_fetch_memories(
-    db: &sqlx::PgPool,
-    user_id: Uuid,
-) -> Vec<(Uuid, String, String, DateTime<Utc>)> {
-    match sqlx::query_as(
-        "SELECT id, memory_type, content, created_at FROM memories \
-         WHERE user_id = $1 AND deleted_at IS NULL AND importance >= 0.5 \
-           AND conflict_status = 'active' AND retention_status = 'active' \
-           AND (valid_to IS NULL OR valid_to >= NOW()) \
-           AND (owner_agent_id = 'lingshu' OR memory_scope = 'global' OR EXISTS ( \
-               SELECT 1 FROM memory_access_grants g WHERE g.memory_id = memories.id \
-               AND g.grantee_agent_id = 'lingshu' AND g.can_read)) \
-         ORDER BY (importance * 0.45 + source_trust * 0.25 + \
-                  EXP(-EXTRACT(EPOCH FROM (NOW() - occurred_at)) / 2592000) * 0.30) DESC \
-         LIMIT 5",
-    )
-    .bind(user_id)
-    .fetch_all(db)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::warn!(%user_id, %error, "Failed to fetch chat memory context (legacy)");
-            Vec::new()
-        }
-    }
 }
 
 // ── Stream accumulator ─────────────────────────────────────────────

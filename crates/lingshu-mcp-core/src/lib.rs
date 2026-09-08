@@ -91,6 +91,7 @@ impl McpCore {
                     "type":"object",
                     "properties":{
                         "query":{"type":"string","description":"自然语言检索词"},
+                        "as_of":{"type":"string","format":"date-time","description":"可选有效时间点（RFC3339）；按当前权限读取，旧主张单独标记，不等于历史真相"},
                         "context_scope":{"type":"string","description":"业务作用域，例如 project:lingshu"},
                         "agent_id":{"type":"string","description":"调用方 Agent 标识，默认 lingshu","default":"lingshu"},
                         "mode":{"type":"string","enum":["adaptive","static"],"description":"adaptive=自适应重排（含冲突/过期过滤）；static=传统 RAG 基线","default":"adaptive"},
@@ -245,6 +246,9 @@ impl McpCore {
         let mode = arg_str(args, "mode").unwrap_or("adaptive").to_string();
         let top_k = arg_u64(args, "top_k").unwrap_or(5) as u32;
         let mut body = json!({"query":query,"agent_id":agent_id,"mode":mode,"top_k":top_k});
+        if let Some(v) = arg_str(args, "as_of") {
+            body["as_of"] = json!(v);
+        }
         if let Some(v) = arg_str(args, "context_scope") {
             body["context_scope"] = json!(v);
         }
@@ -265,11 +269,27 @@ impl McpCore {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        if results.is_empty() && disputed.is_empty() {
+        let historical = r
+            .get("historical_memories")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if results.is_empty() && disputed.is_empty() && historical.is_empty() {
             return Ok(format!("（未检索到与「{query}」相关的记忆，mode={mode}）"));
         }
         let count = results.len();
         let mut out = format!("检索「{query}」（mode={mode}，命中 {count} 条）：\n");
+        if let Some(as_of) = r.get("as_of").and_then(Value::as_str) {
+            out.push_str(&format!(
+                "有效时间点：{as_of}（使用当前权限；不代表当时已知信息的完整快照）\n"
+            ));
+        }
+        for memory in &historical {
+            out.push_str(&format!(
+                "[historical / superseded，非已确认事实] {}\n",
+                memory.get("content").and_then(Value::as_str).unwrap_or("")
+            ));
+        }
         for item in &results {
             let rank = item.get("rank").and_then(|v| v.as_u64()).unwrap_or(0);
             let score = item.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -495,17 +515,19 @@ mod tests {
             .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id":"m1","memory_layer":"fact","memory_scope":"global","conflict_status":"disputed"})))
             .expect(1).mount(&server).await;
         Mock::given(method("POST")).and(path("/api/v1/memory-gateway/search"))
-            .and(body_partial_json(json!({"context_scope":"project:test"})))
+            .and(body_partial_json(json!({"context_scope":"project:test","as_of":"2025-01-01T00:00:00Z"})))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "results":[{"rank":1,"score":0.9,"content":"known fact","memory_layer":"fact","memory_scope":"global"}],
-                "disputed_memories":[{"content":"uncertain claim"}]
+                "disputed_memories":[{"content":"uncertain claim"}],
+                "as_of":"2025-01-01T00:00:00Z",
+                "historical_memories":[{"content":"old claim"}]
             }))).expect(1).mount(&server).await;
         let core = McpCore::new(server.uri(), "test-token");
         let stored=core.tool_store(json!({"content":"db","fact_key":"db","fact_value":"pg","context_scope":"project:test","request_id":"retry-1"}).as_object().unwrap()).await.unwrap();
         assert!(stored.contains("disputed"));
         let recalled = core
             .tool_recall(
-                json!({"query":"db","context_scope":"project:test"})
+                json!({"query":"db","context_scope":"project:test","as_of":"2025-01-01T00:00:00Z"})
                     .as_object()
                     .unwrap(),
             )
@@ -513,5 +535,7 @@ mod tests {
             .unwrap();
         assert!(recalled.contains("known fact"));
         assert!(recalled.contains("[disputed] uncertain claim"));
+        assert!(recalled.contains("[historical / superseded，非已确认事实] old claim"));
+        assert!(recalled.contains("2025-01-01T00:00:00Z"));
     }
 }

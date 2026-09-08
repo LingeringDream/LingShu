@@ -24,6 +24,8 @@
 
 ## API 与数据库
 
+- [记忆检索、写入与派生失效](./memory-retrieval-optimization.md) — 当前源码改动、证据边界、数据库回归及迁移影响
+
 - [Swagger UI](http://localhost:8080/swagger-ui) — OpenAPI 3.1 交互文档（后端运行时可用）
 - [OpenAPI 快照](../openapi.json) — 提交的契约文件，由测试校验
 - 数据库迁移位于 `crates/lingshu-server/migrations/`；独立数据库架构文档尚未建立

@@ -55,7 +55,10 @@ impl QdrantClient {
         vector: Vec<f32>,
         payload: serde_json::Value,
     ) -> anyhow::Result<()> {
-        let url = format!("{}/collections/{}/points", self.base_url, collection);
+        let url = format!(
+            "{}/collections/{}/points?wait=true",
+            self.base_url, collection
+        );
         let body = serde_json::json!({
             "points": [{
                 "id": id.to_string(),
@@ -76,7 +79,10 @@ impl QdrantClient {
     /// Delete points by UUID from a collection.
     /// Best-effort: caller should handle errors gracefully (log + continue).
     pub async fn delete_points(&self, collection: &str, ids: &[Uuid]) -> anyhow::Result<()> {
-        let url = format!("{}/collections/{}/points/delete", self.base_url, collection);
+        let url = format!(
+            "{}/collections/{}/points/delete?wait=true",
+            self.base_url, collection
+        );
         let point_ids: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
         let body = serde_json::json!({ "points": point_ids });
 

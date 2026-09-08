@@ -187,7 +187,8 @@ async fn gather_recent_context(db: &PgPool, user_id: Uuid) -> anyhow::Result<Str
 async fn gather_active_goals(db: &PgPool, user_id: Uuid) -> anyhow::Result<String> {
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT content FROM memories \
-         WHERE user_id = $1 AND memory_type = 'goal' AND deleted_at IS NULL \
+         WHERE user_id = $1 AND memory_type = 'goal' AND deleted_at IS NULL AND NOT derivation_stale \
+         AND (tier <> 'derived' OR (valid_from<=NOW() AND (valid_to IS NULL OR valid_to>NOW()))) \
          ORDER BY importance DESC, updated_at DESC LIMIT 5",
     )
     .bind(user_id)

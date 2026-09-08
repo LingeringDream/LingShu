@@ -1,0 +1,19 @@
+{
+  "records": [
+    {"key":"old", "content":"凤凰项目数据库采用 PostgreSQL", "scope":"project", "owner":"lingshu", "status":"active", "age_days":730},
+    {"key":"recent", "content":"river project uses Rust", "scope":"project", "owner":"lingshu", "status":"active", "age_days":0},
+    {"key":"expired", "content":"过期项目数据库采用 MySQL", "scope":"project", "owner":"lingshu", "status":"expired", "age_days":730},
+    {"key":"disputed", "content":"争议项目数据库采用 SQLite", "scope":"project", "owner":"lingshu", "status":"disputed", "age_days":0},
+    {"key":"hidden", "content":"保密项目数据库采用 Redis", "scope":"project", "owner":"secret", "status":"active", "age_days":0},
+    {"key":"other", "content":"独立项目部署位置南京", "scope":"other", "owner":"lingshu", "status":"active", "age_days":0}
+  ],
+  "queries": [
+    {"name":"old-chinese", "query":"凤凰项目数据库", "scope":"project", "expected":["old"]},
+    {"name":"recent-english", "query":"river", "scope":"project", "expected":["recent"]},
+    {"name":"expired-not-fact", "query":"MySQL", "scope":"project", "expected":[]},
+    {"name":"disputed-not-fact", "query":"SQLite", "scope":"project", "expected":[]},
+    {"name":"acl-isolation", "query":"Redis", "scope":"project", "expected":[]},
+    {"name":"scope-isolation", "query":"南京", "scope":"project", "expected":[]},
+    {"name":"scope-positive", "query":"南京", "scope":"other", "expected":["other"]}
+  ]
+}

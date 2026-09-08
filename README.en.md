@@ -80,9 +80,11 @@ See the [experiment report](docs/competition/experiment-report.md) for protocols
 
 ## Project Status
 
-**Core features and cross-platform desktop infrastructure are complete; the current work is evidence and cloud-account polish.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and platform-adapted calendar export are implemented. The Rust workspace carries **408 passed and 19 ignored tests**; the frontend has **29 test files and 132 passing tests**; the cloud Worker has **55 passing tests**.
+The 2026-09-08 source changes unify chat/Gateway/MCP recall, add durable indexing, atomic fact extraction, explicit valid-time queries, bounded consolidation and derived-memory invalidation. They are not a new installer release or a verified production deployment. See the [implementation and migration notes](docs/memory-retrieval-optimization.md): existing summaries become pending review, and index backfill may incur embedding work. Seven synthetic queries are regression evidence, not a mem0 comparison or real-model accuracy benchmark. Six database scenarios were run separately; frontend/cloud test counts below are previous records, not rerun in this batch. Strict Clippy passed for server/vector/mcp-core only.
 
-- ✅ Rust + Axum backend (API, WebSocket, 29 database migrations)
+**Core features and cross-platform desktop infrastructure are complete; the current work is evidence and cloud-account polish.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and platform-adapted calendar export are implemented. The Rust workspace carries **410 passed and 26 ignored tests**; the frontend has **29 test files and 132 passing tests**; the cloud Worker has **55 passing tests**.
+
+- ✅ Rust + Axum backend (API, WebSocket, 33 database migrations)
 - ✅ MCP memory service (`lingshu-mcp` + `lingshu-mcp-core`): stdio transport, 6 tools sharing the same Memory Gateway, permissions, and audit trail as REST
 - ✅ Concurrent writes & adjudication: fact-level transactional locks, `context_scope` isolation, competing claims preserved as `disputed`, human adjudication retains records
 - ✅ Entitlements: Free / Pro / Team tiers computed centrally in the cloud; the client only renders results and the backend re-validates restricted actions
@@ -327,7 +329,7 @@ cd frontend && ./node_modules/.bin/tauri dev
 ## Testing
 
 ```bash
-# Rust workspace tests (408 passed, 19 DB-gated or network-gated ignored)
+# Rust workspace tests (410 passed, 26 DB-gated or network-gated ignored)
 cargo test --workspace
 
 # Frontend unit tests (29 test files, 132 tests) + lint + type-check + build

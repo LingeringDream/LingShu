@@ -79,6 +79,8 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 
 ## 功能概览
 
+2026-09-08 源码改进（尚未发布新版安装包）：聊天与 Gateway/MCP 共用词法＋向量候选检索；抽取写入原子化，向量索引采用可重试持久化队列；支持显式有效时间查询、有限预算合并和派生摘要失效传播。详见[实现、复现与升级注意事项](docs/memory-retrieval-optimization.md)。7 个合成查询仅用于回归，不是与 mem0 的性能对比或真实模型准确率证明。新迁移会为旧记忆补建索引，并将既有派生摘要保留为待复核；不等于已部署到用户设备。
+
 | 类别 | 能力 | 状态 |
 |------|------|------|
 | MCP 记忆服务 | stdio MCP Server，6 个工具（`lingshu_recall` / `lingshu_store` / `lingshu_grant` / `lingshu_conflicts` / `lingshu_resolve_conflict` / `lingshu_stats`），让 Claude、Cursor、Codex 等共享同一记忆层 | ✅ 已实现 |
@@ -101,9 +103,10 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 
 ## 项目状态
 
-**核心功能与跨平台桌面基础设施已完成，当前进入竞赛证据完善和云账户配套收尾阶段。** SoulLedger 记忆系统、Memory Gateway、冲突治理、自适应检索、人格、思考队列、权限分级、工具调用、日历平台适配等均已实现。当前 Rust workspace 为 **408 passed、19 ignored**，前端为 **29 个测试文件、132 项测试通过**，云账户 Worker 为 **55 项测试通过**。
+**核心功能与跨平台桌面基础设施已完成，当前进入竞赛证据完善和云账户配套收尾阶段。** SoulLedger 记忆系统、Memory Gateway、冲突治理、自适应检索、人格、思考队列、权限分级、工具调用、日历平台适配等均已实现。当前 Rust workspace 为 **410 passed、26 ignored**，前端为 **29 个测试文件、132 项测试通过**，云账户 Worker 为 **55 项测试通过**。
 
-- ✅ Rust + Axum 后端（API、WebSocket、29 个数据库迁移）
+- ✅ Rust + Axum 后端（API、WebSocket、33 个数据库迁移）
+- 本轮后端验证：410 项常规测试通过、26 项默认跳过；其中另跑 6 项数据库回归通过。前端和云端测试数字为此前记录，本轮未重跑；严格 Clippy 通过范围为 server、vector、mcp-core，非整个 workspace。
 - ✅ MCP 记忆服务（`lingshu-mcp` + `lingshu-mcp-core`）：stdio 传输，6 个工具，与 REST 共用同一套 Memory Gateway、权限与审计
 - ✅ 并发写入与裁决：事实级事务锁、业务作用域 `context_scope` 隔离、不同主张保留为 `disputed`、人工裁决保留记录
 - ✅ 版本权益：Free / Pro / Team 三档由云端统一计算，客户端只展示结果，受限操作仍由后端校验
@@ -362,7 +365,7 @@ cd frontend && ./node_modules/.bin/tauri dev
 ## 测试
 
 ```bash
-# Rust workspace 测试（当前 408 passed、19 ignored）
+# Rust workspace 测试（当前 410 passed、26 ignored）
 cargo test --workspace
 
 # 前端单测（当前 29 个测试文件、132 项测试）+ lint + 类型检查 + 构建

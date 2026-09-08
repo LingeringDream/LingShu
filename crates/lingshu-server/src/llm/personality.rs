@@ -228,7 +228,8 @@ async fn load_evolution_memories(
 ) -> anyhow::Result<Vec<PersonalityMemoryContext>> {
     let rows: Vec<PersonalityMemoryContext> = sqlx::query_as(
         "SELECT id, memory_type, content, importance FROM memories \
-         WHERE user_id = $1 AND deleted_at IS NULL \
+         WHERE user_id = $1 AND deleted_at IS NULL AND NOT derivation_stale \
+         AND (tier <> 'derived' OR (valid_from<=NOW() AND (valid_to IS NULL OR valid_to>NOW()))) \
          ORDER BY importance DESC, updated_at DESC LIMIT 20",
     )
     .bind(user_id)

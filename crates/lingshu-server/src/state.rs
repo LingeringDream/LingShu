@@ -204,7 +204,7 @@ impl AppState {
             None => None,
         };
 
-        Ok(Self {
+        let state = Self {
             db,
             config: config.clone(),
             start_time: std::time::Instant::now(),
@@ -222,7 +222,11 @@ impl AppState {
             role_prompts: Arc::new(RwLock::new(HashMap::new())),
             token_cipher,
             pet_notifications: tokio::sync::broadcast::channel(64).0,
-        })
+        };
+        if let Some(vector) = state.vector.clone() {
+            crate::llm::indexing::start(state.clone(), vector);
+        }
+        Ok(state)
     }
 
     pub fn default_llm_settings(&self) -> LlmSettings {

@@ -312,16 +312,7 @@ async fn delete_memory(
         return Err(AppError::NotFound("Memory not found".into()));
     }
 
-    // Best-effort: remove the corresponding vector point from Qdrant.
-    // Failure is non-fatal — the PG row is already soft-deleted.
-    if let Some(qdrant) = &state.vector {
-        if let Err(e) = qdrant.delete_points("memories", &[id]).await {
-            tracing::warn!(
-                %user_id, memory_id = %id, %e,
-                "Failed to delete Qdrant point for manually deleted memory (non-fatal)"
-            );
-        }
-    }
+    // The transactional outbox removes the vector with durable retries.
 
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
@@ -367,7 +358,6 @@ async fn import_memories_from_sync(
         return Err(AppError::Validation("同步记录不能超过 10000 条".into()));
     }
     let mut changed = 0;
-    let mut changed_memories = Vec::new();
     let mut transaction = state.db.begin().await?;
     for memory in &req.memories {
         if memory.memory_type.trim().is_empty()
@@ -461,13 +451,6 @@ async fn import_memories_from_sync(
         .await?
         .rows_affected();
         changed += changed_row;
-        if changed_row > 0 {
-            changed_memories.push((
-                memory.id,
-                memory.content.clone(),
-                memory.deleted_at.is_some(),
-            ));
-        }
     }
     // References are restored only after every record exists, avoiding FK
     // failures when the superseding memory appears later in the bundle.
@@ -485,43 +468,7 @@ async fn import_memories_from_sync(
         }
     }
     transaction.commit().await?;
-    // Rebuild vector state after the SQL transaction. Sync remains successful
-    // when an embedding provider is offline; keyword recall still works and a
-    // later sync/maintenance pass can retry the best-effort index operation.
-    if let Some(qdrant) = state.vector.clone() {
-        let db = state.db.clone();
-        let llm = state.llm.clone();
-        let embed_model = state.config.llm.embed_model.clone();
-        tokio::spawn(async move {
-            let deleted: Vec<Uuid> = changed_memories
-                .iter()
-                .filter_map(|(id, _, is_deleted)| is_deleted.then_some(*id))
-                .collect();
-            if !deleted.is_empty() {
-                if let Err(error) = qdrant.delete_points("memories", &deleted).await {
-                    tracing::warn!(%error, "Failed to remove synced memory vectors");
-                }
-            }
-            for (id, content, is_deleted) in changed_memories {
-                if is_deleted {
-                    continue;
-                }
-                if let Err(error) = crate::llm::memory::upsert_memory_vector(
-                    &db,
-                    &qdrant,
-                    &llm,
-                    &embed_model,
-                    user_id,
-                    id,
-                    &content,
-                )
-                .await
-                {
-                    tracing::warn!(memory_id = %id, %error, "Failed to index synced memory");
-                }
-            }
-        });
-    }
+    // Index jobs were committed atomically with every changed memory.
     Ok(Json(ImportSyncMemoriesResponse {
         accepted: req.memories.len(),
         changed,
@@ -562,7 +509,8 @@ async fn search_memories(
             let pattern = format!("%{}%", params.q);
             sqlx::query_as(
                 "SELECT id, memory_type, content, importance, metadata, created_at, updated_at \
-                 FROM memories WHERE user_id = $1 AND content ILIKE $2 AND deleted_at IS NULL \
+                 FROM memories WHERE user_id = $1 AND content ILIKE $2 AND deleted_at IS NULL AND NOT derivation_stale \
+                 AND (tier <> 'derived' OR (valid_from<=NOW() AND (valid_to IS NULL OR valid_to>NOW()))) \
                  ORDER BY importance DESC LIMIT $3",
             )
             .bind(user_id)
@@ -601,7 +549,8 @@ async fn try_semantic_search_memories(
     // Load from PG and preserve Qdrant rank order
     let rows: Vec<MemoryRow> = sqlx::query_as(
         "SELECT id, memory_type, content, importance, metadata, created_at, updated_at \
-         FROM memories WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL",
+         FROM memories WHERE id = ANY($1) AND user_id = $2 AND deleted_at IS NULL AND NOT derivation_stale \
+         AND (tier <> 'derived' OR (valid_from<=NOW() AND (valid_to IS NULL OR valid_to>NOW())))",
     )
     .bind(&ids)
     .bind(user_id)

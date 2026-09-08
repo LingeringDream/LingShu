@@ -13,7 +13,7 @@
 | Path | Purpose |
 |------|---------|
 | `crates/lingshu-server/src/main.rs` | Backend entry point |
-| `crates/lingshu-server/migrations/` | Database migrations (29 total) |
+| `crates/lingshu-server/migrations/` | Database migrations (33 total) |
 | `crates/lingshu-server/src/llm/` | SoulLedger: memory, forgetting, personality, thoughts, consolidation, dedup, prompts, semantic, ollama, client |
 | `crates/lingshu-server/src/routes/` | API routes (70 OpenAPI paths, 107 operations) |
 | `crates/lingshu-vector/src/` | Vector search (Qdrant) |
@@ -61,7 +61,7 @@ cd frontend && npm ci && npm run dev
 # Run migrations
 sqlx migrate run --source crates/lingshu-server/migrations
 
-# Test (Rust workspace: 408 passed, 19 DB-gated or network-gated ignored at the current snapshot)
+# Test (Rust workspace: 410 passed, 26 DB-gated or network-gated ignored at the current snapshot)
 cargo test --workspace
 cd frontend && npm run test && npm run lint && npm run type-check && npm run build
 

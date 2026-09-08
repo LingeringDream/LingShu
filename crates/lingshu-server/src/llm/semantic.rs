@@ -22,6 +22,24 @@ pub async fn semantic_memory_search(
     query: &str,
     limit: u32,
 ) -> Option<Vec<Uuid>> {
+    Some(
+        semantic_memory_search_scored(qdrant, llm, embed_model, user_id, query, limit)
+            .await?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect(),
+    )
+}
+
+/// Preserve actual vector similarities for ranking and relevance gating.
+pub async fn semantic_memory_search_scored(
+    qdrant: &QdrantClient,
+    llm: &LlmClient,
+    embed_model: &str,
+    user_id: Uuid,
+    query: &str,
+    limit: u32,
+) -> Option<Vec<(Uuid, f32)>> {
     if query.trim().is_empty() {
         return None;
     }
@@ -43,7 +61,16 @@ pub async fn semantic_memory_search(
         })
         .ok()?;
 
-    let ids = memory::extract_memory_ids(&results);
+    let mut seen = std::collections::HashSet::new();
+    let ids: Vec<(Uuid, f32)> = results
+        .iter()
+        .filter_map(|result| {
+            let id = memory::extract_memory_ids(std::slice::from_ref(result))
+                .into_iter()
+                .next()?;
+            (result.score.is_finite() && seen.insert(id)).then_some((id, result.score))
+        })
+        .collect();
     if ids.is_empty() {
         return None;
     }

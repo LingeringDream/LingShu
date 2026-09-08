@@ -1,6 +1,3 @@
-use std::collections::{HashMap, HashSet};
-use std::time::Instant;
-
 use axum::{
     extract::{Path, Query, State},
     routing, Json, Router,
@@ -13,10 +10,7 @@ use uuid::Uuid;
 
 use crate::auth::{self, AuthUser};
 use crate::error::AppError;
-use crate::llm::evolutionary_memory::{
-    can_read_memory, estimate_tokens, is_retrieval_eligible, score_memory, RankableMemory,
-    RetrievalWeights, ScoreBreakdown,
-};
+use crate::llm::evolutionary_memory::{can_read_memory, RetrievalWeights, ScoreBreakdown};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -140,36 +134,36 @@ pub struct GatewayMemoryResponse {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct GatewayMemoryRow {
-    context_scope: String,
-    id: Uuid,
-    memory_type: String,
-    content: String,
-    importance: f32,
-    access_count: i32,
-    memory_layer: String,
-    owner_agent_id: String,
-    memory_scope: String,
-    scene_tags: Vec<String>,
-    episode_id: Option<Uuid>,
-    occurred_at: DateTime<Utc>,
-    valid_from: DateTime<Utc>,
-    valid_to: Option<DateTime<Utc>>,
-    source_type: String,
-    source_trust: f32,
-    fact_key: Option<String>,
-    fact_value: Option<String>,
-    conflict_status: String,
-    superseded_by: Option<Uuid>,
-    retention_status: String,
-    source_memory_ids: Vec<Uuid>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    has_grant: bool,
+pub(crate) struct GatewayMemoryRow {
+    pub(crate) context_scope: String,
+    pub(crate) id: Uuid,
+    pub(crate) memory_type: String,
+    pub(crate) content: String,
+    pub(crate) importance: f32,
+    pub(crate) access_count: i32,
+    pub(crate) memory_layer: String,
+    pub(crate) owner_agent_id: String,
+    pub(crate) memory_scope: String,
+    pub(crate) scene_tags: Vec<String>,
+    pub(crate) episode_id: Option<Uuid>,
+    pub(crate) occurred_at: DateTime<Utc>,
+    pub(crate) valid_from: DateTime<Utc>,
+    pub(crate) valid_to: Option<DateTime<Utc>>,
+    pub(crate) source_type: String,
+    pub(crate) source_trust: f32,
+    pub(crate) fact_key: Option<String>,
+    pub(crate) fact_value: Option<String>,
+    pub(crate) conflict_status: String,
+    pub(crate) superseded_by: Option<Uuid>,
+    pub(crate) retention_status: String,
+    pub(crate) source_memory_ids: Vec<Uuid>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
+    pub(crate) has_grant: bool,
 }
 
 impl GatewayMemoryRow {
-    fn response(&self) -> GatewayMemoryResponse {
+    pub(crate) fn response(&self) -> GatewayMemoryResponse {
         GatewayMemoryResponse {
             context_scope: self.context_scope.clone(),
             id: self.id,
@@ -220,8 +214,10 @@ pub struct GrantMemoryResponse {
     pub can_share: bool,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct GatewaySearchRequest {
+    /// Optional valid-time query. Uses current permissions, not a historical ACL snapshot.
+    pub as_of: Option<DateTime<Utc>>,
     pub context_scope: Option<String>,
     pub query: String,
     #[serde(default = "default_agent")]
@@ -247,6 +243,9 @@ pub struct RankedMemoryResponse {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct GatewaySearchResponse {
+    pub as_of: Option<DateTime<Utc>>,
+    /// Superseded claims are evidence of earlier records, never confirmed facts.
+    pub historical_memories: Vec<GatewayMemoryResponse>,
     pub run_id: Uuid,
     pub mode: String,
     pub requested_k: u32,
@@ -432,7 +431,11 @@ fn validate_memory_request(req: &CreateGatewayMemoryRequest) -> Result<(), AppEr
     Ok(())
 }
 
-async fn ensure_agent(db: &PgPool, user_id: Uuid, agent_id: &str) -> Result<(), AppError> {
+pub(crate) async fn ensure_agent(
+    db: &PgPool,
+    user_id: Uuid,
+    agent_id: &str,
+) -> Result<(), AppError> {
     validate_identifier(agent_id, "agent_id")?;
     sqlx::query(
         "INSERT INTO memory_agents (user_id, agent_key, display_name, role_description) \
@@ -478,10 +481,10 @@ pub async fn create_agent(
     Ok((axum::http::StatusCode::CREATED, Json(row)))
 }
 
-const MEMORY_SELECT: &str = "SELECT m.context_scope, m.id, m.memory_type, m.content, m.importance, m.access_count, \
+pub(crate) const MEMORY_SELECT: &str = "SELECT m.context_scope, m.id, m.memory_type, m.content, m.importance, m.access_count, \
     m.memory_layer, m.owner_agent_id, m.memory_scope, m.scene_tags, m.episode_id, m.occurred_at, \
     m.valid_from, m.valid_to, m.source_type, m.source_trust, m.fact_key, m.fact_value, \
-    m.conflict_status, m.superseded_by, m.retention_status, m.source_memory_ids, m.created_at, m.updated_at, \
+    m.conflict_status, m.superseded_by, CASE WHEN m.derivation_stale THEN 'filtered' ELSE m.retention_status END AS retention_status, m.source_memory_ids, m.created_at, m.updated_at, \
     EXISTS(SELECT 1 FROM memory_access_grants g WHERE g.memory_id = m.id AND g.grantee_agent_id = $2 AND g.can_read) AS has_grant \
     FROM memories m WHERE m.user_id = $1 AND m.deleted_at IS NULL";
 
@@ -801,157 +804,30 @@ pub async fn gateway_search(
     auth: Option<AuthUser>,
     Json(req): Json<GatewaySearchRequest>,
 ) -> Result<Json<GatewaySearchResponse>, AppError> {
-    let started = Instant::now();
     let user_id = auth::require_user(auth).await?;
-    if req.query.trim().is_empty() {
-        return Err(AppError::Validation("query 不能为空".into()));
-    }
-    if !["static", "adaptive"].contains(&req.mode.as_str()) {
-        return Err(AppError::Validation(
-            "mode 必须是 static 或 adaptive".into(),
-        ));
-    }
-    ensure_agent(&state.db, user_id, &req.agent_id).await?;
-    let requested_k = req.top_k.clamp(1, 50);
-    let rows = accessible_rows(
-        &state.db,
-        user_id,
-        &req.agent_id,
-        500,
-        req.context_scope.as_deref().map(str::trim),
+    let settings = crate::routes::settings::llm_settings_for_user(&state, user_id).await;
+    let (llm, vector) = match crate::routes::settings::resolve_client_for_user(
+        &state, user_id, &settings,
     )
-    .await?;
-    let accessible: Vec<GatewayMemoryRow> = rows
-        .into_iter()
-        .filter(|row| {
-            can_read_memory(
-                &req.agent_id,
-                &row.owner_agent_id,
-                &row.memory_scope,
-                row.has_grant,
-            ) && req
-                .layer
-                .as_ref()
-                .map(|layer| layer == &row.memory_layer)
-                .unwrap_or(true)
-        })
-        .collect();
-    let candidate_count = accessible.len();
-
-    let semantic_ids = if let Some(qdrant) = &state.vector {
-        crate::llm::semantic::semantic_memory_search(
-            qdrant,
-            &state.llm,
+    .await
+    {
+        Ok(llm) => (llm, state.vector.clone()),
+        Err(error) => {
+            tracing::warn!(%error, "Memory embedding provider unavailable; using lexical recall");
+            (state.llm.clone(), None)
+        }
+    };
+    Ok(Json(
+        crate::llm::retrieval::search(
+            &state.db,
+            &vector,
+            &llm,
             &state.config.llm.embed_model,
             user_id,
-            &req.query,
-            (requested_k * 8).min(200),
+            req,
         )
-        .await
-        .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    let semantic_scores: HashMap<Uuid, f32> = semantic_ids
-        .iter()
-        .enumerate()
-        .map(|(index, id)| {
-            let score = 1.0 - index as f32 / semantic_ids.len().max(1) as f32;
-            (*id, score)
-        })
-        .collect();
-    let now = Utc::now();
-    let weights = req
-        .weights
-        .clone()
-        .unwrap_or_else(|| RetrievalWeights::for_query(&req.query))
-        .normalized();
-    let requested_tags: HashSet<&str> = req.scene_tags.iter().map(String::as_str).collect();
-    let mut filtered_count = 0usize;
-    let mut ranked: Vec<(GatewayMemoryRow, ScoreBreakdown)> = Vec::new();
-    let mut disputed_memories = Vec::new();
-    for row in accessible {
-        let rankable = RankableMemory {
-            id: row.id,
-            content: row.content.clone(),
-            importance: row.importance,
-            access_count: row.access_count,
-            occurred_at: row.occurred_at,
-            valid_to: row.valid_to,
-            source_trust: row.source_trust,
-            conflict_status: row.conflict_status.clone(),
-            retention_status: row.retention_status.clone(),
-            semantic_score: semantic_scores.get(&row.id).copied().unwrap_or(0.0),
-        };
-        if row.conflict_status == "disputed"
-            && row.valid_from <= now
-            && row.valid_to.map(|end| end > now).unwrap_or(true)
-            && (crate::llm::evolutionary_memory::lexical_similarity(&req.query, &row.content) > 0.0
-                || rankable.semantic_score > 0.0)
-        {
-            disputed_memories.push(row.response());
-        }
-        if req.mode == "adaptive"
-            && (row.valid_from > now || !is_retrieval_eligible(&rankable, now))
-        {
-            filtered_count += 1;
-            continue;
-        }
-        let mut breakdown = score_memory(&req.query, &rankable, &weights, now);
-        if req.mode == "static" {
-            breakdown.total = rankable.semantic_score * 0.7 + row.importance * 0.3;
-        } else if !requested_tags.is_empty()
-            && row
-                .scene_tags
-                .iter()
-                .any(|tag| requested_tags.contains(tag.as_str()))
-        {
-            breakdown.total = (breakdown.total + 0.08).min(1.0);
-        }
-        ranked.push((row, breakdown));
-    }
-    ranked.sort_by(|left, right| {
-        right
-            .1
-            .total
-            .total_cmp(&left.1.total)
-            .then_with(|| right.0.occurred_at.cmp(&left.0.occurred_at))
-    });
-    ranked.truncate(requested_k as usize);
-    disputed_memories.truncate(requested_k as usize);
-    let ids: Vec<Uuid> = ranked.iter().map(|(row, _)| row.id).collect();
-    if !ids.is_empty() {
-        sqlx::query("UPDATE memories SET access_count=access_count+1, last_accessed_at=NOW() WHERE id=ANY($1) AND user_id=$2").bind(&ids).bind(user_id).execute(&state.db).await?;
-    }
-    let estimated_tokens = estimate_tokens(ranked.iter().map(|(row, _)| row.content.clone()));
-    let latency_ms = started.elapsed().as_secs_f32() * 1000.0;
-    let run_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO memory_retrieval_runs (user_id, agent_id, query, mode, requested_k, returned_count, filtered_count, latency_ms, estimated_tokens, weights, result_ids) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id",
-    ).bind(user_id).bind(&req.agent_id).bind(req.query.trim()).bind(&req.mode).bind(requested_k as i32).bind(ranked.len() as i32)
-      .bind(filtered_count as i32).bind(latency_ms).bind(estimated_tokens).bind(serde_json::to_value(&weights).unwrap_or_default()).bind(&ids).fetch_one(&state.db).await?;
-    let results = ranked
-        .into_iter()
-        .enumerate()
-        .map(|(index, (row, breakdown))| RankedMemoryResponse {
-            memory: row.response(),
-            rank: index + 1,
-            score: breakdown.total,
-            score_breakdown: breakdown,
-        })
-        .collect();
-    Ok(Json(GatewaySearchResponse {
-        run_id,
-        mode: req.mode,
-        requested_k,
-        candidate_count,
-        filtered_count,
-        latency_ms,
-        estimated_tokens,
-        weights,
-        results,
-        disputed_memories,
-    }))
+        .await?,
+    ))
 }
 
 const CONFLICT_EVENT_SELECT: &str = "SELECT e.id, e.fact_key, e.incumbent_memory_id, e.challenger_memory_id, \

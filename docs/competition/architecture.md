@@ -35,6 +35,7 @@ flowchart LR
 | 事实 | `fact_key`, `fact_value` | 同一事实键的新旧值进入冲突治理 |
 | 证据 | `source_trust`, `access_count`, `importance` | 冲突和检索联合评分 |
 | 状态 | `conflict_status`, `retention_status`, `superseded_by` | 争议、替代、过期和过滤 |
+| 派生有效性 | `derivation_stale` | 来源变更后待复核，不能通过普通同步重新激活 |
 
 ## 权限判定
 
@@ -48,14 +49,19 @@ flowchart LR
 ```mermaid
 stateDiagram-v2
     [*] --> active
-    active --> superseded: 挑战事实证据占优
-    active --> disputed: 两侧证据差小于阈值
+    active --> disputed: 同事实域有效区间重叠且取值不同
     disputed --> active: 人工确认获胜事实
+    disputed --> superseded: 人工裁决落败主张
     superseded --> filtered: 动态维护
     active --> stale: valid_to 已过期
 ```
 
-综合证据分数：`0.55 × 来源可信度 + 0.25 × 时间新鲜度 + 0.10 × 访问频次 + 0.10 × 重要性`。分差绝对值不超过 `0.08` 时进入争议队列，避免低证据更新直接覆盖。
+当前在线策略不按可信度、时间或频次评分自动判定事实真伪；不同主张保留为争议。加权自动裁决只属于历史离线实验，不代表生产策略。人工裁决后若仍有其他冲突，获胜主张继续保持争议。
 
-冲突仅在同一 `owner_agent_id` 的事实域内比较，避免不同 Agent 的私有事实互相覆盖。争议事实可通过治理界面选择保留原值或采用新值；裁决事务会恢复获胜事实、过滤落败事实，并将包含双方 `source_memory_ids` 的裁决经验写入 `experience` 层。裁决经验采用不宽于任一来源的权限空间；两侧均为定向共享时，只保留共有授权。
+冲突按用户、业务作用域、事实键及兼容权限域比较：私有记录仅同所有者比较，公共记录可跨 Agent，定向共享要求读者集合一致。详见[并发写入协议](../memory-write-consistency.md)。新派生经验还需通过来源可用性检查，不能把包含失效或争议来源的摘要作为已确认事实。
 
+## 在线检索与后台一致性
+
+聊天、Gateway HTTP 和 MCP 共用 `llm/retrieval.rs`：词法与向量各最多 200 个候选，PostgreSQL 为权限与状态的最终边界；词法使用 GIN 词项重叠，而非 BM25。显式 `as_of` 查询有效时间，不恢复历史 ACL，也不是当时已知信息的完整快照。
+
+写入事务通过触发器维护 `memory_index_jobs`，后台租约、版本检查与重试提供最终一致性。离线合并最多读取 64 条候选、约 24000 字符，并在提交前重新检查来源。来源变更递归标记派生摘要待复核；正文仍可供管理追溯，但不参与召回。实现与限制见[优化说明](../memory-retrieval-optimization.md)。

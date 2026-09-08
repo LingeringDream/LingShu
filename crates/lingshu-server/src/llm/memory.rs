@@ -38,32 +38,44 @@ pub struct SaveMemoryOutcome {
     pub created: bool,
 }
 
-/// Query recent / high-importance memories of the same type and check for
-/// near-duplicate content. Returns the `id` of the first duplicate found.
+/// Match within the legacy writer's private/default domain and transaction.
 async fn find_duplicate_memory(
-    db: &PgPool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
     memory_type: &str,
     content: &str,
+    candidate: Option<&MemoryCandidate>,
 ) -> Result<Option<Uuid>, sqlx::Error> {
     let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, content FROM memories \
-         WHERE user_id = $1 AND memory_type = $2 AND deleted_at IS NULL \
-         ORDER BY importance DESC, updated_at DESC \
-         LIMIT 50",
+        "SELECT id, content FROM memories
+         WHERE user_id=$1 AND memory_type=$2 AND deleted_at IS NULL AND NOT derivation_stale
+           AND owner_agent_id='lingshu' AND memory_scope='private' AND context_scope='default'
+           AND conflict_status IN ('active','disputed') AND retention_status='active'
+           AND valid_from<=NOW() AND (valid_to IS NULL OR valid_to>NOW())
+           AND ($4 OR (fact_key IS NOT DISTINCT FROM $5 AND fact_value IS NOT DISTINCT FROM $6))
+           AND memory_search_terms(content) && memory_search_terms($3)
+         ORDER BY (content=$3) DESC, importance DESC, updated_at DESC LIMIT 50",
     )
     .bind(user_id)
     .bind(memory_type)
-    .fetch_all(db)
+    .bind(content)
+    .bind(candidate.is_none())
+    .bind(
+        candidate
+            .and_then(|c| c.fact_key.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    )
+    .bind(
+        candidate
+            .and_then(|c| c.fact_value.as_deref())
+            .map(str::trim),
+    )
+    .fetch_all(&mut **tx)
     .await?;
-
-    for (id, existing_content) in &rows {
-        if is_duplicate(existing_content, content, DEDUP_SIMILARITY_THRESHOLD) {
-            return Ok(Some(*id));
-        }
-    }
-
-    Ok(None)
+    Ok(rows.into_iter().find_map(|(id, existing)| {
+        is_duplicate(&existing, content, DEDUP_SIMILARITY_THRESHOLD).then_some(id)
+    }))
 }
 
 /// Derive an i64 advisory lock key from (user_id, memory_type).
@@ -79,150 +91,130 @@ fn advisory_lock_key(user_id: Uuid, memory_type: &str) -> i64 {
     uuid_low ^ type_hash
 }
 
-/// Save a memory to the database with near-duplicate detection.
-///
-/// If a duplicate is found, the existing row's `importance` is bumped to
-/// `GREATEST(importance, new)` and `updated_at` refreshed. Otherwise a new
-/// row is inserted.
-///
-/// The duplicate-check + insert/update runs inside a transaction serialized
-/// by `pg_advisory_xact_lock` keyed on (user_id, memory_type), preventing
-/// TOCTOU races where concurrent callers could both pass the semantic
-/// similarity check and insert near-duplicate rows.
-///
-/// After a successful insert, this function *best-effort* computes an
-/// embedding via `llm.embed()`, upserts a point into Qdrant, and writes
-/// `vector_id` back to the row.  When Qdrant or the embedding model is
-/// unavailable the failure is logged and the memory is still saved — the
-/// vector path is never allowed to fail the caller.
-///
-/// This is the canonical write path for memories — used by both automatic
-/// extraction and the manual `POST /api/v1/memories` endpoint.
+/// Store a manual memory. Index work is enqueued in the same transaction by
+/// database triggers, regardless of whether Qdrant is currently available.
 pub async fn save_memory(
     db: &PgPool,
-    vector: &Option<QdrantClient>,
-    llm: &LlmClient,
-    embed_model: &str,
+    _vector: &Option<QdrantClient>,
+    _llm: &LlmClient,
+    _embed_model: &str,
     user_id: Uuid,
     memory_type: &str,
     content: &str,
     importance: f32,
 ) -> Result<SaveMemoryOutcome, sqlx::Error> {
-    // Derive a stable advisory lock key from (user_id, memory_type).
-    // pg_advisory_xact_lock serializes concurrent writes within the same
-    // (user, type) partition without blocking unrelated partitions.
-    let lock_key = advisory_lock_key(user_id, memory_type);
+    persist_memory(db, user_id, memory_type, content, importance, None).await
+}
 
+/// Insert/deduplicate, attach provenance, reconcile conflicts, and enqueue
+/// indexing atomically. Acquire fact locks before any memory row lock.
+async fn persist_memory(
+    db: &PgPool,
+    user_id: Uuid,
+    memory_type: &str,
+    content: &str,
+    importance: f32,
+    enrichment: Option<(&MemoryCandidate, Option<Uuid>)>,
+) -> Result<SaveMemoryOutcome, sqlx::Error> {
     let mut tx = db.begin().await?;
+    let key = enrichment
+        .and_then(|(c, _)| c.fact_key.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(key) = key {
+        crate::routes::memory_gateway::lock_fact(&mut tx, user_id, "default", key).await?;
+    }
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(lock_key)
+        .bind(advisory_lock_key(user_id, memory_type))
         .execute(&mut *tx)
         .await?;
-
-    // 1. Check for duplicates
-    if let Some(existing_id) = find_duplicate_memory(db, user_id, memory_type, content).await? {
-        let updated: Memory = sqlx::query_as(
-            "UPDATE memories \
-             SET importance = GREATEST(importance, $1), updated_at = NOW() \
-             WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL \
-             RETURNING *",
+    let existing = find_duplicate_memory(
+        &mut tx,
+        user_id,
+        memory_type,
+        content,
+        enrichment.map(|(c, _)| c),
+    )
+    .await?;
+    let (id, created) = if let Some(id) = existing {
+        sqlx::query("UPDATE memories SET importance=GREATEST(importance,$1),updated_at=NOW() WHERE id=$2 AND user_id=$3")
+            .bind(importance).bind(id).bind(user_id).execute(&mut *tx).await?;
+        (id, false)
+    } else {
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO memories(user_id,memory_type,content,importance,memory_layer)
+            VALUES($1,$2,$3,$4,'fact') RETURNING id",
         )
+        .bind(user_id)
+        .bind(memory_type)
+        .bind(content)
         .bind(importance)
-        .bind(existing_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        (id, true)
+    };
+    if let Some((candidate, episode_id)) = enrichment {
+        let sources: Vec<Uuid> = episode_id.into_iter().collect();
+        sqlx::query("UPDATE memories SET memory_layer='fact',scene_tags=$1,fact_key=$2,fact_value=$3,
+            source_trust=$4,source_type='conversation_extraction',
+            source_memory_ids=ARRAY(SELECT DISTINCT source_id FROM unnest(source_memory_ids || $5::uuid[]) source_id ORDER BY source_id),
+            episode_id=COALESCE(episode_id,$8),updated_at=NOW() WHERE id=$6 AND user_id=$7")
+            .bind(&candidate.scene_tags).bind(key).bind(candidate.fact_value.as_deref().map(str::trim))
+            .bind(candidate.source_trust.clamp(0.0,1.0)).bind(&sources).bind(id).bind(user_id).bind(episode_id)
+            .execute(&mut *tx).await?;
+        if let Some(key) = key {
+            crate::routes::memory_gateway::resolve_new_fact_conflicts(&mut tx, user_id, id, key)
+                .await?;
+        }
+    }
+    let memory = sqlx::query_as("SELECT * FROM memories WHERE id=$1 AND user_id=$2")
+        .bind(id)
         .bind(user_id)
         .fetch_one(&mut *tx)
         .await?;
-
-        tx.commit().await?;
-
-        tracing::info!(
-            memory_type = %memory_type,
-            existing_id = %existing_id,
-            new_importance = %importance,
-            "Skipped duplicate memory, bumped importance"
-        );
-
-        // Signal: dedup hit
-        crate::telemetry::record(
-            db,
-            user_id,
-            crate::telemetry::SignalEventType::MemoryDedupHit,
-            Some("memory"),
-            Some(existing_id),
-            serde_json::json!({"importance": importance, "memory_type": memory_type}),
-        )
-        .await;
-
-        return Ok(SaveMemoryOutcome {
-            memory: updated,
-            created: false,
-        });
-    }
-
-    // 2. No duplicate — insert
-    let inserted: Memory = sqlx::query_as(
-        "INSERT INTO memories (user_id, memory_type, content, importance, memory_layer) \
-         VALUES ($1, $2, $3, $4, 'fact') \
-         RETURNING *",
-    )
-    .bind(user_id)
-    .bind(memory_type)
-    .bind(content)
-    .bind(importance)
-    .fetch_one(&mut *tx)
-    .await?;
-
     tx.commit().await?;
-
-    // Signal: new memory created
     crate::telemetry::record(
         db,
         user_id,
-        crate::telemetry::SignalEventType::MemoryCreated,
+        if created {
+            crate::telemetry::SignalEventType::MemoryCreated
+        } else {
+            crate::telemetry::SignalEventType::MemoryDedupHit
+        },
         Some("memory"),
-        Some(inserted.id),
-        serde_json::json!({"importance": importance, "memory_type": memory_type}),
+        Some(id),
+        serde_json::json!({"importance":importance,"memory_type":memory_type}),
     )
     .await;
-
-    // 3. Best-effort vector upsert (outside transaction — fire-and-forget)
-    // Clone everything needed by the spawned task so nothing borrows from this scope.
-    if vector.is_some() {
-        let memory_id = inserted.id;
-        let content_owned = content.to_string();
-        let db_clone = db.clone();
-        let user_id_val = user_id;
-        let embed_model = embed_model.to_string();
-        let qdrant_opt: Option<QdrantClient> = vector.clone();
-        let llm_clone = llm.clone();
-
-        tokio::spawn(async move {
-            let Some(qdrant) = qdrant_opt else { return };
-            if let Err(e) = upsert_memory_vector(
-                &db_clone,
-                &qdrant,
-                &llm_clone,
-                &embed_model,
-                user_id_val,
-                memory_id,
-                &content_owned,
-            )
-            .await
-            {
-                tracing::warn!(%memory_id, %e, "Failed to upsert memory vector (non-fatal)");
-            }
-        });
-    }
-
-    Ok(SaveMemoryOutcome {
-        memory: inserted,
-        created: true,
-    })
+    Ok(SaveMemoryOutcome { memory, created })
 }
 
-/// Best-effort: embed content → upsert Qdrant point → write vector_id back to PG.
-/// Failures at any step are returned as `Err` and logged by the caller.
+/// Compatibility enqueue for callers that explicitly request reindexing.
+/// Normal mutations are already queued by the transactional database trigger.
 pub(crate) async fn upsert_memory_vector(
+    db: &PgPool,
+    _qdrant: &QdrantClient,
+    _llm: &LlmClient,
+    _embed_model: &str,
+    user_id: Uuid,
+    memory_id: Uuid,
+    _content: &str,
+) -> anyhow::Result<()> {
+    // Compatibility for existing writers. The trigger already durably enqueues
+    // mutations; never race the worker with a direct vector write.
+    sqlx::query(
+        "INSERT INTO memory_index_jobs(memory_id,user_id) VALUES($1,$2)
+        ON CONFLICT(memory_id) DO NOTHING",
+    )
+    .bind(memory_id)
+    .bind(user_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Only the leased worker writes vectors, using the latest database content.
+pub(crate) async fn index_memory_vector(
     db: &PgPool,
     qdrant: &QdrantClient,
     llm: &LlmClient,
@@ -285,10 +277,10 @@ pub fn extract_memory_ids(results: &[SearchResult]) -> Vec<Uuid> {
 /// Extract memorable facts from a user↔assistant exchange and persist high-value ones.
 pub async fn extract_and_save(
     db: &PgPool,
-    vector: &Option<QdrantClient>,
+    _vector: &Option<QdrantClient>,
     llm: &LlmClient,
     model: &str,
-    embed_model: &str,
+    _embed_model: &str,
     user_id: Uuid,
     user_message: &str,
     assistant_response: &str,
@@ -349,50 +341,17 @@ pub async fn extract_and_save(
         if c.importance < 0.5 {
             continue; // below retention threshold
         }
-        match save_memory(
+        match persist_memory(
             db,
-            vector,
-            llm,
-            embed_model,
             user_id,
             &c.memory_type,
             &c.content,
             c.importance,
+            Some((&c, episode_id)),
         )
         .await
         {
             Ok(outcome) => {
-                let source_ids = episode_id.into_iter().collect::<Vec<_>>();
-                let enrichment: Result<(), sqlx::Error> = async {
-                    let mut tx = db.begin().await?;
-                    let scope: String = sqlx::query_scalar("SELECT context_scope FROM memories WHERE id=$1 AND user_id=$2")
-                        .bind(outcome.memory.id).bind(user_id).fetch_one(&mut *tx).await?;
-                    let key = c.fact_key.as_deref().map(str::trim).filter(|key| !key.is_empty());
-                    if let Some(key) = key {
-                        crate::routes::memory_gateway::lock_fact(&mut tx, user_id, &scope, key).await?;
-                    }
-                    sqlx::query(
-                    "UPDATE memories SET memory_layer='fact', scene_tags=$1, fact_key=$2, fact_value=$3, \
-                     source_trust=$4, source_type='conversation_extraction', source_memory_ids=$5, updated_at=NOW() \
-                     WHERE id=$6 AND user_id=$7",
-                )
-                .bind(&c.scene_tags)
-                .bind(key)
-                .bind(c.fact_value.as_deref())
-                .bind(c.source_trust.clamp(0.0, 1.0))
-                .bind(&source_ids)
-                .bind(outcome.memory.id)
-                .bind(user_id)
-                .execute(&mut *tx).await?;
-                    if let Some(key) = key {
-                        crate::routes::memory_gateway::resolve_new_fact_conflicts(&mut tx, user_id, outcome.memory.id, key).await?;
-                    }
-                    tx.commit().await?;
-                    Ok(())
-                }.await;
-                if let Err(error) = enrichment {
-                    tracing::warn!(memory_id=%outcome.memory.id, %error, "Failed to enrich and reconcile structured memory");
-                }
                 if outcome.created {
                     saved += 1;
                 }
@@ -503,6 +462,129 @@ fn should_extract_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "Requires dedicated MEMORY_TEST_DATABASE_URL; applies migrations"]
+    async fn extracted_fact_is_atomic_and_accumulates_sources() {
+        let db = PgPool::connect(&std::env::var("MEMORY_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&db).await.unwrap();
+        let user = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'test','unused')",
+        )
+        .bind(user)
+        .bind(format!("{user}@test.local"))
+        .execute(&db)
+        .await
+        .unwrap();
+        let mut candidate = MemoryCandidate {
+            content: "项目数据库采用 PostgreSQL".into(),
+            importance: 0.8,
+            memory_type: "fact".into(),
+            scene_tags: vec!["project".into()],
+            fact_key: Some("project.database".into()),
+            fact_value: Some("PostgreSQL".into()),
+            source_trust: 0.8,
+        };
+        let mut sources = Vec::new();
+        for _ in 0..2 {
+            let source: Uuid = sqlx::query_scalar(
+                "INSERT INTO memories(user_id,memory_type,content,memory_layer)
+                VALUES($1,'context','原始对话','episode') RETURNING id",
+            )
+            .bind(user)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            sources.push(source);
+        }
+        let first = persist_memory(
+            &db,
+            user,
+            "fact",
+            &candidate.content,
+            0.8,
+            Some((&candidate, Some(sources[0]))),
+        )
+        .await
+        .unwrap();
+        let second = persist_memory(
+            &db,
+            user,
+            "fact",
+            &candidate.content,
+            0.8,
+            Some((&candidate, Some(sources[1]))),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.memory.id, second.memory.id);
+        assert!(!second.created);
+        assert_eq!(second.memory.source_memory_ids.len(), 2);
+        assert!(sources
+            .iter()
+            .all(|id| second.memory.source_memory_ids.contains(id)));
+        candidate.fact_value = Some("MySQL".into());
+        candidate.content = "项目数据库采用 MySQL".into();
+        let challenger = persist_memory(
+            &db,
+            user,
+            "fact",
+            &candidate.content,
+            0.8,
+            Some((&candidate, None)),
+        )
+        .await
+        .unwrap();
+        assert_ne!(challenger.memory.id, first.memory.id);
+        assert_eq!(challenger.memory.conflict_status, "disputed");
+        let status: String = sqlx::query_scalar("SELECT conflict_status FROM memories WHERE id=$1")
+            .bind(first.memory.id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(status, "disputed");
+        // Failure during enrichment must roll back the preceding INSERT and job.
+        candidate.fact_key = Some("x".repeat(256));
+        candidate.content = "must roll back".into();
+        let before: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM memory_index_jobs WHERE user_id=$1")
+                .bind(user)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert!(persist_memory(
+            &db,
+            user,
+            "fact",
+            &candidate.content,
+            0.8,
+            Some((&candidate, None))
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM memories WHERE user_id=$1 AND content='must roll back'"
+            )
+            .bind(user)
+            .fetch_one(&db)
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM memory_index_jobs WHERE user_id=$1")
+                .bind(user)
+                .fetch_one(&db)
+                .await
+                .unwrap(),
+            before
+        );
+        db.close().await;
+    }
     use std::collections::HashMap;
 
     #[test]
