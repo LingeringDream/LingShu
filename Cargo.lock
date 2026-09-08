@@ -1724,7 +1724,7 @@ dependencies = [
 
 [[package]]
 name = "lingshu-mcp"
-version = "1.6.1"
+version = "1.6.2"
 dependencies = [
  "anyhow",
  "lingshu-mcp-core",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "lingshu-mcp-core"
-version = "1.6.1"
+version = "1.6.2"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -1751,7 +1751,7 @@ dependencies = [
 
 [[package]]
 name = "lingshu-server"
-version = "1.6.1"
+version = "1.6.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1794,7 +1794,7 @@ dependencies = [
 
 [[package]]
 name = "lingshu-vector"
-version = "1.6.1"
+version = "1.6.2"
 dependencies = [
  "anyhow",
  "reqwest",

@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased — 2026-09-08
+## 2026-09-08
 
+### Version 1.6.2
+
+- `fix(desktop)`: keep the Memory Console (动态记忆引擎 / experiment lab) out of the packaged client. Editions are now decided by `frontend/src/lib/edition.ts` — client builds fold `isMemoryLabAvailable` to `false`, so the lab route, its nav entry and its component are dropped from the bundle instead of merely being hidden.
 - Unify chat and Gateway/MCP recall with indexed Chinese/English lexical candidates and scored vector candidates; remove the recent-500-row candidate restriction.
 - Make extracted facts, provenance and conflict handling transactional; add durable, retryable vector indexing with edit/delete reconciliation (eventual consistency, not exactly-once).
 - Add explicit `as_of` valid-time queries using current ACLs; superseded claims remain separate from confirmed results.
