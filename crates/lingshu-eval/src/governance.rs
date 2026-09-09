@@ -98,6 +98,12 @@ pub struct GovernanceMetrics {
 }
 
 pub fn run_governance() -> GovernanceMetrics {
+    run_governance_with_filter(is_retrieval_eligible)
+}
+
+fn run_governance_with_filter(
+    eligible: impl Fn(&RankableMemory, DateTime<Utc>) -> bool,
+) -> GovernanceMetrics {
     let now = Utc::now();
     let cases = governance_cases(now);
 
@@ -122,6 +128,8 @@ pub fn run_governance() -> GovernanceMetrics {
     let mut stale = 0usize;
     let mut superseded = 0usize;
     let mut duplicate = 0usize;
+    let mut stale_filtered = 0usize;
+    let mut duplicate_filtered = 0usize;
     let mut wrongly_eliminated = 0usize;
     let mut correctly_retained = 0usize;
 
@@ -157,7 +165,7 @@ pub fn run_governance() -> GovernanceMetrics {
     }
 
     for memory in &pool {
-        let eligible = is_retrieval_eligible(memory, now);
+        let eligible = eligible(memory, now);
         if memory.conflict_status == "active" && memory.retention_status == "active" {
             active += 1;
             if eligible {
@@ -168,23 +176,28 @@ pub fn run_governance() -> GovernanceMetrics {
         } else if memory.retention_status == "stale" {
             stale += 1;
             if !eligible {
-                // correctly filtered
+                stale_filtered += 1;
             }
         } else if memory.conflict_status == "superseded" {
             superseded += 1;
+            if !eligible {
+                stale_filtered += 1;
+            }
         } else if memory.conflict_status == "duplicate" {
             duplicate += 1;
+            if !eligible {
+                duplicate_filtered += 1;
+            }
         }
     }
 
     let total = pool.len().max(1);
-    let _filtered = stale + superseded + duplicate;
     let n = cases.len().max(1) as f64;
     GovernanceMetrics {
         conflict_resolution_rate: resolved_correct as f64 / n * 100.0,
         new_fact_retention_rate: new_retained as f64 / n * 100.0,
-        stale_filter_rate: stale as f64 / stale.max(1) as f64 * 100.0,
-        duplicate_filter_rate: duplicate as f64 / duplicate.max(1) as f64 * 100.0,
+        stale_filter_rate: stale_filtered as f64 / (stale + superseded).max(1) as f64 * 100.0,
+        duplicate_filter_rate: duplicate_filtered as f64 / duplicate.max(1) as f64 * 100.0,
         wrong_elimination_rate: wrongly_eliminated as f64 / active.max(1) as f64 * 100.0,
         effective_retention_rate: correctly_retained as f64 / active.max(1) as f64 * 100.0,
         total_cases: total,
@@ -257,4 +270,43 @@ pub fn measured_turnover_ratio() -> f32 {
     let total = 18f32;
     let filtered = 12f32; // stale + superseded + duplicate
     filtered / total
+}
+
+#[cfg(test)]
+mod filtering_tests {
+    use super::*;
+
+    #[test]
+    fn production_filter_reports_observed_success() {
+        let metrics = run_governance();
+        assert_eq!(metrics.stale_filter_rate, 100.0);
+        assert_eq!(metrics.duplicate_filter_rate, 100.0);
+        assert_eq!(metrics.wrong_elimination_rate, 0.0);
+        assert_eq!(metrics.effective_retention_rate, 100.0);
+    }
+
+    #[test]
+    fn disabled_filter_cannot_report_success() {
+        let metrics = run_governance_with_filter(|_, _| true);
+        assert_eq!(metrics.stale_filter_rate, 0.0);
+        assert_eq!(metrics.duplicate_filter_rate, 0.0);
+        assert_eq!(metrics.effective_retention_rate, 100.0);
+    }
+
+    #[test]
+    fn partial_filter_counts_superseded_and_duplicates_independently() {
+        let metrics = run_governance_with_filter(|m, _| m.retention_status != "stale");
+        assert_eq!(metrics.stale_filter_rate, 50.0);
+        assert_eq!(metrics.duplicate_filter_rate, 0.0);
+        let metrics = run_governance_with_filter(|m, _| m.conflict_status != "duplicate");
+        assert_eq!(metrics.stale_filter_rate, 0.0);
+        assert_eq!(metrics.duplicate_filter_rate, 100.0);
+    }
+
+    #[test]
+    fn rejecting_everything_reports_wrong_elimination() {
+        let metrics = run_governance_with_filter(|_, _| false);
+        assert_eq!(metrics.wrong_elimination_rate, 100.0);
+        assert_eq!(metrics.effective_retention_rate, 0.0);
+    }
 }

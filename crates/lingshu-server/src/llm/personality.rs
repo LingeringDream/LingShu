@@ -144,6 +144,14 @@ pub async fn evolve_and_save_personality(
     let reason = format!("auto-evolution: {}", output.change_reason);
 
     let mut tx = db.begin().await?;
+    if !lock_personality_sources(&mut tx, user_id, &valid_ids, &memories).await? {
+        tx.rollback().await?;
+        return Ok(PersonalityEvolutionOutcome {
+            created: false,
+            reason: "source memories changed or are no longer eligible".into(),
+            snapshot: None,
+        });
+    }
     sqlx::query("UPDATE personality_snapshots SET is_active = false WHERE user_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
@@ -222,6 +230,48 @@ async fn load_active_traits(db: &PgPool, user_id: Uuid) -> PersonalityTraits {
     }
 }
 
+/// Lock sources in UUID order before touching snapshots, matching derived
+/// memory writers. Revalidate after lock waits; a failed check leaves the
+/// previous personality intact and requires a new evolution on fresh evidence.
+pub(crate) async fn lock_personality_sources(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    ids: &[Uuid],
+    evidence: &[PersonalityMemoryContext],
+) -> Result<bool, sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(false);
+    }
+    let ids: std::collections::HashSet<_> = ids.iter().copied().collect();
+    let ids: Vec<_> = ids.into_iter().collect();
+    sqlx::query("SELECT id FROM memories WHERE user_id=$1 AND id=ANY($2) ORDER BY id FOR SHARE")
+        .bind(user_id)
+        .bind(&ids)
+        .fetch_all(&mut **tx)
+        .await?;
+    // A separate statement obtains a fresh snapshot after waiting for deletion
+    // or edits. Check expiry against wall time, not the transaction start time.
+    let current: Vec<PersonalityMemoryContext> = sqlx::query_as(
+        "SELECT id,memory_type,content,importance FROM memories
+         WHERE user_id=$1 AND id=ANY($2) AND deleted_at IS NULL
+         AND NOT derivation_stale AND conflict_status='active' AND retention_status='active'
+         AND valid_from<=clock_timestamp() AND (valid_to IS NULL OR valid_to>clock_timestamp())",
+    )
+    .bind(user_id)
+    .bind(&ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(current.len() == ids.len()
+        && current.iter().all(|row| {
+            evidence.iter().any(|original| {
+                original.id == row.id
+                    && original.content == row.content
+                    && original.memory_type == row.memory_type
+                    && original.importance == row.importance
+            })
+        }))
+}
+
 async fn load_evolution_memories(
     db: &PgPool,
     user_id: Uuid,
@@ -229,7 +279,8 @@ async fn load_evolution_memories(
     let rows: Vec<PersonalityMemoryContext> = sqlx::query_as(
         "SELECT id, memory_type, content, importance FROM memories \
          WHERE user_id = $1 AND deleted_at IS NULL AND NOT derivation_stale \
-         AND (tier <> 'derived' OR (valid_from<=NOW() AND (valid_to IS NULL OR valid_to>NOW()))) \
+         AND conflict_status='active' AND retention_status='active' \
+         AND valid_from<=NOW() AND (valid_to IS NULL OR valid_to>NOW()) \
          ORDER BY importance DESC, updated_at DESC LIMIT 20",
     )
     .bind(user_id)

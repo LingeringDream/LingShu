@@ -1620,8 +1620,57 @@ fn should_run_sweep_at(
     true
 }
 
-/// `(id, importance, last_accessed_at, created_at)` — one row of decay input.
-type MemoryDecayRow = (Uuid, f32, Option<DateTime<Utc>>, DateTime<Utc>);
+/// `(id, importance, last_accessed_at, created_at, updated_at)` — decay input and revision.
+type MemoryDecayRow = (
+    Uuid,
+    f32,
+    Option<DateTime<Utc>>,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
+
+/// Lock first, then recheck using a fresh statement snapshot. Derived-memory
+/// writers lock source rows too, so a newly committed reference cannot be missed
+/// merely because the sweep loaded its protected-ID set earlier.
+async fn forget_if_unchanged(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    row: MemoryDecayRow,
+) -> Result<u64, sqlx::Error> {
+    let (id, importance, last_accessed_at, created_at, updated_at) = row;
+    let mut tx = db.begin().await?;
+    sqlx::query("SELECT id FROM memories WHERE id=$1 AND user_id=$2 FOR UPDATE")
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let affected = sqlx::query(
+        "UPDATE memories m SET deleted_at = NOW()
+         WHERE m.id=$1 AND m.user_id=$2 AND m.deleted_at IS NULL
+         AND m.importance=$3 AND m.last_accessed_at IS NOT DISTINCT FROM $4
+         AND m.created_at=$5 AND m.updated_at=$6
+         AND m.conflict_status NOT IN ('disputed','unresolved')
+         AND NOT m.derivation_stale
+         AND NOT EXISTS (SELECT 1 FROM memory_conflict_events e WHERE e.user_id=$2
+             AND e.review_status='pending'
+             AND (e.incumbent_memory_id=m.id OR e.challenger_memory_id=m.id))
+         AND NOT EXISTS (SELECT 1 FROM personality_snapshots p WHERE p.user_id=$2
+             AND p.is_active AND m.id=ANY(p.source_memory_ids))
+         AND NOT EXISTS (SELECT 1 FROM memories d WHERE d.user_id=$2
+             AND d.tier='derived' AND d.deleted_at IS NULL AND m.id=ANY(d.source_memory_ids))",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(importance)
+    .bind(last_accessed_at)
+    .bind(created_at)
+    .bind(updated_at)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    tx.commit().await?;
+    Ok(affected)
+}
 
 /// Evaluate a user's memories against the forgetting policy with provenance
 /// protection, soft-deleting those that have decayed past the forget floor.
@@ -1678,11 +1727,12 @@ async fn run_forgetting_sweep(
         }
         Err(error) => {
             tracing::warn!(%user_id, %error, "Failed to load consolidation source IDs for protection");
+            return;
         }
     };
 
     let rows: Vec<MemoryDecayRow> = match sqlx::query_as(
-        "SELECT id, importance, last_accessed_at, created_at FROM memories \
+        "SELECT id, importance, last_accessed_at, created_at, updated_at FROM memories \
          WHERE user_id = $1 AND deleted_at IS NULL",
     )
     .bind(user_id)
@@ -1704,7 +1754,7 @@ async fn run_forgetting_sweep(
     let policy = ForgettingPolicy::default();
     let mut forgotten = 0u32;
 
-    for (id, importance, last_accessed_at, created_at) in rows {
+    for (id, importance, last_accessed_at, created_at, updated_at) in rows {
         let reference = last_accessed_at.unwrap_or(created_at);
         let days = forgetting::days_since(reference, now);
         let is_referenced = protected.contains(&id);
@@ -1716,17 +1766,15 @@ async fn run_forgetting_sweep(
             continue;
         }
 
-        match sqlx::query(
-            "UPDATE memories SET deleted_at = NOW() \
-             WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        match forget_if_unchanged(
+            db,
+            user_id,
+            (id, importance, last_accessed_at, created_at, updated_at),
         )
-        .bind(id)
-        .bind(user_id)
-        .execute(db)
         .await
         {
             Ok(affected) => {
-                if affected.rows_affected() > 0 {
+                if affected > 0 {
                     forgotten += 1;
                     // Vector deletion is durably enqueued by the database trigger.
                     // Record telemetry for each forgotten memory
@@ -3458,6 +3506,263 @@ async fn run_tool_loop(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    #[ignore = "Requires dedicated MEMORY_TEST_DATABASE_URL; applies migrations"]
+    async fn forgetting_rechecks_review_references_and_changes() {
+        let db = sqlx::PgPool::connect(&std::env::var("MEMORY_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&db).await.unwrap();
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'forgetting test','unused')")
+            .bind(user).bind(format!("{user}@example.test")).execute(&db).await.unwrap();
+        for scenario in [
+            "plain",
+            "accessed",
+            "edited",
+            "disputed",
+            "derived",
+            "referenced",
+            "personality",
+            "pending",
+        ] {
+            let row: MemoryDecayRow = sqlx::query_as(
+                "INSERT INTO memories(user_id,memory_type,content,importance,created_at)
+                 VALUES($1,'fact','old evidence',0.2,NOW()-INTERVAL '365 days')
+                 RETURNING id,importance,last_accessed_at,created_at,updated_at",
+            )
+            .bind(user)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            match scenario {
+                "accessed" => {
+                    sqlx::query("UPDATE memories SET last_accessed_at=NOW() WHERE id=$1")
+                        .bind(row.0)
+                        .execute(&db)
+                        .await
+                        .unwrap();
+                }
+                "edited" => {
+                    sqlx::query(
+                        "UPDATE memories SET content='revised',updated_at=NOW() WHERE id=$1",
+                    )
+                    .bind(row.0)
+                    .execute(&db)
+                    .await
+                    .unwrap();
+                }
+                "disputed" => {
+                    sqlx::query("UPDATE memories SET conflict_status='disputed' WHERE id=$1")
+                        .bind(row.0)
+                        .execute(&db)
+                        .await
+                        .unwrap();
+                }
+                "derived" => {
+                    sqlx::query("UPDATE memories SET derivation_stale=true WHERE id=$1")
+                        .bind(row.0)
+                        .execute(&db)
+                        .await
+                        .unwrap();
+                }
+                "referenced" => {
+                    sqlx::query("INSERT INTO memories(user_id,memory_type,content,tier,source_memory_ids) VALUES($1,'fact','derived evidence','derived',$2)").bind(user).bind(vec![row.0]).execute(&db).await.unwrap();
+                }
+                "personality" => {
+                    sqlx::query("INSERT INTO personality_snapshots (id,user_id,trait_values,change_reason,source_memory_ids,is_active) VALUES($1,$2,'{}','test',$3,true)")
+                        .bind(Uuid::new_v4()).bind(user).bind(vec![row.0]).execute(&db).await.unwrap();
+                }
+                "pending" => {
+                    sqlx::query("INSERT INTO memory_conflict_events(user_id,fact_key,incumbent_memory_id,challenger_memory_id,resolution,reason,score_delta,review_status) VALUES($1,'test',$2,$2,'disputed','review',0,'pending')").bind(user).bind(row.0).execute(&db).await.unwrap();
+                }
+                _ => {}
+            }
+            assert_eq!(
+                forget_if_unchanged(&db, user, row).await.unwrap(),
+                u64::from(scenario == "plain"),
+                "{scenario}"
+            );
+        }
+        // A derived writer holds the source lock while its reference is still
+        // invisible. The sweeper must wait, then see the committed reference.
+        let source: MemoryDecayRow = sqlx::query_as(
+            "INSERT INTO memories(user_id,memory_type,content,importance,created_at)
+             VALUES($1,'fact','concurrent source',0.2,NOW()-INTERVAL '365 days')
+             RETURNING id,importance,last_accessed_at,created_at,updated_at",
+        )
+        .bind(user)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let mut writer = db.begin().await.unwrap();
+        sqlx::query("INSERT INTO memories(user_id,memory_type,content,tier,source_memory_ids) VALUES($1,'fact','concurrent derivation','derived',$2)")
+            .bind(user).bind(vec![source.0]).execute(&mut *writer).await.unwrap();
+        let sweep_db = db.clone();
+        let sweep = tokio::spawn(async move { forget_if_unchanged(&sweep_db, user, source).await });
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let waiting: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+                     AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM memories WHERE id=%')"
+                ).fetch_one(&db).await.unwrap();
+                if waiting { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }).await.expect("sweep must overlap the uncommitted derived write");
+        writer.commit().await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(10), sweep)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            0,
+            "newly committed source reference must survive"
+        );
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(&db)
+            .await
+            .unwrap();
+        db.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires dedicated MEMORY_TEST_DATABASE_URL; applies migrations"]
+    async fn personality_sources_serialize_with_forgetting() {
+        use crate::llm::personality::{lock_personality_sources, PersonalityMemoryContext};
+        let db = sqlx::PgPool::connect(&std::env::var("MEMORY_TEST_DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&db).await.unwrap();
+        let user = Uuid::new_v4();
+        sqlx::query("INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'personality race','unused')")
+            .bind(user).bind(format!("{user}@example.test")).execute(&db).await.unwrap();
+
+        async fn wait_for_source_lock(db: &sqlx::PgPool) {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    let waiting: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+                         AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM memories%')"
+                    ).fetch_one(db).await.unwrap();
+                    if waiting { break; }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }).await.expect("source operations must actually overlap");
+        }
+
+        for personality_first in [true, false] {
+            let source: MemoryDecayRow = sqlx::query_as(
+                "INSERT INTO memories(user_id,memory_type,content,importance,created_at)
+                 VALUES($1,'fact','personality evidence',0.2,NOW()-INTERVAL '365 days')
+                 RETURNING id,importance,last_accessed_at,created_at,updated_at",
+            )
+            .bind(user)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+            let evidence = vec![PersonalityMemoryContext {
+                id: source.0,
+                memory_type: "fact".into(),
+                content: "personality evidence".into(),
+                importance: 0.2,
+            }];
+            let mut first = db.begin().await.unwrap();
+            if personality_first {
+                assert!(
+                    lock_personality_sources(&mut first, user, &[source.0], &evidence)
+                        .await
+                        .unwrap()
+                );
+                let sweep_db = db.clone();
+                let sweep =
+                    tokio::spawn(async move { forget_if_unchanged(&sweep_db, user, source).await });
+                wait_for_source_lock(&db).await;
+                sqlx::query("INSERT INTO personality_snapshots(id,user_id,trait_values,change_reason,source_memory_ids,is_active) VALUES($1,$2,'{}','race',$3,true)")
+                    .bind(Uuid::new_v4()).bind(user).bind(vec![source.0]).execute(&mut *first).await.unwrap();
+                first.commit().await.unwrap();
+                assert_eq!(
+                    tokio::time::timeout(std::time::Duration::from_secs(10), sweep)
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .unwrap(),
+                    0
+                );
+            } else {
+                sqlx::query("UPDATE memories SET deleted_at=NOW() WHERE id=$1")
+                    .bind(source.0)
+                    .execute(&mut *first)
+                    .await
+                    .unwrap();
+                let writer_db = db.clone();
+                let writer = tokio::spawn(async move {
+                    let mut tx = writer_db.begin().await.unwrap();
+                    let valid = lock_personality_sources(&mut tx, user, &[source.0], &evidence)
+                        .await
+                        .unwrap();
+                    tx.rollback().await.unwrap();
+                    valid
+                });
+                wait_for_source_lock(&db).await;
+                first.commit().await.unwrap();
+                assert!(
+                    !tokio::time::timeout(std::time::Duration::from_secs(10), writer)
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    "deleted evidence must reject the snapshot"
+                );
+            }
+        }
+
+        // A live ID alone is insufficient: reject changes and invalid evidence.
+        let source: Uuid = sqlx::query_scalar("INSERT INTO memories(user_id,memory_type,content,importance) VALUES($1,'fact','original',0.2) RETURNING id")
+            .bind(user).fetch_one(&db).await.unwrap();
+        let evidence = vec![PersonalityMemoryContext {
+            id: source,
+            memory_type: "fact".into(),
+            content: "original".into(),
+            importance: 0.2,
+        }];
+        for mutation in [
+            "UPDATE memories SET content='edited' WHERE id=$1",
+            "UPDATE memories SET conflict_status='disputed' WHERE id=$1",
+            "UPDATE memories SET retention_status='stale' WHERE id=$1",
+            "UPDATE memories SET derivation_stale=true WHERE id=$1",
+            "UPDATE memories SET valid_to=NOW()-INTERVAL '1 second',valid_from=NOW()-INTERVAL '1 day' WHERE id=$1",
+            "UPDATE memories SET valid_from=NOW()+INTERVAL '1 day' WHERE id=$1",
+        ] {
+            let mut tx = db.begin().await.unwrap();
+            sqlx::query(mutation).bind(source).execute(&mut *tx).await.unwrap();
+            assert!(!lock_personality_sources(&mut tx, user, &[source], &evidence).await.unwrap(), "{mutation}");
+            tx.rollback().await.unwrap();
+        }
+        let mut tx = db.begin().await.unwrap();
+        assert!(!lock_personality_sources(&mut tx, user, &[], &evidence)
+            .await
+            .unwrap());
+        assert!(
+            !lock_personality_sources(&mut tx, Uuid::new_v4(), &[source], &evidence)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !lock_personality_sources(&mut tx, user, &[Uuid::new_v4()], &evidence)
+                .await
+                .unwrap()
+        );
+        tx.rollback().await.unwrap();
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user)
+            .execute(&db)
+            .await
+            .unwrap();
+        db.close().await;
+    }
+
     use super::*;
     use std::collections::HashMap;
 

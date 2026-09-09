@@ -10,7 +10,8 @@ gold `state`), then measuring *governance* quality directly (matching the Rust
 Experiment B "pure governance" protocol), NOT a retrieval Top-1 that would
 couple the measurement to an unrelated ranking signal.
 
-Two predictors, same contract:
+Predictors, same contract:
+  - `evidence_rule`: conservative candidate with per-decision evidence; no age-only expiry.
   - `rule`:  unsupervised. Uses age_days + trust + literal change/stale/duplicate
              markers in content. Deliberately does NOT assume "newest == active".
   - `llm`:   llama3.1:8b, temperature 0. Classifies each fact_key's *cluster* of
@@ -41,6 +42,7 @@ import argparse
 import hashlib
 import json
 import random
+import re
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -161,6 +163,97 @@ def predict_rule(turns):
             st = "active"
 
         pred[t["id"]] = st
+    return pred
+
+
+# --------------------------------------------------------------------------- #
+# Evidence rule candidate (keeps the original heuristic as a frozen baseline)
+# --------------------------------------------------------------------------- #
+# Intentionally narrow grammar: identical fact_key is NOT proof that two texts
+# make the same proposition (e.g. registration address versus office address).
+_FACT = re.compile(r"^(?P<subject>[^，。！？；：:?,;!]+?)(?P<verb>改为|改成|改到|换成|是|为)(?P<value>[^，。！？；：:?,;!]+?)[。.]?$")
+_EXPIRED = re.compile(r"^[^，。！？；：:?,;!]+(?:已过期|已取消|已撤销|已作废|已失效)[。.]?$")
+_UNCERTAIN = ("不", "没", "未", "是否", "可能", "如果", "计划", "打算", "预计", "据说",
+              "听说", "曾", "以前", "过去", "将", "明天", "下周", "下月", "届时", "今天", "昨天", "本周", "这周", "本月", "当时", "？", "?")
+_UPDATE_VERBS = {"改为", "改成", "改到", "换成"}
+
+
+def predict_evidence_rule(turns, audit=None):
+    """Conservative, explainable candidate; no age-only elimination.
+
+    Exact repeated statements can be collapsed. Only a small unambiguous
+    subject/verb/value grammar supports conflict and replacement decisions.
+    Unsupported prose stays active with review_required, NOT asserted correct.
+    All decisions are diagnostic: never delete or mutate stored evidence.
+    Neither gold values nor label-like source IDs are used for inference.
+    """
+    pred, decisions = {}, {}
+
+    def decide(member, state, reason, evidence=(), review=False):
+        tid = member["id"]
+        pred[tid] = state
+        decisions[tid] = {"status": state, "reason": reason,
+                          "evidence_ids": list(evidence), "review_required": review}
+
+    for members in group_by_key(turns).values():
+        exact = defaultdict(list)
+        claims = defaultdict(list)
+        for member in members:
+            content = member["content"].strip()
+            decide(member, "active", "no_elimination_evidence", review=True)
+            # Do not deduplicate empty text or uncertain/time-relative prose:
+            # identical 'tomorrow' at two dates can describe different events.
+            uncertain = any(marker in content for marker in _UNCERTAIN)
+            match = None if uncertain else _FACT.fullmatch(content)
+            if not uncertain and _EXPIRED.fullmatch(content):
+                decide(member, "stale", "explicit_expiry", [member["id"]])
+            elif match:
+                subject, verb, value = match.group("subject", "verb", "value")
+                # Textual grammar must not eat quoted or compound assertions.
+                if any(c in content for c in '“”"「」『』'):
+                    continue
+                claims[subject.strip()].append((member, verb, value.strip()))
+                exact[content].append(member)
+                decide(member, "active", "standalone_assertion", [member["id"]])
+
+        for versions in claims.values():
+            values = {value for _, _, value in versions}
+            if len(values) <= 1:
+                continue
+            # Only explicit changes strictly later than ALL contrary claims
+            # may replace them. Equal timestamps and plain newer claims cannot.
+            winners = [(m, v) for m, verb, v in versions if verb in _UPDATE_VERBS
+                       and all(m["age_days"] < other["age_days"]
+                               for other, _, value in versions if value != v)]
+            if winners and len({v for _, v in winners}) == 1:
+                winning_value = winners[0][1]
+                evidence = [m["id"] for m, _ in winners]
+                for member, _, value in versions:
+                    decide(member, "active" if value == winning_value else "superseded",
+                           "explicit_same_subject_update", evidence)
+            else:
+                evidence = [m["id"] for m, _, _ in versions]
+                for member, _, _ in versions:
+                    decide(member, "unresolved", "contradictory_claims_without_resolution",
+                           evidence, review=True)
+
+        for repeats in exact.values():
+            if len(repeats) < 2:
+                continue
+            # Keep the latest observation. On a tie keep all: IDs and input
+            # order must not arbitrarily become authority or label shortcuts.
+            latest = min(m["age_days"] for m in repeats)
+            canonical = [m for m in repeats if m["age_days"] == latest]
+            if len(canonical) != 1:
+                continue
+            target = canonical[0]
+            for member in repeats:
+                # Never conceal a dispute or override explicit expiry/update.
+                if member["id"] != target["id"] and pred[member["id"]] == pred[target["id"]] == "active":
+                    decide(member, "duplicate", "exact_same_assertion", [target["id"]])
+
+    if audit is not None:
+        audit.update(decisions)
     return pred
 
 
@@ -327,6 +420,12 @@ def main():
         "classification": classification_metrics(gold, rule_pred),
         "predictions": rule_pred,
     }
+    evidence_audit = {}
+    evidence_pred = predict_evidence_rule(observable, audit=evidence_audit)
+    result["evidence_rule"] = {
+        "classification": classification_metrics(gold, evidence_pred),
+        "predictions": evidence_pred, "decisions": evidence_audit,
+    }
     result["always_active"] = {"classification": classification_metrics(gold, {tid: "active" for tid in gold})}
     result["gold"] = gold
     save()
@@ -344,7 +443,7 @@ def main():
         }
 
     # Unified acceptance summary (pure governance): the five numbers the
-    # reviewer cares about, plus the oracle gap on classification accuracy.
+    # reviewer cares about, plus classification error (not a retrieval oracle gap).
     def _summary(tag, cls):
         return {
             "macro_f1": cls["macro_f1_all"],
@@ -359,7 +458,7 @@ def main():
             "active_total": cls["active_total"],
             "gate_status": "not_evaluated: labels require review; no retrieval or production acceptance claim",
         }
-    result["summary"] = {tag: _summary(tag, result[tag]["classification"]) for tag in ("rule", "always_active")}
+    result["summary"] = {tag: _summary(tag, result[tag]["classification"]) for tag in ("rule", "evidence_rule", "always_active")}
     if args.llm:
         result["summary"]["llm"] = _summary("llm", result["llm"]["classification"])
 
