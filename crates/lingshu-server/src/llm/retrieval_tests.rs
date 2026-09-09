@@ -2,6 +2,148 @@ use super::*;
 use serde_json::json;
 
 #[tokio::test]
+#[ignore = "Requires dedicated MEMORY_TEST_DATABASE_URL; seeds 100000 rows; performance regression"]
+async fn common_chinese_retrieval_performance() {
+    let db = sqlx::PgPool::connect(&std::env::var("MEMORY_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    sqlx::migrate!("./migrations").run(&db).await.unwrap();
+    let user = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO users(id,email,display_name,password_hash) VALUES($1,$2,'perf','unused')",
+    )
+    .bind(user)
+    .bind(format!("{user}@test.local"))
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO memories(user_id,memory_type,content,context_scope)
+        SELECT $1,'fact','无关记录 ' || n || ' ' || md5(n::text),'perf'
+        FROM generate_series(1,99999) n",
+    )
+    .bind(user)
+    .execute(&db)
+    .await
+    .unwrap();
+    let old: Uuid = sqlx::query_scalar("INSERT INTO memories(user_id,memory_type,content,context_scope,occurred_at,valid_from)
+        VALUES($1,'fact','凤凰项目后端存储采用 PostgreSQL 数据库','perf',NOW()-INTERVAL '2 years',NOW()-INTERVAL '2 years') RETURNING id")
+        .bind(user).fetch_one(&db).await.unwrap();
+    sqlx::query("ANALYZE memories").execute(&db).await.unwrap();
+    let request = |query: &str| {
+        serde_json::from_value::<GatewaySearchRequest>(json!({
+            "query":query,"context_scope":"perf","agent_id":"lingshu","top_k":5
+        }))
+        .unwrap()
+    };
+    for query in [
+        "凤凰项目用什么数据库",
+        "PostgreSQL",
+        "凤凰项目后端存储",
+        "后端",
+    ] {
+        let rows = candidate_rows(&db, user, &request(query), &[])
+            .await
+            .unwrap();
+        assert!(
+            rows.iter().any(|r| r.id == old),
+            "lost old evidence: {query}"
+        );
+        assert!(rows.len() <= 200);
+    }
+    let started = Instant::now();
+    let _: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM memories
+        WHERE user_id=$1 AND deleted_at IS NULL AND NOT derivation_stale
+          AND context_scope='perf' AND owner_agent_id='lingshu'
+          AND memory_search_terms(content) && memory_search_terms($2)
+        ORDER BY (SELECT count(*) FROM unnest(memory_search_terms(content)) term
+          WHERE term=ANY(memory_search_terms($2))) DESC,occurred_at DESC,id LIMIT 200",
+    )
+    .bind(user)
+    .bind("无关记录 42424")
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    let previous_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let mut samples = Vec::new();
+    for _ in 0..10 {
+        let started = Instant::now();
+        let rows = candidate_rows(&db, user, &request("无关记录 42424"), &[])
+            .await
+            .unwrap();
+        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(rows.len(), 200);
+        assert!(rows
+            .iter()
+            .any(|r| r.content.starts_with("无关记录 42424 ")));
+    }
+    samples.sort_by(f64::total_cmp);
+    let llm = super::super::client::LlmClient::new(
+        reqwest::Client::new(),
+        "http://127.0.0.1:1",
+        None,
+        None,
+    );
+    let mut search_samples = Vec::new();
+    for _ in 0..10 {
+        let started = Instant::now();
+        let found = search(&db, &None, &llm, "unused", user, request("无关记录 42424"))
+            .await
+            .unwrap();
+        search_samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(found.results.len(), 5);
+        assert!(found.results[0]
+            .memory
+            .content
+            .starts_with("无关记录 42424 "));
+        assert!(found
+            .results
+            .iter()
+            .all(|r| r.memory.content.starts_with("无关记录 ")));
+    }
+    search_samples.sort_by(f64::total_cmp);
+    let mut jobs = tokio::task::JoinSet::new();
+    let started = Instant::now();
+    for _ in 0..4 {
+        let db = db.clone();
+        let req = request("无关记录 42424");
+        jobs.spawn(async move {
+            let llm = super::super::client::LlmClient::new(
+                reqwest::Client::new(),
+                "http://127.0.0.1:1",
+                None,
+                None,
+            );
+            search(&db, &None, &llm, "unused", user, req)
+                .await
+                .unwrap()
+                .results
+                .len()
+        });
+    }
+    while let Some(result) = jobs.join_next().await {
+        assert_eq!(result.unwrap(), 5);
+    }
+    let concurrent_ms = started.elapsed().as_secs_f64() * 1000.0;
+    eprintln!(
+        "{}",
+        json!({"rows":100000,"previous_sql_ms":previous_ms,
+        "candidate_p50_ms":samples[4],"candidate_max_ms":samples[9],
+        "search_p50_ms":search_samples[4],"search_max_ms":search_samples[9],
+        "four_concurrent_search_wall_ms":concurrent_ms})
+    );
+    // Generous relative guard, not a hardware-specific latency promise.
+    assert!(
+        samples[4] < previous_ms / 2.0,
+        "common-hit ranking regressed"
+    );
+    // Keep this synthetic fixture for EXPLAIN/HTTP profiling. Drop the dedicated
+    // test database afterwards; cascading 100k deletes exercises unrelated
+    // provenance triggers and is not part of the retrieval measurement.
+}
+
+#[tokio::test]
 #[ignore = "Requires dedicated MEMORY_TEST_DATABASE_URL; applies migrations"]
 async fn recall_old_evidence_with_acl_and_chat_parity() {
     let db = sqlx::PgPool::connect(&std::env::var("MEMORY_TEST_DATABASE_URL").unwrap())

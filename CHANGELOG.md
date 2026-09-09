@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `fix(retrieval)`: supplement nearest candidates with a bounded exact-phrase channel, strengthen literal name/identifier evidence in lexical scoring, and preserve the duplicate-similarity metric. Add a paired 10-query quality regression; synthetic gains are not a real-world accuracy claim.
+
+- `perf(retrieval)`: use pg_trgm GiST nearest candidates before bounded token checks for common Chinese/English queries; retain short-query term lookup and filter ACL/validity before the candidate limit. Add a transaction-local SQL timeout and a reproducible 100k-row production-service regression. Candidate ranking changes; this is not a general recall-quality claim.
+- Upgrade notice: migration `20260908000005` builds an additional GiST index, with disk/write overhead and possible write blocking during migration. No business database migration or installer deployment is implied.
+
 ## 2026-09-08
 
 ### Version 1.6.2

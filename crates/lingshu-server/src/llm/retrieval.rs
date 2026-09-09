@@ -4,6 +4,9 @@
 #[path = "retrieval_baseline_tests.rs"]
 mod baseline_tests;
 #[cfg(test)]
+#[path = "retrieval_quality_tests.rs"]
+mod quality_tests;
+#[cfg(test)]
 #[path = "retrieval_tests.rs"]
 mod tests;
 use super::evolutionary_memory::{
@@ -20,6 +23,29 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use uuid::Uuid;
 
+// PostgreSQL POSIX regex, passed as a bound value. Escaping makes punctuation
+// literal; ASCII boundaries prevent matching an identifier's longer prefix.
+fn exact_phrase_pattern(query: &str) -> Option<String> {
+    let query = query.trim().to_lowercase();
+    if query.chars().filter(|c| c.is_alphanumeric()).count() < 3 {
+        return None;
+    }
+    let mut pattern = String::new();
+    if query.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        pattern.push_str("(^|[^a-z0-9_-])");
+    }
+    for c in query.chars() {
+        if ".^$*+?()[]{}\\|".contains(c) {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    if query.ends_with(|c: char| c.is_ascii_alphanumeric()) {
+        pattern.push_str("($|[^a-z0-9_.-]|[.]($|[^a-z0-9]))");
+    }
+    Some(pattern)
+}
+
 /// Retrieve relevant records across the entire authorized scope. Limits apply
 /// to ranked matches, never to a recency window. Lexical and semantic channels
 /// have independent budgets, so either can contribute older evidence.
@@ -29,6 +55,14 @@ async fn candidate_rows(
     req: &GatewaySearchRequest,
     semantic_ids: &[Uuid],
 ) -> Result<Vec<GatewayMemoryRow>, sqlx::Error> {
+    // One/two-character substrings may share no padded trigrams with a word.
+    // Retain the terms index for those queries, without per-row token counting.
+    let lexical_selection = if req.query.trim().chars().count() <= 2 {
+        "WHERE memory_search_terms(e.content) && memory_search_terms($5)
+         ORDER BY e.occurred_at DESC, e.id"
+    } else {
+        "ORDER BY lower(e.content) <-> lower($5)"
+    };
     let sql = format!(
         "WITH eligible AS NOT MATERIALIZED (
           {MEMORY_SELECT}
@@ -45,21 +79,35 @@ async fn candidate_rows(
               OR ($8 IS NOT NULL AND (m.retention_status='stale'
                 OR m.conflict_status='superseded')))))
         ),
-        lexical AS (
+        nearest AS MATERIALIZED (
           SELECT e.* FROM eligible e
-          WHERE memory_search_terms(e.content) && memory_search_terms($5)
-          ORDER BY (
-            SELECT count(*) FROM unnest(memory_search_terms(e.content)) term
-            WHERE term=ANY(memory_search_terms($5))
-          ) DESC, e.occurred_at DESC, e.id
+          {lexical_selection}
           LIMIT 200
+        ),
+        lexical AS (
+          SELECT * FROM nearest
+          WHERE memory_search_terms(content) && memory_search_terms($5)
+        ),
+        exact AS MATERIALIZED (
+          SELECT e.* FROM eligible e
+          WHERE $9::text IS NOT NULL AND lower(e.content) ~ $9
+          ORDER BY lower(e.content) <-> lower($5)
+          LIMIT 50
         ),
         semantic AS (
           SELECT e.* FROM eligible e WHERE e.id=ANY($6::uuid[])
         )
-        SELECT * FROM lexical UNION SELECT * FROM semantic"
+        SELECT * FROM lexical UNION SELECT * FROM exact UNION SELECT * FROM semantic"
     );
-    sqlx::query_as(&sql)
+    // Keep tokenization behind the materialized candidate budget. Eligibility
+    // stays before LIMIT so inaccessible records cannot crowd out visible ones.
+    // A local timeout also bounds expensive plans for very selective scopes;
+    // transaction rollback prevents the setting leaking into pooled sessions.
+    let mut tx = db.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '2s'")
+        .execute(&mut *tx)
+        .await?;
+    let rows = sqlx::query_as(&sql)
         .bind(user_id)
         .bind(&req.agent_id)
         .bind(req.context_scope.as_deref().map(str::trim))
@@ -68,8 +116,11 @@ async fn candidate_rows(
         .bind(semantic_ids)
         .bind(&req.mode)
         .bind(req.as_of)
-        .fetch_all(db)
-        .await
+        .bind(exact_phrase_pattern(&req.query))
+        .fetch_all(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(rows)
 }
 
 pub async fn search(

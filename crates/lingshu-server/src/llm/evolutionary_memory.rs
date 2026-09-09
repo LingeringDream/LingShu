@@ -211,7 +211,7 @@ pub fn score_memory(
         / 86_400.0;
     let recency = 2.0_f32.powf(-age_days / 30.0).clamp(0.0, 1.0);
     let frequency = ((memory.access_count.max(0) as f32 + 1.0).ln() / 5.0_f32.ln()).clamp(0.0, 1.0);
-    let lexical = lexical_similarity(query, &memory.content);
+    let lexical = retrieval_lexical_score(query, &memory.content);
     let semantic = memory.semantic_score.clamp(0.0, 1.0);
     let trust = memory.source_trust.clamp(0.0, 1.0);
     let importance = memory.importance.clamp(0.0, 1.0);
@@ -231,6 +231,59 @@ pub fn score_memory(
         importance,
         total,
     }
+}
+
+/// Query-directed lexical evidence. Keep the symmetric bigram metric below
+/// unchanged for duplicate detection and existing similarity callers.
+/// Full phrases and bounded ASCII names/identifiers avoid dilution by long
+/// bodies. Missing numeric identifiers reduces lexical evidence, not access
+/// eligibility or semantic evidence (a paraphrase may still be relevant).
+pub fn retrieval_lexical_score(query: &str, content: &str) -> f32 {
+    let query = query.trim().to_lowercase();
+    let content = content.to_lowercase();
+    let base = lexical_similarity(&query, &content);
+    if query.is_empty() {
+        return base;
+    }
+    let identifiers: Vec<&str> = query
+        .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+        .map(|s| s.trim_matches(['-', '_', '.']))
+        .filter(|s| s.bytes().any(|b| b.is_ascii_digit()))
+        .collect();
+    let content_tokens: Vec<&str> = content
+        .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+        .map(|s| s.trim_matches(['-', '_', '.']))
+        .collect();
+    if identifiers.iter().any(|id| !content_tokens.contains(id)) {
+        return base * 0.2;
+    }
+    if query.chars().count() >= 3 && bounded_match(&content, &query) {
+        return 1.0;
+    }
+    if !identifiers.is_empty() {
+        return base.max(0.9);
+    }
+    // Reserve the upper lexical range for exact query evidence. With default
+    // weights this prevents frequency alone (at most 0.08) overturning a
+    // phrase match (1.0 vs at most 0.5, weighted by 0.18).
+    base.min(0.5)
+}
+
+// ASCII token boundaries distinguish Rust/Rustacean and 42424/424240.
+// Chinese boundaries deliberately allow substrings without segmentation.
+fn bounded_match(content: &str, needle: &str) -> bool {
+    let token = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_');
+    content.match_indices(needle).any(|(start, _)| {
+        let end = start + needle.len();
+        let left_ok = !needle.starts_with(token)
+            || content[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !token(c));
+        let right_ok =
+            !needle.ends_with(token) || content[end..].chars().next().is_none_or(|c| !token(c));
+        left_ok && right_ok
+    })
 }
 
 /// Character bigram Jaccard similarity.
@@ -361,6 +414,21 @@ pub fn estimate_tokens(contents: impl IntoIterator<Item = String>) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn exact_lexical_evidence_respects_identifiers_and_boundaries() {
+        use super::retrieval_lexical_score as score;
+        assert_eq!(
+            score("无关记录 42424", "说明：无关记录 42424 后面很长的附录"),
+            1.0
+        );
+        assert!(score("工单 AB-42", "AB-42 已完成") > score("工单 AB-42", "工单 AB-420 已完成"));
+        assert!(score("版本 2.0", "版本 2.0.1") < 0.2);
+        assert_eq!(score("PostgreSQL", "使用 PostgreSQL."), 1.0);
+        assert!(score("Rust", "Rustacean") < 1.0);
+        assert_eq!(score("凤凰项目", "历史资料：凤凰项目已经上线。"), 1.0);
+        assert_eq!(score("", "任意正文"), 0.0);
+    }
+
     use super::*;
     use chrono::Duration;
 

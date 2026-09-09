@@ -6,14 +6,19 @@
 
 聊天（包括重新生成和多模型整合）、Memory Gateway HTTP 与其 MCP 入口调用 `llm/retrieval.rs`。
 
-- 词法候选从完整授权数据范围召回，不再先截取最近 500 条。数据库使用 `memory_search_terms(content)` 的 GIN 表达式索引；中英文词项和中文单字/双字片段支持无空格中文。这是词项重叠召回，不是 BM25。
-- 词法与向量各保留最多 200 个候选，再去重和评分。向量候选不受最近记录窗口限制；它们仍必须通过 PostgreSQL 的用户、所有者、空间和授权检查。
+- 词法候选从完整授权数据范围召回，不再先截取最近 500 条。长度大于 2 字符的查询使用 `lower(content)` 的 pg_trgm GiST 距离索引取最近 200 条，物化候选后再检查中英文词项重叠，避免高频词命中十万行时逐行分词计数排序。1–2 字符查询沿用 GIN 单字/双字词项过滤，按时间取候选。这不是 BM25，候选排序也不再等价于旧版词项重叠计数。
+- 通用词法与向量各保留最多 200 个候选，另有最多 50 条精确短语候选，合并去重后上限 450。精确通道使用转义的参数化正则和 ASCII 标识符边界，复用 GiST 索引，查询至少含 3 个字母/数字/汉字时启用。它用于补回被短近似文本挤出的长正文，不保证超过 50 条精确命中时全部覆盖。所有通道仍必须通过 PostgreSQL 的用户、所有者、空间和授权检查。
 - 业务作用域、记忆层、当前有效时间及状态在候选限额之前处理。私有记忆不会因为残留授权被其他 Agent 读取。
-- 保留向量真实相似度，避免把每次查询的第一名都当作满分相关。最终仍使用现有六特征评分，未声称权重已经学习或优于 BM25。
+- 保留向量真实相似度，避免把每次查询的第一名都当作满分相关。最终仍使用六特征加权评分；2026-09-09 调整其中的词法特征：完整短语/名称匹配为 1，查询中的数字标识符完整匹配至少为 0.9，缺失则将原词法相似度乘 0.2，其余近似匹配最高为 0.5。默认权重下，频次一项不足以盖过完整短语匹配；其他元数据及自定义权重仍可能改变排序。数字、版本和标识符属于启发式匹配，不是实体识别或日期意图理解。未声称权重已经学习或优于 BM25。
 - 查询向量通道有 5 秒总超时，故障后使用词法候选。有效事实和待裁决主张分开返回，聊天上下文显式标记争议。
+- SQL 候选查询设置事务内 2 秒 `statement_timeout`，失败返回错误，回滚后不污染连接池设置。这不是整个请求的 2 秒保证，连接等待、向量调用与审计另计。
 - 每次召回只更新一次访问计数；命中信号批量插入。`candidate_count` 为两通道合并后的候选数，`filtered_count` 只包含之后的过滤，不代表全库过期记录数。
 
 现有 `/api/v1/memories/search` 管理接口保持原接口实现；本轮统一的是聊天与 Memory Gateway/MCP。词法通道仍有候选预算，向量检索仍先按用户召回，复杂授权域可能需要后续自适应补足。实体归一化和学习排序尚未实现。
+
+GiST 通用候选依赖字符三元组相似度，长文、改写和大量同分文本仍可能漏召回；精确通道仅补全字面短语，不能解决所有改写。同分候选在预算边界不保证稳定，最终结果按六特征评分与时间/ID 排序。权限过滤始终在 LIMIT 前执行；高度选择性的用户/授权域可能扫描更多索引项，当前索引不是按租户分区。需要继续用真实语料评估召回质量。
+
+新增迁移 `20260908000005_memory_lexical_knn.sql` 复用已有 pg_trgm 扩展，不引入 btree_gist。GiST 增加磁盘和写入维护开销；旧 GIN 索引仍服务短查询与写入去重。升级建索引期间可能阻塞写入，大库应安排维护窗口。
 
 ## 有效时间查询与有界合并
 
@@ -69,9 +74,29 @@ MEMORY_TEST_DATABASE_URL=postgresql:///YOUR_RETRIEVAL_TEST_DB cargo test -p ling
 MEMORY_TEST_DATABASE_URL=postgresql:///YOUR_RETRIEVAL_TEST_DB cargo test -p lingshu-server consolidation_revalidates_sources -- --ignored
 MEMORY_TEST_DATABASE_URL=postgresql:///YOUR_RETRIEVAL_TEST_DB cargo test -p lingshu-server derivation_invalidation_is_transitive_and_transactional -- --ignored
 MEMORY_TEST_DATABASE_URL=postgresql:///YOUR_RETRIEVAL_TEST_DB cargo test -p lingshu-server production_retrieval_baseline -- --ignored --nocapture
+MEMORY_TEST_DATABASE_URL=postgresql:///YOUR_DISPOSABLE_PERF_DB cargo test -p lingshu-server common_chinese_retrieval_performance -- --ignored --nocapture
+MEMORY_TEST_DATABASE_URL=postgresql:///YOUR_DISPOSABLE_QUALITY_DB cargo test -p lingshu-server paired_retrieval_quality -- --ignored --nocapture
 MEMORY_TEST_DATABASE_URL=postgresql:///YOUR_EMPTY_INDEX_TEST_DB cargo test -p lingshu-server durable_index_retry_edit_and_delete -- --ignored
 cargo test --workspace
 cargo clippy -p lingshu-server -p lingshu-vector --all-targets -- -D warnings
 ```
 
 数据库回归覆盖：650 条较新无关记忆、250 条无权记忆、250 条未来记忆不能遮挡两年前的中文事实；语义 ID 可绕过时间窗口但不能绕过 ACL；聊天与网关一致；争议提示；重复来源累积；结构化补充失败回滚；索引重试、处理中编辑、过期租约恢复、删除清理。向量与 embedding 使用本地 HTTP mock，验证协议与故障恢复，不代表真实模型质量或 Qdrant 集群压测。
+
+性能测试在专用可丢弃数据库保留 100000 条合成记录，方便复查执行计划；运行后应删除该测试库。它顺序测量旧词项排序 SQL、新候选查询和完整 `search()` 服务调用（含评分、审计和访问计数），然后测四并发总墙钟时间；关闭 embedding/Qdrant，不含 HTTP 网络与鉴权。不能将候选 SQL 加速比等同于完整软件或真实模型加速比。
+
+2026-09-08 本机 Apple M5 / 16GB、PostgreSQL 16.14、Rust debug 服务测试：99999 条“无关记录 编号 hash”加 1 条旧中文事实，查询“无关记录 42424”。旧排序 SQL 单次 4118.8ms；新候选 10 次中位数 24.0ms、最大 25.6ms；完整 search 10 次中位数 31.6ms、最大 37.7ms；4 个并发 search 总墙钟 62.3ms，均成功。候选部分约 172 倍改善只适用于这个高重复合成压力场景；不是 HTTP 吞吐、P99 或真实语料质量证明。GiST 距离扫描的 EXPLAIN ANALYZE 也已单独确认。
+
+上述首轮结果曾出现精确编号进入候选却未进入前五。2026-09-09 针对此问题加入成对质量回归：10 个手工标注用例，每个作用域包含 1 条目标、250 条访问次数为 100 的近似干扰和 350 条无关文本，覆盖编号、工单、版本、名称边界、中英文短语、改写、双字词和长正文。每例仅标注 1 个相关目标。
+
+| 同一夹具上的方案 | Top1 命中 | 前五命中 | Recall@20 |
+|---|---:|---:|---:|
+| 原词项计数候选＋原评分 | 4/10 | 4/10 | 40% |
+| GiST＋精确候选＋原评分 | 4/10 | 4/10 | 40% |
+| GiST＋精确候选＋新词法评分 | 10/10 | 10/10 | 100% |
+
+新方案多了最多 50 条精确候选预算，并非等候选预算消融。测试冻结访问计数进行三组评分，随后调用实际 search 核对新方案目标排名。旧候选覆盖 9/10 目标，新候选覆盖 10/10；初次仅 GiST 的尝试在该夹具上漏掉长文和准确名称，故增加精确通道。该集合用于开发和回归，不是独立测试集；不能推广成真实总体准确率，仍缺日期表达、多实体组合与纯语义改写的独立标注验证。原 `lexical_similarity` 和去重算法保持不变。
+
+同日再次顺序运行十万条高重复压力测试（同库还保留其他回归夹具）：旧排序 SQL 3856.7ms，新候选中位数 29.4ms、最大 31.4ms；完整 search 中位数 35.1ms、最大 48.6ms；四并发 search 总墙钟 70.2ms。相较首轮测量有小幅开销，但不是严格隔离的前后负载实验。以上均关闭向量/模型，不含 HTTP 与鉴权。
+
+最后在全新专用数据库补上“42424 精确编号必须排第一”的断言，10 次完整检索均通过：旧 SQL 3406.4ms，新候选中位数 28.3ms，完整 search 中位数 33.9ms、最大 47.4ms，四并发总墙钟 68.8ms。质量回归、既有权限/历史回归和全工作区测试均通过；测试数据库已清理，可按上述命令重建。
