@@ -9,6 +9,7 @@ const ACCOUNT_PAGES = {
   billing: { path: "/billing", title: "订阅与账单" },
   devices: { path: "/devices", title: "设备与会话" },
   docs: { path: "/docs", title: "使用文档" },
+  performance: { path: "/performance", title: "性能评测" },
   download: { path: "/download", title: "下载中心" },
   team: { path: "/team", title: "团队工作区" },
 };

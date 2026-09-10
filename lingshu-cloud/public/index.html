@@ -9,7 +9,7 @@
     <title>灵枢账户中心</title>
     <link rel="icon" href="/lingshu-icon.png" type="image/png">
     <link rel="stylesheet" href="/styles.css?v=20260910-benchmark-v1">
-    <script type="module" src="/app.js?v=20260905-product-editions-v1"></script>
+    <script type="module" src="/app.js?v=20260910-performance-page-v1"></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -159,6 +159,10 @@
             <a class="sidebar-link" href="/docs" data-page="docs">
               <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><path d="M5 3h10l4 4v14H5Z"/><path d="M15 3v5h5M8 12h8M8 16h8"/></svg>
               使用文档
+            </a>
+            <a class="sidebar-link" href="/performance" data-page="performance">
+              <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20V7"/><path d="M2 20h22"/></svg>
+              性能评测
             </a>
             <a class="sidebar-link" href="/download" data-page="download">
               <svg viewBox="0 0 24 24" width="23" height="23" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 20h16"/></svg>
@@ -376,7 +380,6 @@
                 <a href="#billing-guide"><strong>订阅与账单</strong><small>升级、管理与付款安全</small></a>
                 <a href="#team-workspace"><strong>团队工作区</strong><small>创建、受邀加入与开放边界</small></a>
                 <a href="#multi-agent-memory"><strong>多 Agent 记忆演示</strong><small>注册、隔离、授权与冲突治理</small></a>
-                <a href="#performance-evidence"><strong>性能与评测数据</strong><small>基线对照、公开集与时延</small></a>
                 <a href="#download-verification"><strong>下载与校验</strong><small>网盘与 SHA-256</small></a>
                 <a href="#dev-edition"><strong>开发版与竞赛演示</strong><small>Docker 一键启动与故障排查</small></a>
                 <a href="#troubleshooting"><strong>常见问题</strong><small>启动、模型、权限与数据备份</small></a>
@@ -591,64 +594,8 @@
                     <p class="doc-note"><strong>能力边界：</strong>“增强输出”是多个模型分别回答同一问题后统一整合，不是自主拆分和派发任务的 Agent 调度器。当前聊天不会自行创建子 Agent；真实外部 Agent 应通过团队凭证和 API 接入。</p>
                   </div>
                 </section>
-                <section id="performance-evidence">
-                  <span class="doc-number">11</span>
-                  <div class="doc-content">
-                    <h3>性能与评测数据</h3>
-                    <p>以下数据来自可复现评测器与已冻结证据。核心指标均设置同数据对照或固定测试协议；页面同时列出数据属性和适用边界。最近一次本机复跑时间为 2026-09-10。</p>
-                    <div class="benchmark-grid" aria-label="核心评测结果">
-                      <article class="benchmark-card">
-                        <span>长时序 Top-1</span>
-                        <strong>94.00%</strong>
-                        <p>Static RAG 62.00%<br><b>提升 32.00 个百分点</b></p>
-                      </article>
-                      <article class="benchmark-card">
-                        <span>事实变更 Top-1</span>
-                        <strong>96.00%</strong>
-                        <p>Static RAG 30.00%<br><b>提升 66.00 个百分点</b></p>
-                      </article>
-                      <article class="benchmark-card">
-                        <span>10 万条检索 P99</span>
-                        <strong>249.35 ms</strong>
-                        <p>64 次离线查询<br><b>Apple M5 · 16 GB</b></p>
-                      </article>
-                    </div>
-                    <h4>核心对照结果</h4>
-                    <div class="doc-table-wrap">
-                      <table class="doc-data-table">
-                        <thead><tr><th>评测项目</th><th>数据规模</th><th>基线</th><th>对照方案</th><th>结果</th></tr></thead>
-                        <tbody>
-                          <tr><td>长时序检索 Top-1</td><td>v3 测试集 100 查询</td><td>62.00%</td><td>LingShu Full 94.00%</td><td>+32.00pp</td></tr>
-                          <tr><td>事实变更 Top-1</td><td>其中 50 查询</td><td>30.00%</td><td>LingShu Full 96.00%</td><td>+66.00pp</td></tr>
-                          <tr><td>LoCoMo 证据 R@5</td><td>公开集 1,977 QA</td><td>Static 向量 26.82%</td><td>BM25 正文＋说话人 52.31%</td><td>+25.49pp</td></tr>
-                          <tr><td>多 Agent 权限</td><td>6 项功能检查</td><td>—</td><td>私有、共享、拒绝与审计</td><td>6 / 6 通过</td></tr>
-                          <tr><td>重复与过期过滤</td><td>18 个治理案例</td><td>—</td><td>确定性治理检查</td><td>两项均为 100%</td></tr>
-                        </tbody>
-                      </table>
-                    </div>
-                    <h4>时延复跑结果</h4>
-                    <div class="doc-table-wrap">
-                      <table class="doc-data-table">
-                        <thead><tr><th>记忆规模</th><th>查询数</th><th>平均</th><th>P50</th><th>P95</th><th>P99</th></tr></thead>
-                        <tbody>
-                          <tr><td>1,000</td><td>64</td><td>2.39ms</td><td>2.39ms</td><td>2.46ms</td><td>2.53ms</td></tr>
-                          <tr><td>10,000</td><td>64</td><td>24.24ms</td><td>24.19ms</td><td>24.66ms</td><td>25.06ms</td></tr>
-                          <tr><td>100,000</td><td>64</td><td>247.18ms</td><td>247.13ms</td><td>248.91ms</td><td>249.35ms</td></tr>
-                        </tbody>
-                      </table>
-                    </div>
-                    <ul class="doc-list benchmark-notes">
-                      <li><strong>自建 v3：</strong>15 个项目、20 类属性、660 轮记忆、300 条查询；测试部分按项目隔离为 100 条查询。状态是构造器提供的真值，结果证明治理后的检索与排序，不证明自动状态识别。</li>
-                      <li><strong>LoCoMo：</strong>采用公开长对话数据的 1,977 个带证据问答和固定 Top-5。BM25 收益属于离线检索实验，尚未接入在线生产链路。</li>
-                      <li><strong>时延：</strong>在 Apple M5、16 GB、release 构建下测试检索内核的评分、排序和上下文构建；不包含网络、数据库访问和模型生成，因此不等同于线上端到端 P99 或并发吞吐。</li>
-                      <li><strong>权限与治理：</strong>6 项多 Agent 权限结果和 18 个治理案例属于确定性功能验证，不能替代真实团队并发实验。当前自动治理实验的错误淘汰率仍未达到 &lt;5% 目标。</li>
-                    </ul>
-                    <p class="doc-note"><strong>口径说明：</strong>标准 Precision@5 按“命中证据数 ÷ 5”计算。v3 每题只有一个相关证据，P@5 理论上限为 20%，因此不使用 Hit@5 冒充 Precision@5，也不声称五项指标已经全部达标。</p>
-                    <a class="doc-link" href="/performance-evidence-20260910.json" download>下载机器可读评测证据</a>
-                  </div>
-                </section>
                 <section id="download-verification">
-                  <span class="doc-number">12</span>
+                  <span class="doc-number">11</span>
                   <div class="doc-content">
                     <h3>下载来源与文件校验</h3>
                     <p>安装包统一通过网盘分发；下载后请先核对文件名与 SHA-256 再安装。Windows 当前版本 <strong>1.6.0</strong> 的校验值如下：</p>
@@ -669,7 +616,7 @@
                   </div>
                 </section>
                 <section id="dev-edition">
-                  <span class="doc-number">13</span>
+                  <span class="doc-number">12</span>
                   <div class="doc-content">
                     <h3>开发版与竞赛演示</h3>
                     <p>灵枢提供面向演示与竞赛的 Windows 开发版：基于 Docker 一键启动完整的“动态记忆引擎”控制台，无需手动安装数据库、向量库或编译环境。</p>
@@ -688,7 +635,7 @@
                   </div>
                 </section>
                 <section id="troubleshooting">
-                  <span class="doc-number">14</span>
+                  <span class="doc-number">13</span>
                   <div class="doc-content">
                     <h3>常见问题</h3>
                     <dl class="doc-faq">
@@ -717,6 +664,70 @@
                 </section>
               </article>
             </div>
+          </section>
+
+          <section id="performance-section" class="account-page performance-section" data-page-panel="performance" aria-labelledby="performance-title" hidden>
+            <div class="page-intro">
+              <div>
+                <h2 id="performance-title">性能评测</h2>
+                <p>可复现的基线对照、公开数据集实验、检索时延与功能验证。</p>
+              </div>
+              <span class="evidence-date">最近复跑：2026-09-10</span>
+            </div>
+            <article id="performance-evidence" class="performance-report">
+              <div class="doc-content">
+                <p>以下数据来自可复现评测器与已冻结证据。核心指标均设置同数据对照或固定测试协议；页面同时列出数据属性和适用边界。</p>
+                <div class="benchmark-grid" aria-label="核心评测结果">
+                  <article class="benchmark-card">
+                    <span>长时序 Top-1</span>
+                    <strong>94.00%</strong>
+                    <p>Static RAG 62.00%<br><b>提升 32.00 个百分点</b></p>
+                  </article>
+                  <article class="benchmark-card">
+                    <span>事实变更 Top-1</span>
+                    <strong>96.00%</strong>
+                    <p>Static RAG 30.00%<br><b>提升 66.00 个百分点</b></p>
+                  </article>
+                  <article class="benchmark-card">
+                    <span>10 万条检索 P99</span>
+                    <strong>249.35 ms</strong>
+                    <p>64 次离线查询<br><b>Apple M5 · 16 GB</b></p>
+                  </article>
+                </div>
+                <h4>核心对照结果</h4>
+                <div class="doc-table-wrap">
+                  <table class="doc-data-table">
+                    <thead><tr><th>评测项目</th><th>数据规模</th><th>基线</th><th>对照方案</th><th>结果</th></tr></thead>
+                    <tbody>
+                      <tr><td>长时序检索 Top-1</td><td>v3 测试集 100 查询</td><td>62.00%</td><td>LingShu Full 94.00%</td><td>+32.00pp</td></tr>
+                      <tr><td>事实变更 Top-1</td><td>其中 50 查询</td><td>30.00%</td><td>LingShu Full 96.00%</td><td>+66.00pp</td></tr>
+                      <tr><td>LoCoMo 证据 R@5</td><td>公开集 1,977 QA</td><td>Static 向量 26.82%</td><td>BM25 正文＋说话人 52.31%</td><td>+25.49pp</td></tr>
+                      <tr><td>多 Agent 权限</td><td>6 项功能检查</td><td>—</td><td>私有、共享、拒绝与审计</td><td>6 / 6 通过</td></tr>
+                      <tr><td>重复与过期过滤</td><td>18 个治理案例</td><td>—</td><td>确定性治理检查</td><td>两项均为 100%</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <h4>时延复跑结果</h4>
+                <div class="doc-table-wrap">
+                  <table class="doc-data-table">
+                    <thead><tr><th>记忆规模</th><th>查询数</th><th>平均</th><th>P50</th><th>P95</th><th>P99</th></tr></thead>
+                    <tbody>
+                      <tr><td>1,000</td><td>64</td><td>2.39ms</td><td>2.39ms</td><td>2.46ms</td><td>2.53ms</td></tr>
+                      <tr><td>10,000</td><td>64</td><td>24.24ms</td><td>24.19ms</td><td>24.66ms</td><td>25.06ms</td></tr>
+                      <tr><td>100,000</td><td>64</td><td>247.18ms</td><td>247.13ms</td><td>248.91ms</td><td>249.35ms</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <ul class="doc-list benchmark-notes">
+                  <li><strong>自建 v3：</strong>15 个项目、20 类属性、660 轮记忆、300 条查询；测试部分按项目隔离为 100 条查询。状态是构造器提供的真值，结果证明治理后的检索与排序，不证明自动状态识别。</li>
+                  <li><strong>LoCoMo：</strong>采用公开长对话数据的 1,977 个带证据问答和固定 Top-5。BM25 收益属于离线检索实验，尚未接入在线生产链路。</li>
+                  <li><strong>时延：</strong>在 Apple M5、16 GB、release 构建下测试检索内核的评分、排序和上下文构建；不包含网络、数据库访问和模型生成，因此不等同于线上端到端 P99 或并发吞吐。</li>
+                  <li><strong>权限与治理：</strong>6 项多 Agent 权限结果和 18 个治理案例属于确定性功能验证，不能替代真实团队并发实验。当前自动治理实验的错误淘汰率仍未达到 &lt;5% 目标。</li>
+                </ul>
+                <p class="doc-note"><strong>口径说明：</strong>标准 Precision@5 按“命中证据数 ÷ 5”计算。v3 每题只有一个相关证据，P@5 理论上限为 20%，因此不使用 Hit@5 冒充 Precision@5，也不声称五项指标已经全部达标。</p>
+                <a class="doc-link" href="/performance-evidence-20260910.json" download>下载机器可读评测证据</a>
+              </div>
+            </article>
           </section>
 
           <section id="download-section" class="account-page download-section" data-page-panel="download" aria-labelledby="download-title" hidden>

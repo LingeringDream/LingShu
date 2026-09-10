@@ -392,15 +392,17 @@ async function assetResponse(request: Request, env: AppEnv): Promise<Response> {
     throw new HttpError(404, "Not found", "NOT_FOUND");
   }
   const requestUrl = new URL(request.url);
-  const appRoutes = new Set(["/account", "/billing", "/devices", "/docs", "/download", "/team"]);
+  const appRoutes = new Set(["/account", "/billing", "/devices", "/docs", "/performance", "/download", "/team"]);
   // Deep-link target for team invites sent via email: `/team/invite/<uuid>`.
   // Falling back to "/" hands the URL over to the account-center SPA so the
   // "Pending invites" banner can surface the matching row after sign-in.
   const cleanPath = requestUrl.pathname.replace(/\/$/, "") || "/";
   const isInviteDeepLink = /^\/team\/invite\/[0-9a-f-]{36}$/i.test(cleanPath);
   const isAppRoute = appRoutes.has(cleanPath) || isInviteDeepLink;
+  const appShellUrl = new URL("/", requestUrl);
+  appShellUrl.searchParams.set("shell", "20260910-performance-page-v1");
   const assetRequest = isAppRoute
-    ? new Request(new URL("/", requestUrl), request)
+    ? new Request(appShellUrl, request)
     : request;
   const asset = await env.ASSETS.fetch(assetRequest);
   const headers = new Headers(asset.headers);

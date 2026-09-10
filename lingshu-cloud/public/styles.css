@@ -1637,6 +1637,27 @@ svg {
   margin-top: 20px;
 }
 
+.performance-section {
+  max-width: 1040px;
+  padding-bottom: 48px;
+}
+
+.performance-report {
+  max-width: 960px;
+  padding-top: 30px;
+}
+
+.evidence-date {
+  flex-shrink: 0;
+  padding: 7px 11px;
+  border: 1px solid #dce6f7;
+  border-radius: 999px;
+  background: #f5f8ff;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .benchmark-card {
   padding: 18px;
   border: 1px solid #dce6f7;
@@ -1797,6 +1818,11 @@ svg {
 @media (max-width: 720px) {
   .benchmark-grid {
     grid-template-columns: 1fr;
+  }
+
+  .evidence-date {
+    display: inline-block;
+    margin-top: 14px;
   }
 }
 
