@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "product": "LingShu dynamic memory system",
+  "published_at": "2026-09-10",
+  "source_revision": "d35a0172183191dad721eb9ad2f34e31f30a050e",
+  "rerun_environment": {
+    "device": "MacBook Air",
+    "chip": "Apple M5",
+    "memory_gb": 16,
+    "os": "macOS 26.6.2",
+    "build": "cargo release"
+  },
+  "zte_v3_test": {
+    "dataset": "LingShu-ZTE-Synthetic-v3-test",
+    "memory_count": 220,
+    "query_count": 100,
+    "fact_change_query_count": 50,
+    "static_rag": {
+      "top1_accuracy_percent": 62.0,
+      "fact_change_top1_accuracy_percent": 30.0
+    },
+    "lingshu_full": {
+      "top1_accuracy_percent": 94.0,
+      "fact_change_top1_accuracy_percent": 96.0
+    },
+    "gain_percentage_points": {
+      "top1": 32.0,
+      "fact_change_top1": 66.0
+    },
+    "limitations": [
+      "Synthetic regression data with shared query templates.",
+      "State labels are oracle annotations; this measures retrieval after governance, not automatic state recognition.",
+      "Each query has one relevant item, so standard Precision@5 cannot exceed 20 percent."
+    ]
+  },
+  "locomo_offline": {
+    "qa_count": 1977,
+    "top_k": 5,
+    "static_vector_recall_at_5_percent": 26.82,
+    "bm25_text_and_speaker_recall_at_5_percent": 52.31,
+    "gain_percentage_points": 25.49,
+    "limitations": [
+      "Retrospective split over 10 conversations.",
+      "The BM25 strategy is an offline experiment and is not yet the deployed online retrieval path."
+    ]
+  },
+  "latency_rerun": {
+    "scope": "offline retrieval core: scoring, sorting, and context construction",
+    "queries_per_scale": 64,
+    "rows": [
+      {"memory_count": 1000, "mean_ms": 2.3866, "p50_ms": 2.391, "p95_ms": 2.461916, "p99_ms": 2.527959},
+      {"memory_count": 10000, "mean_ms": 24.24082, "p50_ms": 24.191708, "p95_ms": 24.662875, "p99_ms": 25.064},
+      {"memory_count": 100000, "mean_ms": 247.180175, "p50_ms": 247.126584, "p95_ms": 248.909625, "p99_ms": 249.35075}
+    ],
+    "limitations": [
+      "Does not include network, database access, model inference, or concurrent service load.",
+      "This is not an online end-to-end P99 or QPS claim."
+    ]
+  },
+  "functional_checks": {
+    "multi_agent_acl": {
+      "passed": 6,
+      "total": 6,
+      "checks": [
+        "private isolation",
+        "granted access",
+        "shared read",
+        "unauthorized denial",
+        "cross-agent conflict governance",
+        "audit trail completeness"
+      ]
+    },
+    "governance_cases": {
+      "total": 18,
+      "duplicate_filter_rate_percent": 100.0,
+      "stale_filter_rate_percent": 100.0,
+      "wrong_elimination_rate_percent": 0.0,
+      "conflict_resolution_rate_percent": 80.0
+    },
+    "limitations": [
+      "These are deterministic functional checks, not real multi-agent concurrency or load tests.",
+      "The separate automatic-governance audit has not met the below-5-percent false-elimination target."
+    ]
+  },
+  "reproduction": {
+    "zte_command": "cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test.json --json output/zte_v3_test_results.json",
+    "full_command": "cargo run -p lingshu-eval --release -- --json output/lingshu_eval_results.json",
+    "sha256": {
+      "datasets/zte_memory_v3_test.json": "3fd6bf0aba8d26950de062badb7c36074c41c192e407b4ba4d11729b4c390801",
+      "datasets/public/locomo_corpus.json": "1fed2b1242b4d5ecfd56b1b8841e043faae0013d92019e3c790baf440d1fe6b4",
+      "datasets/public/locomo_emb.f32": "be3314da2c2fecb1280d368663577711b9e1a7257dde90182097bc7452d087ff",
+      "crates/lingshu-eval/src/main.rs": "360045614cfa3abed5650a993e4fdaed2c3d265eb8510b7bc5a818ebc7e6b412",
+      "crates/lingshu-eval/src/bonus.rs": "50ee11db5f92dcda1923a3ea55871af06e4326e70d195774dd5b9e6409ea7879"
+    }
+  }
+}

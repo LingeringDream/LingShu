@@ -1630,6 +1630,84 @@ svg {
   font-size: 13px;
 }
 
+.benchmark-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.benchmark-card {
+  padding: 18px;
+  border: 1px solid #dce6f7;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #f8fbff, #f2f6ff);
+}
+
+.benchmark-card > span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.benchmark-card > strong {
+  display: block;
+  margin-top: 7px;
+  color: #175cd3;
+  font-size: clamp(23px, 3vw, 31px);
+  letter-spacing: -0.04em;
+}
+
+.benchmark-card p {
+  margin: 8px 0 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.benchmark-card b {
+  color: #344054;
+}
+
+.doc-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e4e7ec;
+  border-radius: 10px;
+}
+
+.doc-data-table {
+  width: 100%;
+  min-width: 660px;
+  border-collapse: collapse;
+  color: #475467;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.doc-data-table th,
+.doc-data-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid #e4e7ec;
+  text-align: left;
+  vertical-align: top;
+}
+
+.doc-data-table th {
+  background: #f8fafc;
+  color: #344054;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.doc-data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.benchmark-notes {
+  margin-top: 18px;
+}
+
 .doc-steps,
 .doc-list {
   margin: 16px 0 0;
@@ -1714,6 +1792,12 @@ svg {
 
 .doc-link:hover {
   color: var(--accent-hover);
+}
+
+@media (max-width: 720px) {
+  .benchmark-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .doc-faq {
