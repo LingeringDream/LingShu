@@ -249,10 +249,11 @@ pub async fn enhance_chat(
     let personality_snippet = personality_prompt(&personality_values);
     let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
-    let capabilities = capability_section_for_platform(
+    let mut capabilities = capability_section_for_platform(
         &perms,
         client_supports_macos_native(req.client_platform.as_deref()),
     );
+    capabilities.push_str(&multi_agent_capability_section(&enhance, true));
     let now = Local::now();
     let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
     let system_prompt = build_system_prompt(
@@ -585,7 +586,9 @@ pub async fn chat(
     // the assistant can actually do (reused by the screen-read preflight below).
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
     let macos_native = client_supports_macos_native(req.client_platform.as_deref());
-    let capabilities = capability_section_for_platform(&perms, macos_native);
+    let mut capabilities = capability_section_for_platform(&perms, macos_native);
+    let enhance = crate::routes::settings::enhance_settings_for_user(&state, user_id).await;
+    capabilities.push_str(&multi_agent_capability_section(&enhance, false));
 
     let now = Local::now();
     let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
@@ -1068,10 +1071,12 @@ pub async fn regenerate_message(
     let personality_snippet = personality_prompt(&personality_values);
     let role_prompt = crate::routes::settings::role_prompt_for_user(&state, user_id).await;
     let perms = crate::routes::permissions::permissions_for_user(&state, user_id).await;
-    let capabilities = capability_section_for_platform(
+    let mut capabilities = capability_section_for_platform(
         &perms,
         client_supports_macos_native(req.client_platform.as_deref()),
     );
+    let enhance = crate::routes::settings::enhance_settings_for_user(&state, user_id).await;
+    capabilities.push_str(&multi_agent_capability_section(&enhance, false));
     let now = Local::now();
     let now_str = now.format("%Y-%m-%d %H:%M %Z").to_string();
     let system_prompt = build_system_prompt(
@@ -1278,6 +1283,38 @@ fn capability_section_for_platform(
 重要：
 {l3_instruction}
 2. 以上「当前未开启」只表示该等级权限尚未授权，**不等于功能不存在**。遇到这种请求时，照常尝试调用对应工具——若工具返回权限错误，如实转达并提示用户去开启对应等级即可，不要谎称已完成，也不要说该功能不存在。"#
+    )
+}
+
+/// Describe shipped cooperation features separately from autonomous delegation.
+/// The route, not the saved default toggle, determines this turn's mode.
+fn multi_agent_capability_section(settings: &EnhanceSettings, enhanced_turn: bool) -> String {
+    let configuration = if settings.is_runnable() {
+        format!(
+            "已配置 {} 个参与模型和 1 个整合模型，并发上限为 {}；配置齐全不代表所有模型连接均可用，实际成功情况以执行结果为准",
+            settings.members.len(),
+            settings.max_parallel.max(1),
+        )
+    } else {
+        "配置尚不完整，需选择至少一个参与模型和一个整合模型".to_string()
+    };
+    let mode = if enhanced_turn {
+        "本轮走增强输出流程；参与模型分别回答同一问题，再由整合模型生成最终回复。成员可能失败或超时，全部失败时由整合模型直接回答，不能保证多个模型已成功参与。此流程不提供工具执行，不得声称已搜索、读取文件或执行本机操作。"
+    } else {
+        "本轮走普通单模型回复流程（重新生成回复也使用此流程），没有启动多模型增强。你没有切换增强模式或启动子 Agent 的工具。"
+    };
+    format!(
+        r#"
+
+## 多 Agent 与多模型能力（以当前运行事实为准）
+- 灵枢已实现「增强输出」：多个参与模型可在并发上限内分别回答同一问题，由整合模型汇总；这不是自主拆分不同子任务的 Agent 调度器。
+- 增强配置状态：{configuration}。
+- 当前回合：{mode}
+- 使用入口：聊天输入框旁的星光按钮可开启「增强输出」，聊天设置中的「增强输出」可配置参与模型与整合模型。用户想用多模型时说明这个现有入口；未配置只代表需要配置，不代表产品没有此功能。
+- Memory Gateway 已支持多 Agent 身份、记忆共享与权限隔离，供外部 Agent 经 MCP / HTTP API 使用；注册记忆身份不会启动执行任务的 Agent。
+- 当前聊天没有 spawn_agent / delegate 等派发工具，不能自主创建子 Agent 并行查资料、写文件或操作应用，也不能说「已启动多个 Agent」。
+- 用户问「你可以开多 agent 吗」或要求并行协作时，区分上述能力，简洁说明现有增强输出和自主派发的边界。不要笼统声称灵枢「不支持任何并行或多 Agent」，也不要因为历史回复曾否认而重复错误；角色设定不能改变真实能力与本轮状态。
+"#
     )
 }
 
@@ -3883,6 +3920,43 @@ mod tests {
             .format("%Y-%m-%d %H:%M")
             .to_string();
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn multi_agent_capabilities_distinguish_missing_configuration_from_missing_feature() {
+        let caps = multi_agent_capability_section(&EnhanceSettings::default(), false);
+        let prompt = build_system_prompt("", "", "", "", &caps, "");
+        assert!(prompt.contains("已实现「增强输出」"));
+        assert!(prompt.contains("配置尚不完整"));
+        assert!(prompt.contains("本轮走普通单模型回复流程"));
+        assert!(prompt.contains("没有切换增强模式或启动子 Agent 的工具"));
+        assert!(prompt.contains("注册记忆身份不会启动执行任务的 Agent"));
+        assert!(prompt.contains("聊天输入框旁的星光按钮"));
+    }
+
+    #[test]
+    fn multi_agent_capabilities_use_route_instead_of_saved_default() {
+        let member = EnhanceMemberConfig {
+            provider_id: "test".into(),
+            model: "test-model".into(),
+        };
+        let mut settings = EnhanceSettings {
+            enabled_default: true,
+            members: vec![member.clone(), member.clone()],
+            aggregator: Some(member),
+            max_parallel: 1,
+            ..Default::default()
+        };
+        let ordinary = multi_agent_capability_section(&settings, false);
+        assert!(ordinary.contains("已配置 2 个参与模型"));
+        assert!(ordinary.contains("并发上限为 1"));
+        assert!(ordinary.contains("没有启动多模型增强"));
+        settings.enabled_default = false;
+        let enhanced = multi_agent_capability_section(&settings, true);
+        assert!(enhanced.contains("本轮走增强输出流程"));
+        assert!(!enhanced.contains("没有启动多模型增强"));
+        assert!(enhanced.contains("全部失败时由整合模型直接回答"));
+        assert!(enhanced.contains("此流程不提供工具执行"));
     }
 
     #[test]
