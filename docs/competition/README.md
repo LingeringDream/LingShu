@@ -25,6 +25,7 @@
 ## 文档
 
 - [部署与演示手册](deployment.md)
+- [多 Agent 记忆演示使用手册](demo-user-guide.md)
 - [系统架构](architecture.md)
 - [创新点说明](innovation.md)
 - [实验报告](experiment-report.md)
