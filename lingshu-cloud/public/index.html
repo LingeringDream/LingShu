@@ -375,6 +375,7 @@
                 <a href="#memory-sync"><strong>记忆同步</strong><small>加密口令、双向合并与自动同步</small></a>
                 <a href="#billing-guide"><strong>订阅与账单</strong><small>升级、管理与付款安全</small></a>
                 <a href="#team-workspace"><strong>团队工作区</strong><small>创建、受邀加入与开放边界</small></a>
+                <a href="#multi-agent-memory"><strong>多 Agent 记忆演示</strong><small>注册、隔离、授权与冲突治理</small></a>
                 <a href="#download-verification"><strong>下载与校验</strong><small>网盘与 SHA-256</small></a>
                 <a href="#dev-edition"><strong>开发版与竞赛演示</strong><small>Docker 一键启动与故障排查</small></a>
                 <a href="#troubleshooting"><strong>常见问题</strong><small>启动、模型、权限与数据备份</small></a>
@@ -541,8 +542,56 @@
                     <p class="doc-note"><strong>当前边界：</strong>团队 MCP 空间和按席位统一账单尚未开放；当前团队工作区不等同于企业私有部署，也不会自动读取个人本地记忆。</p>
                   </div>
                 </section>
-                <section id="download-verification">
+                <section id="multi-agent-memory">
                   <span class="doc-number">10</span>
+                  <div class="doc-content">
+                    <h3>多 Agent 记忆共享与权限隔离演示</h3>
+                    <p>开发版 / 竞赛版的“动态记忆引擎”提供 Memory Gateway、逻辑 Agent 身份、私有与公共记忆空间、定向授权、冲突账本和自适应检索。正式桌面客户端隐藏这组实验入口，因此不会在聊天侧栏显示已注册 Agent。</p>
+                    <div class="doc-callout">
+                      <strong>先理解 Agent 注册</strong>
+                      <p>这里注册的是当前工作区中的“记忆访问身份”，用于执行数据库级 ACL 过滤；它不会新开聊天窗口，也不会自行派发子任务。需要让外部 Agent 接入时，请使用团队工作区签发的 Agent 凭证。</p>
+                    </div>
+                    <h4>一、注册三个演示 Agent</h4>
+                    <ol class="doc-steps">
+                      <li>启动开发版，打开 <strong>动态记忆引擎 → Agent Governance</strong>。</li>
+                      <li>在“注册协作 Agent”中依次创建 <code>sales_agent</code>（销售 Agent）、<code>tech_agent</code>（研发 Agent）和 <code>hr_agent</code>（人事 Agent）。</li>
+                      <li>Agent Key 只使用字母、数字、下划线或连字符，长度为 1–64 个字符。</li>
+                    </ol>
+                    <h4>二、验证私有记忆与定向授权</h4>
+                    <ol class="doc-steps">
+                      <li>选择“销售 Agent”，写入一条<strong>结构化事实 / 私有</strong>记忆：事实键 <code>customer.bottom_price</code>，事实值 <code>80万元</code>，内容为“客户可接受的最低合同金额为80万元”。</li>
+                      <li>进入 <strong>Memory Console</strong>，分别用三个 Agent 查询“客户可以接受的最低合同金额是多少？”。销售 Agent 可以检索到，研发和人事 Agent 应无结果。</li>
+                      <li>回到 <strong>Agent Governance</strong>，以销售 Agent 身份向研发 Agent“授权读取”。再次查询后，研发 Agent 可以读取，人事 Agent 仍不可读取。</li>
+                    </ol>
+                    <p class="doc-note"><strong>隔离原理：</strong>权限过滤发生在数据库候选查询阶段。未获授权的记忆不会进入模型上下文，避免先召回敏感内容再依赖提示词隐藏。</p>
+                    <h4>三、验证团队公共记忆</h4>
+                    <p>继续写入一条<strong>全局公共</strong>记忆：事实键 <code>project.tech_stack</code>，事实值 <code>Rust + React + PostgreSQL</code>。三个 Agent 均应能够检索。“全局”只表示当前用户或团队记忆空间内公共，不表示互联网公开。</p>
+                    <h4>四、演示冲突治理</h4>
+                    <ol class="doc-steps">
+                      <li>在 <strong>Memory Console</strong> 点击“载入冲突演示”，系统会为 <code>user.location</code> 写入“北京”和“深圳”两个不同取值。</li>
+                      <li>查询“我现在住在哪里？”，运行 Static RAG 与 Dynamic Memory 双路检索。Dynamic Memory 会隔离尚未裁决的争议事实。</li>
+                      <li>进入 <strong>Agent Governance → 冲突与生命周期账本</strong>，点击“采用新值”，再返回控制台检索，查看有效事实、被替代记录和来源链。</li>
+                    </ol>
+                    <h4>五、外部 Agent 接入</h4>
+                    <ol class="doc-steps">
+                      <li>在“团队工作区 → Agent 接入凭证”填写 Agent 标识，选择“只读”或“读写”，设置 1–365 天有效期。</li>
+                      <li>签发后立即保存只显示一次的 <code>lsk_...</code> 凭证。外部 Agent 使用该凭证访问团队检索接口；服务端会按凭证确定 Agent 身份，并覆盖请求中自行声明的 <code>agent_id</code>。</li>
+                      <li>凭证可撤销、会过期，管理员可以在审计记录中追踪相关操作。</li>
+                    </ol>
+                    <h4>3–5 分钟推荐演示顺序</h4>
+                    <ol class="doc-steps">
+                      <li>注册销售、研发、人事三个 Agent。</li>
+                      <li>写入销售私有记忆，证明研发与人事无法读取。</li>
+                      <li>只向研发定向授权，证明研发可读而人事仍不可读。</li>
+                      <li>写入公共记忆，证明三个 Agent 均可读取。</li>
+                      <li>载入冲突，展示争议隔离、显式裁决和来源追溯。</li>
+                    </ol>
+                    <p class="doc-warning"><strong>App 与开发版记忆不同？</strong>正式 App 默认使用内置 PostgreSQL <code>127.0.0.1:55432</code>，源码开发版默认使用 <code>127.0.0.1:5432</code>，两套数据不会自动互通。要在实验台查看 App 记忆，请保留 App 的 8080 后端，只单独启动竞赛版前端；不要同时启动两个占用 8080 的后端。</p>
+                    <p class="doc-note"><strong>能力边界：</strong>“增强输出”是多个模型分别回答同一问题后统一整合，不是自主拆分和派发任务的 Agent 调度器。当前聊天不会自行创建子 Agent；真实外部 Agent 应通过团队凭证和 API 接入。</p>
+                  </div>
+                </section>
+                <section id="download-verification">
+                  <span class="doc-number">11</span>
                   <div class="doc-content">
                     <h3>下载来源与文件校验</h3>
                     <p>安装包统一通过网盘分发；下载后请先核对文件名与 SHA-256 再安装。Windows 当前版本 <strong>1.6.0</strong> 的校验值如下：</p>
@@ -563,7 +612,7 @@
                   </div>
                 </section>
                 <section id="dev-edition">
-                  <span class="doc-number">11</span>
+                  <span class="doc-number">12</span>
                   <div class="doc-content">
                     <h3>开发版与竞赛演示</h3>
                     <p>灵枢提供面向演示与竞赛的 Windows 开发版：基于 Docker 一键启动完整的“动态记忆引擎”控制台，无需手动安装数据库、向量库或编译环境。</p>
@@ -582,7 +631,7 @@
                   </div>
                 </section>
                 <section id="troubleshooting">
-                  <span class="doc-number">12</span>
+                  <span class="doc-number">13</span>
                   <div class="doc-content">
                     <h3>常见问题</h3>
                     <dl class="doc-faq">
