@@ -1,6 +1,6 @@
 [package]
 name = "lingshu-tauri"
-version = "1.6.2"
+version = "1.6.3"
 description = "灵枢 (LingShu) — Cross-platform Desktop AI Assistant"
 edition = "2021"
 license-file = "../LICENSE"

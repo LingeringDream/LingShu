@@ -55,6 +55,8 @@ jobs:
           toolchain: "1.88"
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
@@ -70,6 +72,7 @@ jobs:
       - name: Build self-contained bundle
         run: python scripts/package-cli.py --target ${{ matrix.target }}
       - name: Install, MCP, upgrade and uninstall regression
+        timeout-minutes: 10
         shell: bash
         run: python scripts/test-cli-install.py --archive "$(find dist/cli -name '*.tar.gz' -o -name '*.zip' | head -1)"
       - uses: actions/upload-artifact@v4

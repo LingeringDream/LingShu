@@ -6,21 +6,21 @@ CLI 是个人共享记忆的主要安装入口。发行包包含 `lingshu`、后
 
 源码实现不代表发行包已发布。下列下载命令只有在新的 CLI release 上传后才可使用；私有仓库需要相应访问权限，也可以用 `gh release download` 下载归档后离线安装。现有桌面安装包不包含新 CLI。
 
-当前仓库为私有仓库。有访问权限的用户安装 GitHub CLI 并执行 `gh auth login` 后，可在线安装：
+当前仓库已公开。下面的 curl / PowerShell 下载命令在发行包发布后可直接使用，无需 GitHub 登录。也可使用 GitHub CLI 安装指定版本：
 
 ```sh
-gh release download v1.6.2 --repo LingeringDream/LingShu --pattern install.sh --dir /tmp --clobber
-sh /tmp/install.sh --version v1.6.2
+gh release download v1.6.3 --repo LingeringDream/LingShu --pattern install.sh --dir /tmp --clobber
+sh /tmp/install.sh --version v1.6.3
 ```
 
 Windows 使用 PowerShell：
 
 ```powershell
-gh release download v1.6.2 --repo LingeringDream/LingShu --pattern install.ps1 --dir "$env:TEMP" --clobber
-& "$env:TEMP\install.ps1" --version v1.6.2
+gh release download v1.6.3 --repo LingeringDream/LingShu --pattern install.ps1 --dir "$env:TEMP" --clobber
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\install.ps1" --version v1.6.3
 ```
 
-登录过 `gh` 时，安装器通过它下载归档及校验文件；自定义发行镜像仍使用 HTTP 下载。下列无需登录的 curl / Invoke-WebRequest 命令适用于公开可访问的发行地址。
+登录过 `gh` 时，安装器通过它下载归档及校验文件；自定义发行镜像仍使用 HTTP 下载。私有仓库或镜像需要对应访问权限。
 
 macOS（Apple Silicon / Intel）和 Linux x64（正式发布基准 glibc 2.35+）：
 
@@ -35,7 +35,7 @@ Windows x64（PowerShell）：
 
 ```powershell
 Invoke-WebRequest https://github.com/LingeringDream/LingShu/releases/latest/download/install.ps1 -OutFile "$env:TEMP\lingshu-install.ps1"
-& "$env:TEMP\lingshu-install.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\lingshu-install.ps1"
 ```
 
 程序安装到 `%LOCALAPPDATA%\LingShu\cli`，命令放在 `%LOCALAPPDATA%\LingShu\bin` 并加入用户 PATH；安装后打开新终端。
@@ -49,7 +49,7 @@ sh scripts/install.sh --archive /path/lingshu-x86_64-unknown-linux-gnu.tar.gz
 ```
 
 ```powershell
-& .\scripts\install.ps1 --archive C:\Downloads\lingshu-x86_64-pc-windows-msvc.zip
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1 --archive C:\Downloads\lingshu-x86_64-pc-windows-msvc.zip
 ```
 
 两种安装器都支持绝对路径 `--prefix DIR` 与 `--bin-dir DIR`。程序路径可包含空格；配置接入使用稳定入口，升级不需要重写 MCP 配置。

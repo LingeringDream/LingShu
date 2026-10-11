@@ -25,10 +25,7 @@ impl Paths {
             }
             None => default_home()?,
         };
-        let binaries = std::env::current_exe()?
-            .parent()
-            .context("executable has no parent")?
-            .to_owned();
+        let binaries = executable_directory(&std::env::current_exe()?)?;
         let home = std::path::absolute(home)?;
         let mut ancestor = home.clone();
         let mut suffix = Vec::new();
@@ -69,7 +66,7 @@ impl Paths {
     }
     pub fn install_root(&self) -> Option<PathBuf> {
         // Windows may retain the `current` junction in GetModuleFileName;
-        // Unix current_exe resolves the symlink into releases/<version>.
+        // Unix resolves the launcher symlink into releases/<version>.
         let parent = self.binaries.parent()?;
         [Some(parent), parent.parent()]
             .into_iter()
@@ -86,6 +83,17 @@ impl Paths {
             .map(|root| root.join("current").join(executable_name("lingshu")))
             .unwrap_or(std::env::current_exe()?))
     }
+}
+
+fn executable_directory(executable: &Path) -> Result<PathBuf> {
+    // macOS current_exe may preserve the user's bin/lingshu symlink. Resolve
+    // it before looking for sibling programs and the installation marker.
+    #[cfg(unix)]
+    let executable = fs::canonicalize(executable).context("resolve CLI executable")?;
+    Ok(executable
+        .parent()
+        .context("executable has no parent")?
+        .to_owned())
 }
 
 pub fn executable_name(name: &str) -> String {
@@ -238,6 +246,33 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn sibling_programs_resolve_through_launcher_and_current_symlinks() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("installation with spaces");
+        let release = root.join("releases/version");
+        let bin = temporary.path().join("bin");
+        fs::create_dir_all(&release).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(release.join("lingshu"), b"CLI").unwrap();
+        fs::write(release.join("lingshu-server"), b"backend").unwrap();
+        fs::write(
+            root.join("install.json"),
+            r#"{"application":"lingshu-cli"}"#,
+        )
+        .unwrap();
+        symlink(&release, root.join("current")).unwrap();
+        symlink(root.join("current/lingshu"), bin.join("lingshu")).unwrap();
+        let paths = Paths {
+            home: temporary.path().join("data"),
+            binaries: executable_directory(&bin.join("lingshu")).unwrap(),
+        };
+        assert_eq!(paths.binaries, release);
+        assert!(paths.binary("lingshu-server").is_file());
+        assert_eq!(paths.launcher().unwrap(), root.join("current/lingshu"));
+    }
     #[test]
     fn secrets_survive_restart_and_config_is_private() {
         let temp = tempfile::tempdir().unwrap();

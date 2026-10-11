@@ -21,7 +21,7 @@ The new CLI assets still need a release. Build from source for offline installat
 
 ## Current Version and Editions
 
-The source version is **1.6.2**. Installer versions and checksums follow the [download manifest](lingshu-cloud/public/downloads.json); platform releases may differ from the source version.
+The source version is **1.6.3**. Installer versions and checksums follow the [download manifest](lingshu-cloud/public/downloads.json); platform releases may differ from the source version.
 
 - **Desktop client:** memory management, MCP setup and basic chat, with optional cloud account and encrypted sync. Windows x64 and macOS Apple Silicon packages include PostgreSQL, the backend, and the MCP sidecar; Docker and an external database are unnecessary. Configure Ollama or your own OpenAI-compatible model service separately.
 - **Development edition:** Docker or source-based browser app with Memory Console, Agent Governance, and Benchmark & Integration. In the current working tree, desktop builds use `npm run build:client` and omit Memory Console; development builds use `npm run build`.
