@@ -84,8 +84,8 @@ mod tests {
     #[test]
     fn calendar_file_name_cannot_escape_downloads() {
         assert_eq!(
-            sanitize_calendar_file_name("../../校赛/答辩.ics"),
-            "校赛_答辩.ics"
+            sanitize_calendar_file_name("../../项目/会议.ics"),
+            "项目_会议.ics"
         );
         assert_eq!(sanitize_calendar_file_name(".ics"), "lingshu-calendar.ics");
     }
@@ -107,12 +107,12 @@ mod tests {
             std::thread::current().name().unwrap_or("unnamed")
         ));
         std::fs::create_dir_all(&temp).unwrap();
-        let original = temp.join("答辩.ics");
+        let original = temp.join("会议.ics");
         std::fs::write(&original, b"existing").unwrap();
 
         assert_eq!(
-            available_download_path(&temp, "答辩.ics"),
-            temp.join("答辩-1.ics")
+            available_download_path(&temp, "会议.ics"),
+            temp.join("会议-1.ics")
         );
 
         std::fs::remove_file(original).unwrap();

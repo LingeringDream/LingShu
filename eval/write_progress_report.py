@@ -17,7 +17,7 @@ def main():
         raise ValueError("QA run is incomplete")
     zte = {s: read(f"zte_v3_{s}_results.json") for s in ("all", "dev", "test")}
     lines = [
-        "# 竞赛实验报告：优先级增强 v2",
+        "# 记忆引擎实验报告：优先级增强 v2",
         "",
         "日期：2026-09-06。由 `eval/write_progress_report.py` 从本地实验 JSON 生成。",
         "",
@@ -117,7 +117,7 @@ def main():
               "", "原始证据位于 output/retrieval_v2.json、output/retrieval_v2.facts.json、"
               "output/locomo_qa_v2.json 及 output/zte_v3_*_results.json。"
               "output 默认不提交；轻量汇总与原始文件 SHA-256 保存为本目录 evidence-v2.json。", ""]
-    dest = ROOT / "docs" / "competition" / "experiment-report.md"
+    dest = ROOT / "docs" / "research" / "experiment-report.md"
     archive = dest.with_name("experiment-report-v1-archived.md")
     if not archive.exists():
         archive.write_text("> 历史 v1 快照：下文 F1、P@K 与达标结论包含已撤回口径，以 [v2 报告](experiment-report.md) 为准。\n\n"

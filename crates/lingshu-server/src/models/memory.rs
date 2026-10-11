@@ -19,7 +19,7 @@ pub struct Memory {
     /// Memory tier: 'raw' for original episodic memories, 'derived' for LLM-consolidated summaries.
     #[serde(default = "default_tier")]
     pub tier: String,
-    /// Competition protocol layer: episode, fact, or experience.
+    /// Memory protocol layer: episode, fact, or experience.
     #[serde(default = "default_memory_layer")]
     pub memory_layer: String,
     #[serde(default = "default_agent_id")]

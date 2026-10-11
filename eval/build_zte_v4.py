@@ -149,7 +149,7 @@ CORE_SCENARIOS = [
     {"id": "c17.mainlang.v0", "content": "项目主分支长期使用 Rust 开发。",
      "fact_key": "project.mainlang", "value": "Rust",
      "age_days": 50, "importance": 0.80, "trust": 0.84, "access": 12, "state": "active"},
-    {"id": "c17.mainlang.tmp", "content": "这次 hackathon 临时用 Python 写了脚本。",
+    {"id": "c17.mainlang.tmp", "content": "这次原型开发临时用 Python 写了脚本。",
      "fact_key": "project.mainlang", "value": "Python",
      "age_days": 3, "importance": 0.35, "trust": 0.50, "access": 1, "state": "stale"},
 ]

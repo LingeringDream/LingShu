@@ -94,7 +94,7 @@ services:
       - frontend_node_modules:/app/node_modules
     environment:
       VITE_API_URL: http://backend:8080
-      # dev = 开发版 / 竞赛版：开放 Memory Console（动态记忆引擎）等调试页面。
+      # dev = 开发版：开放 Memory Console（动态记忆引擎）等调试页面。
       VITE_LINGSHU_EDITION: dev
     healthcheck:
       test:

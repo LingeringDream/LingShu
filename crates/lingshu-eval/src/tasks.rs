@@ -8,7 +8,7 @@
 //! whether a rule-based executor over that context reaches the correct
 //! decision.
 //!
-//! Three tasks mirror the competition brief:
+//! Three tasks evaluate evolutionary memory:
 //!   T1 deployment plan  -- user's tech stack must be respected
 //!   T2 final quote       -- changed requirements must override the old ones
 //!   T3 consolidated plan -- three agents' facts must all be assembled

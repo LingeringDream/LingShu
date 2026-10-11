@@ -3,7 +3,7 @@
 > 2026-06-06 · 三轮独立审查 + 两次代码审查（Phase 1 / Phase 2）
 > 总计 56 项发现：33 项已修复 ✅，23 项待处理。
 
-> 本文是历史审查快照，不是当前待办状态。当前实现与验证结果以根目录 `README.md`、`CHANGELOG.md`、`docs/mvp-status.md` 和 `docs/competition/` 为准。
+> 本文是历史审查快照，不是当前待办状态。当前实现与验证结果以根目录 `README.md`、`CHANGELOG.md`、`docs/mvp-status.md` 和 `docs/research/` 为准。
 
 ---
 

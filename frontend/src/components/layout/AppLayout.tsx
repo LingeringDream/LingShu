@@ -28,7 +28,7 @@ const navItems: { key: AppSectionKey; label: string }[] = [
   { key: 'settings', label: '设置' },
 ];
 
-const competitionNavItems: { key: AppSectionKey; label: string }[] = [
+const memoryLabNavItems: { key: AppSectionKey; label: string }[] = [
   { key: 'memory-lab', label: '动态记忆引擎' },
   { key: 'chat', label: '对话演示' },
   { key: 'settings', label: '模型配置' },
@@ -42,9 +42,9 @@ export function resolveAppSection(section: string | null): AppSectionKey {
 }
 
 export function AppLayout({ children, activeSection = 'home', onNavigate, accountName }: AppLayoutProps) {
-  // 动态记忆引擎（Memory Console）只在开发版 / 竞赛版开放，桌面客户端不显示入口。
+  // 动态记忆引擎（Memory Console）只在开发版开放，桌面客户端不显示入口。
   const isMemoryLab = activeSection === 'memory-lab' && isMemoryLabAvailable;
-  const displayedNavItems = isMemoryLab ? competitionNavItems : navItems;
+  const displayedNavItems = isMemoryLab ? memoryLabNavItems : navItems;
 
   return (
     <div className={`app-shell ${isMemoryLab ? 'app-shell--memory-lab' : ''}`}>

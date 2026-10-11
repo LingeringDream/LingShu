@@ -42,4 +42,4 @@ MCP、聊天和本地 Gateway 共用记忆检索与治理内核。云端团队�
 5. AI 写入可以被质疑；争议保留来源，自动事实治理未达标时继续人工裁决。
 6. 发布能力以实际安装包与验证记录为准，源码实现不等于已部署。
 
-记忆工程实现与实验边界继续参考[检索改进说明](memory-retrieval-optimization.md)和[自动治理审计](competition/auto-governance-audit.md)。
+记忆工程实现与实验边界继续参考[检索改进说明](memory-retrieval-optimization.md)和[自动治理审计](research/auto-governance-audit.md)。

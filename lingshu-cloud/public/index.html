@@ -381,7 +381,7 @@
                 <a href="#team-workspace"><strong>团队工作区</strong><small>创建、受邀加入与开放边界</small></a>
                 <a href="#multi-agent-memory"><strong>多 Agent 记忆演示</strong><small>注册、隔离、授权与冲突治理</small></a>
                 <a href="#download-verification"><strong>下载与校验</strong><small>网盘与 SHA-256</small></a>
-                <a href="#dev-edition"><strong>开发版与竞赛演示</strong><small>Docker 一键启动与故障排查</small></a>
+                <a href="#dev-edition"><strong>开发版与实验演示</strong><small>Docker 一键启动与故障排查</small></a>
                 <a href="#troubleshooting"><strong>常见问题</strong><small>启动、模型、权限与数据备份</small></a>
               </nav>
               <article class="docs-article">
@@ -550,7 +550,7 @@
                   <span class="doc-number">10</span>
                   <div class="doc-content">
                     <h3>多 Agent 记忆共享与权限隔离演示</h3>
-                    <p>开发版 / 竞赛版的“动态记忆引擎”提供 Memory Gateway、逻辑 Agent 身份、私有与公共记忆空间、定向授权、冲突账本和自适应检索。正式桌面客户端隐藏这组实验入口，因此不会在聊天侧栏显示已注册 Agent。</p>
+                    <p>开发版的“动态记忆引擎”提供 Memory Gateway、逻辑 Agent 身份、私有与公共记忆空间、定向授权、冲突账本和自适应检索。正式桌面客户端隐藏这组实验入口，因此不会在聊天侧栏显示已注册 Agent。</p>
                     <div class="doc-callout">
                       <strong>先理解 Agent 注册</strong>
                       <p>这里注册的是当前工作区中的“记忆访问身份”，用于执行数据库级 ACL 过滤；它不会新开聊天窗口，也不会自行派发子任务。需要让外部 Agent 接入时，请使用团队工作区签发的 Agent 凭证。</p>
@@ -590,7 +590,7 @@
                       <li>写入公共记忆，证明三个 Agent 均可读取。</li>
                       <li>载入冲突，展示争议隔离、显式裁决和来源追溯。</li>
                     </ol>
-                    <p class="doc-warning"><strong>App 与开发版记忆不同？</strong>正式 App 默认使用内置 PostgreSQL <code>127.0.0.1:55432</code>，源码开发版默认使用 <code>127.0.0.1:5432</code>，两套数据不会自动互通。要在实验台查看 App 记忆，请保留 App 的 8080 后端，只单独启动竞赛版前端；不要同时启动两个占用 8080 的后端。</p>
+                    <p class="doc-warning"><strong>App 与开发版记忆不同？</strong>正式 App 默认使用内置 PostgreSQL <code>127.0.0.1:55432</code>，源码开发版默认使用 <code>127.0.0.1:5432</code>，两套数据不会自动互通。要在实验台查看 App 记忆，请保留 App 的 8080 后端，只单独启动开发版前端；不要同时启动两个占用 8080 的后端。</p>
                     <p class="doc-note"><strong>能力边界：</strong>“增强输出”是多个模型分别回答同一问题后统一整合，不是自主拆分和派发任务的 Agent 调度器。当前聊天不会自行创建子 Agent；真实外部 Agent 应通过团队凭证和 API 接入。</p>
                   </div>
                 </section>
@@ -618,12 +618,12 @@
                 <section id="dev-edition">
                   <span class="doc-number">12</span>
                   <div class="doc-content">
-                    <h3>开发版与竞赛演示</h3>
-                    <p>灵枢提供面向演示与竞赛的 Windows 开发版：基于 Docker 一键启动完整的“动态记忆引擎”控制台，无需手动安装数据库、向量库或编译环境。</p>
+                    <h3>开发版与实验演示</h3>
+                    <p>灵枢提供面向开发与演示的 Windows 开发版：基于 Docker 一键启动完整的“动态记忆引擎”控制台，无需手动安装数据库、向量库或编译环境。</p>
                     <ol class="doc-steps">
                       <li><strong>准备环境：</strong>安装 Docker Desktop 并完成 WSL 2 初始化，预留至少 8 GB 可用磁盘空间；首次构建需要联网下载基础镜像。</li>
                       <li><strong>解压开发包：</strong>将整个开发包解压到本地目录，不要只打开 ZIP 内的文件。</li>
-                      <li><strong>一键启动：</strong>双击根目录 <code>启动灵枢竞赛版.cmd</code>，等待所有检查显示 <code>[OK]</code>，浏览器会自动打开 Memory Console；若未自动打开，双击 <code>打开灵枢控制台.cmd</code> 或访问 <code>http://127.0.0.1:5173/?section=memory-lab</code>。</li>
+                      <li><strong>一键启动：</strong>双击根目录 <code>启动灵枢开发版.cmd</code>，等待所有检查显示 <code>[OK]</code>，浏览器会自动打开 Memory Console；若未自动打开，双击 <code>打开灵枢控制台.cmd</code> 或访问 <code>http://127.0.0.1:5173/?section=memory-lab</code>。</li>
                       <li><strong>停止服务：</strong>双击 <code>停止灵枢开发版.cmd</code>。停止操作只关闭容器，会保留 PostgreSQL、Redis 和 Qdrant 数据卷与已有记忆数据。</li>
                     </ol>
                     <ul class="doc-list">

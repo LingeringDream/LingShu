@@ -3,7 +3,7 @@ name = "lingshu-eval"
 version = "1.6.0"
 edition = "2021"
 publish = false
-description = "Offline competition evaluation harness for LingShu evolutionary memory"
+description = "Offline evaluation harness for LingShu evolutionary memory"
 
 [[bin]]
 name = "lingshu-eval"

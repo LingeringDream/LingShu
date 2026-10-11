@@ -13,7 +13,7 @@ from docx.shared import Cm, Pt, RGBColor
 
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "docs" / "competition" / "灵枢项目书实验报告.docx"
+OUT = ROOT / "docs" / "research" / "灵枢记忆引擎实验报告.docx"
 
 
 def set_cell_shading(cell, fill):
@@ -202,7 +202,7 @@ def main():
     set_run_font(title.add_run("灵枢动态记忆系统实验报告"), size=24, bold=True)
     subtitle = doc.add_paragraph(style="Subtitle")
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    set_run_font(subtitle.add_run("中国国际大学生创新大赛产业赛道 中兴通讯第 1529 题"), size=12)
+    set_run_font(subtitle.add_run("动态记忆与自适应检索：离线实验与证据边界"), size=12)
     meta = doc.add_paragraph()
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta.paragraph_format.space_after = Pt(24)
@@ -210,7 +210,7 @@ def main():
 
     add_heading(doc, "报告摘要", 1)
     add_body(doc, "本报告验证灵枢在长时序记忆、公开长对话问答、过期与冲突治理、多智能体权限以及端侧检索性能方面的阶段性能力。核心结果显示：在包含660轮记忆和300条查询的自建回归集上，系统测试集Top-1准确率为94%，静态RAG基线为62%，提升32个百分点；在LoCoMo公开数据的278题类别分层样本上，问答得分由27.45提升至34.88；在10万条记忆规模下，单查询P99时延为195.19毫秒。")
-    add_body(doc, "上述结果支持项目书中关于长时序记忆准确率、相对基线提升和端侧检索时延的量化论证。标准Precision@5、完整开放域任务完成度、百万级并发和真实多智能体协作尚未形成充分证据，因此本报告不作达标声明。")
+    add_body(doc, "上述结果支持研究报告中关于长时序记忆准确率、相对基线提升和端侧检索时延的量化论证。标准Precision@5、完整开放域任务完成度、百万级并发和真实多智能体协作尚未形成充分证据，因此本报告不作达标声明。")
 
     add_heading(doc, "核心实验结果", 1)
     add_table(doc,
@@ -228,7 +228,7 @@ def main():
     add_heading(doc, "一 实验目标与评价口径", 1)
     add_body(doc, "实验围绕命题要求建立静态RAG与灵枢检索的同数据对照，考察当前事实能否在长时序、事实变更、冗余与过期信息共存的条件下被正确检索，同时记录上下文开销、查询时延和内存占用。")
     add_table(doc, ["命题关注项", "采用指标", "当前证据状态"],
-              [["长时序任务记忆准确率", "Top-1准确率及相对静态基线提升", "94% 对 62%，可用于项目书"],
+              [["长时序任务记忆准确率", "Top-1准确率及相对静态基线提升", "94% 对 62%，可用于研究报告"],
                ["记忆检索Top-K质量", "标准P@5、R@5、Hit@5、MRR", "R@5/Hit@5可用；标准P@5未达到83%"],
                ["冗余与过期记忆过滤", "规则治理案例通过率", "18案例功能验证，可作为阶段性数据"],
                ["复杂任务完成度", "任务成功率", "3任务对照，样本较小"],
@@ -264,10 +264,10 @@ def main():
               widths=[4.3, 3.2, 3.2, 3.2, 3.3],
               alignments=[WD_ALIGN_PARAGRAPH.LEFT] + [WD_ALIGN_PARAGRAPH.CENTER] * 4)
     add_body(doc, "测试集上，灵枢完整模型Top-1准确率达到94%，较Static RAG的62%提高32个百分点；事实变更子集达到96%，较Static RAG的30%提高66个百分点。该结果满足命题提出的准确率不低于86%、相对静态基线提升不低于15个百分点的数值要求。")
-    add_body(doc, "消融显示固定多特征权重不是每种分布下的最优解：去除重要性或仅保留相似度与状态过滤取得更高结果。因此，项目书可使用完整模型的94%作为当前系统结果，同时将权重按任务自适应列为后续优化方向。")
+    add_body(doc, "消融显示固定多特征权重不是每种分布下的最优解：去除重要性或仅保留相似度与状态过滤取得更高结果。因此，研究报告可使用完整模型的94%作为当前系统结果，同时将权重按任务自适应列为后续优化方向。")
 
     add_heading(doc, "3.2 Top-K指标说明", 2)
-    add_body(doc, "测试集每个查询只有一个相关证据，因此标准Precision@5的理论上限为20%。完整模型的P@5为19.80%，R@5和Hit@5均为99%。这些数值表明正确证据几乎都进入前5名，但不能据此声称Precision@5达到83%。若项目书需要验证该阈值，应新增每题包含多个相关证据的评测集，或取得命题方对Top-K指标定义的书面确认。")
+    add_body(doc, "测试集每个查询只有一个相关证据，因此标准Precision@5的理论上限为20%。完整模型的P@5为19.80%，R@5和Hit@5均为99%。这些数值表明正确证据几乎都进入前5名，但不能据此声称Precision@5达到83%。若研究报告需要验证该阈值，应新增每题包含多个相关证据的评测集，或取得命题方对Top-K指标定义的书面确认。")
 
     add_heading(doc, "四 公开数据集实验结果", 1)
     add_heading(doc, "4.1 LoCoMo证据检索", 2)
@@ -308,7 +308,7 @@ def main():
                ["多Agent权限", "6项检查", f"{eval_data['multi_agent']['pass_rate']:.0f}%", "权限与审计功能测试"]],
               widths=[4.2, 4.1, 3.2, 5.0], alignments=[WD_ALIGN_PARAGRAPH.LEFT, WD_ALIGN_PARAGRAPH.CENTER,
                                                      WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.LEFT])
-    add_body(doc, "治理、多智能体和开放域任务结果证明相应功能链路能够运行，但样本规模较小。项目书中宜表述为功能验证或阶段性实验，不将其描述为大规模统计结论。")
+    add_body(doc, "治理、多智能体和开放域任务结果证明相应功能链路能够运行，但样本规模较小。研究报告中宜表述为功能验证或阶段性实验，不将其描述为大规模统计结论。")
 
     add_heading(doc, "六 工程性能实验", 1)
     latency_rows = []
@@ -325,8 +325,8 @@ def main():
               widths=[5.2, 3.8, 3.8, 4.4], alignments=[WD_ALIGN_PARAGRAPH.LEFT] + [WD_ALIGN_PARAGRAPH.CENTER] * 3)
     add_body(doc, "10万条规模的P99为195.19毫秒，低于命题提出的600毫秒端侧时延目标。RSS由165.37MB降至63.21MB，下降61.78%；该下降包含记忆保留数量由10万减少至33,333条的影响，反映过滤后工作集的内存收益。")
 
-    add_heading(doc, "七 项目书可采用的结论", 1)
-    add_body(doc, "建议在项目书正文中采用以下表述：")
+    add_heading(doc, "七 研究报告可采用的结论", 1)
+    add_body(doc, "建议在研究报告正文中采用以下表述：")
     add_body(doc, "在包含660轮记忆和300条查询的自建长时序回归集上，灵枢完整模型在独立项目测试集中的Top-1准确率达到94%，相比Static RAG基线的62%提升32个百分点；在50条事实变更查询上达到96%，较基线提高66个百分点。在LoCoMo公开长对话数据的1,977个带证据问答上，Top-5证据召回率由26.82%提升至52.31%；在278题类别分层问答实验中，得分由27.45提升至34.88。在10万条记忆规模下，离线检索P99时延为195.19毫秒。", bold_lead="在包含660轮记忆和300条查询的自建长时序回归集上，")
 
     add_heading(doc, "八 结论边界与后续工作", 1)
@@ -349,11 +349,11 @@ def main():
         p.paragraph_format.space_after = Pt(3)
         run = p.add_run(command)
         set_run_font(run, east="Microsoft YaHei", latin="Consolas", size=8.5, color=(45, 45, 45))
-    add_body(doc, "主要机器可读证据：output/eval_results.json、output/retrieval_v2.json、output/locomo_qa_v2_300.json、output/zte_v3_test_results.json，以及docs/competition/evidence-v2.json。")
+    add_body(doc, "主要机器可读证据：output/eval_results.json、output/retrieval_v2.json、output/locomo_qa_v2_300.json、output/zte_v3_test_results.json，以及docs/research/evidence-v2.json。")
 
     core_props = doc.core_properties
     core_props.title = "灵枢动态记忆系统实验报告"
-    core_props.subject = "中兴通讯第1529题项目书实验数据"
+    core_props.subject = "灵枢记忆引擎实验数据"
     core_props.author = "灵枢项目组"
     core_props.keywords = "动态记忆, 自适应检索, LoCoMo, 长时序记忆"
     OUT.parent.mkdir(parents=True, exist_ok=True)

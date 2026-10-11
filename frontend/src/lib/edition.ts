@@ -4,7 +4,7 @@
 //
 //   client —— 桌面记忆客户端。主流程为记忆管理 / MCP 接入 / 基础聊天，
 //             模型、隐私与可选云同步作为辅助设置。
-//   dev    —— 开发版 / 竞赛版（Docker 一键环境，浏览器访问 127.0.0.1:5173）。
+//   dev    —— 开发版（Docker 一键环境，浏览器访问 127.0.0.1:5173）。
 //             额外暴露 Memory Console（动态记忆引擎）等调试与演示页面。
 //
 // 判定顺序：
@@ -25,7 +25,7 @@ export type Edition = 'client' | 'dev';
 const CONFIGURED_EDITION = import.meta.env.VITE_LINGSHU_EDITION;
 const BUILD_MODE = import.meta.env.MODE;
 
-/** 当前是否为开发版 / 竞赛版（Docker + 浏览器）。 */
+/** 当前是否为开发版（Docker + 浏览器）。 */
 export const isDevEdition: boolean =
   CONFIGURED_EDITION === 'dev'
     ? true

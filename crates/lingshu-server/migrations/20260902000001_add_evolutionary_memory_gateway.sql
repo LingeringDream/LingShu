@@ -1,4 +1,4 @@
--- Competition memory protocol: three-layer storage, multi-agent gateway,
+-- Evolutionary memory protocol: three-layer storage, multi-agent gateway,
 -- temporal conflict governance and explainable adaptive retrieval.
 
 ALTER TABLE memories

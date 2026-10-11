@@ -8,7 +8,7 @@
 > **文档状态**：这是 2026-06-04 的 v0.4 历史产品设计稿。代码当前版本为 1.5.2，
 > 已扩展至 Windows、Web/ICS 降级、Memory Evolution Lab 和可选云账户；本文中的 Phase 0/1
 > 路线图、macOS 单平台假设和“待实现”描述不应当作为当前实现状态。当前状态请以根目录
-> [README](./README.md)、[CHANGELOG](./CHANGELOG.md) 和 [竞赛交付索引](./docs/competition/README.md) 为准。
+> [README](./README.md)、[CHANGELOG](./CHANGELOG.md) 和 [记忆引擎研究索引](./docs/research/README.md) 为准。
 > 当前产品定位、MCP 入口和 Free / Pro / Team / Enterprise / Embedded 版本体系见
 > [产品定位与版本体系](./docs/product-positioning.md)；本文第十一章商业模式仅保留为历史方案。
 

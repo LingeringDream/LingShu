@@ -3,7 +3,7 @@
 
 Why this file exists
 --------------------
-The competition requires evidence on a *public* long-horizon memory dataset.
+This experiment evaluates retrieval on a *public* long-horizon memory dataset.
 LoCoMo (Snap Research, 10 multi-session dialogues / 1,986 QA pairs with gold
 evidence ids) fits, but shipped as raw chat logs. This script turns it into the
 deterministic, auditable corpus the Rust evaluation harness consumes.

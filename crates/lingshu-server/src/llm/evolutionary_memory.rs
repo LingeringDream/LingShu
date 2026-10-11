@@ -1,4 +1,4 @@
-//! Pure policies for the competition-grade evolutionary memory pipeline.
+//! Pure policies for the evolutionary memory pipeline.
 //!
 //! Database and vector I/O live in the route/write adapters. Keeping scoring,
 //! access control and conflict decisions pure makes benchmark and ablation runs

@@ -583,7 +583,7 @@ pub async fn create_gateway_memory(
             )
             .await
             {
-                tracing::warn!(%memory_id, %error, "competition memory vector indexing failed (non-fatal)");
+                tracing::warn!(%memory_id, %error, "memory vector indexing failed (non-fatal)");
             }
         });
     }

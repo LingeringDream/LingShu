@@ -94,7 +94,7 @@ def main():
               "python -m unittest discover -s eval -p test_auto_state.py",
               "python eval/write_governance_report.py", "```", "",
               "评测器拒绝覆盖既有结果。报告生成器读取上述 audited_v2 冻结文件，不自动替换为分数更高的新运行。", ""]
-    dest = ROOT / "docs/competition/auto-governance-audit.md"
+    dest = ROOT / "docs/research/auto-governance-audit.md"
     dest.write_text("\n".join(lines), encoding="utf-8")
     names = ["governance_v4_audit.json", "auto_state_v4_all_audited_v2.json", "auto_state_v4_test_audited_v2.json"]
     evidence = {"summary": {s: r["summary"] for s, r in runs.items()},

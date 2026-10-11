@@ -24,7 +24,7 @@ The new CLI assets still need a release. Build from source for offline installat
 The source version is **1.6.2**. Installer versions and checksums follow the [download manifest](lingshu-cloud/public/downloads.json); platform releases may differ from the source version.
 
 - **Desktop client:** memory management, MCP setup and basic chat, with optional cloud account and encrypted sync. Windows x64 and macOS Apple Silicon packages include PostgreSQL, the backend, and the MCP sidecar; Docker and an external database are unnecessary. Configure Ollama or your own OpenAI-compatible model service separately.
-- **Development / competition edition:** Docker or source-based browser app with Memory Console, Agent Governance, and Benchmark & Integration. In the current working tree, desktop builds use `npm run build:client` and omit Memory Console; development builds use `npm run build`.
+- **Development edition:** Docker or source-based browser app with Memory Console, Agent Governance, and Benchmark & Integration. In the current working tree, desktop builds use `npm run build:client` and omit Memory Console; development builds use `npm run build`.
 - **Cloud account / team web app:** login, device management, subscriptions, downloads, and shared team memory; separate from the desktop local session.
 
 These editions are independent of subscription tiers:
@@ -37,9 +37,9 @@ These editions are independent of subscription tiers:
 
 Invited Free users receive team-member access, but creating another workspace requires their own valid Team subscription. Expiry does not remove local memory or local MCP, and existing teams are not automatically deleted. Team sharing does not imply personal cross-device sync. See [entitlements](docs/version-entitlements.md).
 
-## Competition Prototype and Evidence
+## Memory Engine and Experimental Evidence
 
-The ZTE challenge 1529 prototype implements episode/fact/experience memory, Agent access controls, conflict tracking, and adaptive retrieval. Concurrent writes use fact-level transaction locks; conflicting claims retain provenance and await resolution. See the [write protocol](docs/memory-write-consistency.md) and [competition index](docs/competition/README.md).
+The memory engine implements episode/fact/experience memory, Agent access controls, conflict tracking, and adaptive retrieval. Concurrent writes use fact-level transaction locks; conflicting claims retain provenance and await resolution. See the [write protocol](docs/memory-write-consistency.md) and [research index](docs/research/README.md).
 
 Offline results reported on 2026-09-06:
 
@@ -52,14 +52,14 @@ Offline results reported on 2026-09-06:
 
 The v3 corpus has 660 turns and 300 templated queries, split into 200 dev / 100 test by project. States are oracle labels, so this evaluates retrieval after governance. Similarity plus state filtering achieves **99%** test Top-1, outperforming the full scorer. LoCoMo uses a retrospective split, and the 100-question score mixes category F1 with refusal accuracy; it is not full-dataset official F1. BM25, RRF, and extractive fact candidates remain offline experiments.
 
-Standard P@K is distinct relevant hits / K; the old hits / min(K, gold count) metric is now `capped_recall`. Old 31% / 32% results were yes/no judge accuracy. Claims that all five targets passed or that unequal-budget token savings establish efficiency have been withdrawn. The [v4 governance audit](docs/competition/auto-governance-audit.md) is diagnostic; labels and construction artifacts still need review. Learned weights, real multi-Agent collaboration, and million-scale concurrent service tests remain outstanding.
+Standard P@K is distinct relevant hits / K; the old hits / min(K, gold count) metric is now `capped_recall`. Old 31% / 32% results were yes/no judge accuracy. Claims that all five targets passed or that unequal-budget token savings establish efficiency have been withdrawn. The [v4 governance audit](docs/research/auto-governance-audit.md) is diagnostic; labels and construction artifacts still need review. Learned weights, real multi-Agent collaboration, and million-scale concurrent service tests remain outstanding.
 
 ```powershell
 # Run from the repository root; no database or model service required
 cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test.json --json output/zte_v3_test_results.json
 ```
 
-See the [experiment report](docs/competition/experiment-report.md) for protocols, ablations, evidence, and full reproduction commands.
+See the [experiment report](docs/research/experiment-report.md) for protocols, ablations, evidence, and full reproduction commands.
 
 ## Implemented and Compatibility Capabilities
 
@@ -114,9 +114,9 @@ Next priorities are provenance and conflict UI, MCP connection checks, backup/re
 
 ## Quick Start
 
-### Windows Competition Launcher
+### Windows Development Launcher
 
-Start Docker Desktop, then double-click `启动灵枢竞赛版.cmd` at the repository root. It builds the full stack and opens the memory console at `http://127.0.0.1:5173/?section=memory-lab`. Use `打开灵枢控制台.cmd` if the browser does not open, and `停止灵枢开发版.cmd` to stop containers while preserving data volumes. See the [development guide](开发版使用说明.md).
+Start Docker Desktop, then double-click `启动灵枢开发版.cmd` at the repository root. It builds the full stack and opens the memory console at `http://127.0.0.1:5173/?section=memory-lab`. Use `打开灵枢控制台.cmd` if the browser does not open, and `停止灵枢开发版.cmd` to stop containers while preserving data volumes. See the [development guide](开发版使用说明.md).
 
 ### 1. Start Infrastructure
 
@@ -337,7 +337,7 @@ OpenAPI 3.1 generated by [utoipa](https://github.com/juhaku/utoipa), covering **
 
 ## Known Limitations
 
-- **Automated governance does not meet its target**: fact-state classification reaches Macro-F1 44.74% (rules) / 22.97% (LLM) with a 23–27% wrong-discard rate, far above the <5% goal. The system therefore relies on conservative dispute preservation and human adjudication rather than automatically deciding truth. See the [governance audit](docs/competition/auto-governance-audit.md).
+- **Automated governance does not meet its target**: fact-state classification reaches Macro-F1 44.74% (rules) / 22.97% (LLM) with a 23–27% wrong-discard rate, far above the <5% goal. The system therefore relies on conservative dispute preservation and human adjudication rather than automatically deciding truth. See the [governance audit](docs/research/auto-governance-audit.md).
 - **Pro is enabled**: manual encrypted private-memory sync is available to updated clients, and synchronized memories can be read by free local MCP. Remote MCP and commercial advanced governance remain unreleased; development-edition retrieval settings remain locally persistent. Team MCP and per-seat billing remain planned. Valid Team subscriptions can already create workspaces, and invited Free users can join. See [version entitlements](docs/version-entitlements.md).
 - Desktop packages include the MCP binary, and Settings can write configuration for supported clients in one step. Some clients still require manual configuration; source builds must build `lingshu-mcp` first.
 - A generated frontend API client is not included yet; the current OpenAPI gate checks the committed spec against the Rust-generated document.

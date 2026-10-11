@@ -30,7 +30,7 @@ cargo run -p lingshu-server
 cd frontend && npm run dev
 ```
 
-Windows 演示可在 Docker Desktop 启动后双击仓库根目录的 `启动灵枢竞赛版.cmd`；停止时使用
+Windows 演示可在 Docker Desktop 启动后双击仓库根目录的 `启动灵枢开发版.cmd`；停止时使用
 `停止灵枢开发版.cmd`。Windows 独立安装包不需要 Docker 或外部 PostgreSQL，云账户网页登录和
 下载中心说明见 [`lingshu-cloud/README.md`](../../lingshu-cloud/README.md)。
 

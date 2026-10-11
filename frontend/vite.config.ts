@@ -2,7 +2,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
-// Memory Console（动态记忆引擎）只在开发版 / 竞赛版出现。客户端构建
+// Memory Console（动态记忆引擎）只在开发版出现。客户端构建
 // (`npm run build:client`，即 --mode client) 会把它替换成空桩模块，
 // 这样它的组件、样式和依赖都不会进入客户端产物。
 const MEMORY_LAB_STUB_ID = '\0lingshu:memory-lab-stub';

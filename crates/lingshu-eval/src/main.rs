@@ -1,4 +1,4 @@
-//! LingShu competition evaluation harness.
+//! LingShu offline evaluation harness.
 //!
 //! Produces the evidence tables for the official scorecard. Everything is
 //! deterministic: embeddings are frozen on disk, the scoring policy is linked

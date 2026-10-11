@@ -7,14 +7,14 @@
 - [产品定位与版本体系](./product-positioning.md) — 客户端、MCP、HTTP API 现有入口、SDK 规划，以及 Free、Pro、Team、Enterprise、Embedded 版本边界
 - [SoulLedger 设计决策](./soulledger-design-decisions.md) — 记忆留存、人格演化、Thought Queue、遗忘机制的设计取舍与实现状态
 - [产品需求文档](../AI-PersonalAssistant-PRD.md) — 完整产品规格（中文）
-- 架构决策记录仍未单独建立；当前系统架构见 [竞赛架构文档](./competition/architecture.md)
+- 架构决策记录仍未单独建立；当前系统架构见 [记忆引擎架构文档](./research/architecture.md)
 
 ## 项目状态
 
 - [MVP 完成度](./mvp-status.md) — 对照 CLAUDE.md MVP 范围的逐项完成状态
 - [Review Findings](./review-findings.md) — 文档/代码审查的待办项
-- [竞赛交付索引](./competition/README.md) — Memory Evolution Lab 的架构、部署和实验依据
-- [跨平台校赛计划](./2026-09-08-cross-platform-school-competition-plan.md) — 平台适配和验收计划
+- [记忆引擎研究索引](./research/README.md) — Memory Evolution Lab 的架构、部署和实验依据
+- [跨平台实施计划](./2026-09-08-cross-platform-plan.md) — 平台适配和验收计划
 
 ## 开发
 
@@ -32,9 +32,9 @@
 
 ## 运维
 
-- [竞赛部署与演示手册](./competition/deployment.md)
+- [开发部署与演示手册](./research/deployment.md)
 - 配置说明目前集中在 [README 配置章节](../README.md#配置)
 
 ---
 
-注：PRD、MVP 状态和审查记录包含历史阶段信息；涉及当前版本、平台和发布能力时，以根目录 README、CHANGELOG 与竞赛交付索引为准。
+注：PRD、MVP 状态和审查记录包含历史阶段信息；涉及当前版本、平台和发布能力时，以根目录 README、CHANGELOG 与记忆引擎研究索引为准。

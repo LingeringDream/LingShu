@@ -25,7 +25,7 @@ import { buildCalendarIcs, exportCalendarEvent, type CalendarExportEvent } from 
 
 const event: CalendarExportEvent = {
   id: 'school-final',
-  title: '校赛答辩, 第一组',
+  title: '项目会议, 第一组',
   start_time: '2026-09-08T01:00:00.000Z',
   end_time: '2026-09-08T02:30:00.000Z',
   location: '报告厅; A区',
@@ -43,7 +43,7 @@ describe('portable ICS export', () => {
     const ics = buildCalendarIcs(event, new Date('2026-08-31T00:00:00.000Z'));
     expect(ics).toContain('BEGIN:VCALENDAR\r\nVERSION:2.0\r\n');
     expect(ics).toContain('DTSTART:20260908T010000Z');
-    expect(ics).toContain('SUMMARY:校赛答辩\\, 第一组');
+    expect(ics).toContain('SUMMARY:项目会议\\, 第一组');
     expect(ics).toContain('LOCATION:报告厅\\; A区');
     expect(ics).toContain('DESCRIPTION:展示灵枢\\n跨平台版本');
     expect(ics).toContain('RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=3');
@@ -67,11 +67,11 @@ describe('portable ICS export', () => {
 
   it('writes through the constrained native command on desktop platforms', async () => {
     capabilityState.isDesktop = true;
-    invokeMock.mockResolvedValue('C:\\Users\\student\\Downloads\\答辩.ics');
+    invokeMock.mockResolvedValue('C:\\Users\\student\\Downloads\\会议.ics');
 
     await expect(exportCalendarEvent(event)).resolves.toEqual({
       method: 'native',
-      path: 'C:\\Users\\student\\Downloads\\答辩.ics',
+      path: 'C:\\Users\\student\\Downloads\\会议.ics',
     });
     expect(invokeMock).toHaveBeenCalledWith(
       'export_calendar_file',

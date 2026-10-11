@@ -338,8 +338,8 @@ describe('WorkspacePage', () => {
     const times = upcomingEventTimes(30);
     const event = {
       id: 'portable-event',
-      title: '跨平台答辩',
-      description: '校赛演示',
+      title: '跨平台演示',
+      description: '项目演示',
       location: '报告厅',
       start_time: times.start,
       end_time: times.end,

@@ -849,7 +849,7 @@ mod memories {
     use super::*;
 
     /// SELECT * must return columns matching the full Memory struct, including
-    /// the competition memory protocol fields from migration 20260902000001.
+    /// the evolutionary memory protocol fields from migration 20260902000001.
     #[ignore]
     #[tokio::test]
     async fn memory_select_star_matches_insert_returning_star() {

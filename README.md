@@ -1,6 +1,6 @@
 # 灵枢 · LingShu
 
-> 中国国际大学生创新大赛（2026）产业赛道 · 中兴通讯第 1529 题可运行原型。完整源码、部署说明、架构、创新点、数据集与可复现实验见 [竞赛交付索引](docs/competition/README.md)。
+> 连接 AI 工具的个人共享记忆层，支持本地记忆、MCP 接入与基础聊天。记忆引擎的架构、部署与可复现实验见[研究文档](docs/research/README.md)。
 
 [![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FLingeringDream%2FLingShu%2Fmain%2FCargo.toml&query=%24.workspace.package.version&label=version&prefix=v&color=blue)](./CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Commercial-red)](./LICENSE)
@@ -28,10 +28,10 @@
 | 入口 | 用途 | 运行方式 |
 |------|------|----------|
 | 个人客户端 | 记忆管理、MCP 接入、基础聊天；可选云账户与加密同步 | Windows x64 / macOS Apple Silicon 桌面安装包；内置 PostgreSQL 与后端、MCP sidecar，无需 Docker 或外置数据库 |
-| 开发版 / 竞赛版 | 动态记忆引擎、Agent 治理、检索对照与评测演示 | Docker 全栈或源码启动，在浏览器访问 |
+| 开发版 | 动态记忆引擎、Agent 治理、检索对照与评测演示 | Docker 全栈或源码启动，在浏览器访问 |
 | 云账户与团队网页 | 登录、设备管理、订阅、下载、团队成员与共享记忆 | 云账户服务；与桌面本地会话隔离 |
 
-当前工作树已将 Memory Console 限定在开发版 / 竞赛版，桌面构建使用 `npm run build:client`；开发构建使用 `npm run build`。这属于发行形态区分，与 Free / Pro / Team 订阅档位独立。模型仍需配置本地 Ollama 或自备 OpenAI 兼容服务。
+当前工作树已将 Memory Console 限定在开发版，桌面构建使用 `npm run build:client`；开发构建使用 `npm run build`。这属于发行形态区分，与 Free / Pro / Team 订阅档位独立。模型仍需配置本地 Ollama 或自备 OpenAI 兼容服务。
 
 ## Free / Pro / Team 权益
 
@@ -43,26 +43,18 @@
 
 免费账号受邀后显示“团队版 Team（受邀成员）”，可使用所属团队；创建新团队仍需账号自身有效的 Team 订阅。权益由服务端校验，订阅失效不删除本地记忆或关闭本地 MCP，现有团队也不会因此自动删除。团队共享记忆与个人跨设备同步是两项独立能力，后者已提供手动增量同步。详见[权益实施说明](docs/version-entitlements.md)。
 
-## 产业赛道作品
+## 记忆引擎与实验依据
 
-| 项目 | 内容 |
-|------|------|
-| 企业 | 中兴通讯股份有限公司 |
-| 正式命题 | **面向智能体自主进化的动态记忆沉淀与自适应检索系统** |
-| 命题编号 | 1529 |
-| 原型名称 | **灵枢——面向多智能体协同的动态记忆与自适应检索系统** |
-| 作品形态 | Rust/Axum 后端 + React/Tauri 可视化原型 + PostgreSQL/Qdrant 数据层 |
-
-原型已经打通赛题要求的核心链路：
+记忆引擎已实现以下核心链路：
 
 - **三层异构记忆**：`episode` 原始交互片段、`fact` 结构化事实、`experience` 通用经验，支持时序索引、场景标签与来源追溯。
 - **多 Agent Memory Gateway**：提供私有、定向共享、全局公共空间，以及按记忆授权、权限隔离和访问审计。
 - **动态冲突治理**：按业务作用域、可见权限和有效时间识别矛盾；并发写入在事实级事务锁内处理，不同主张保留为争议，人工裁决后标记被替代记忆并保留记录。详见[并发写入协议](docs/memory-write-consistency.md)。
 - **自适应检索**：融合语义、词法、时序、可信度、频次和重要性进行重排，支持与传统静态 RAG 使用同一数据和接口对照。
 - **可运行评测**：独立 `lingshu-eval` 评测器复用生产排序代码；保留 v1/v2 回归集，新增 v3 合成集（660 轮、300 查询）及 LoCoMo 离线检索与问答实验。
-- **可视化演示**：开发版 / 竞赛版提供 Memory Console、Agent Governance、Benchmark & Integration 三视图，可查看分层记忆、权限空间、冲突事件、检索评分和基线对比。
+- **可视化演示**：开发版提供 Memory Console、Agent Governance、Benchmark & Integration 三视图，可查看分层记忆、权限空间、冲突事件、检索评分和基线对比。
 
-截至 2026-09-06 的离线实验摘要（详见[实验报告](docs/competition/experiment-report.md)）：
+截至 2026-09-06 的离线实验摘要（详见[实验报告](docs/research/experiment-report.md)）：
 
 | 数据与指标 | Static 基线 | 对照方案 | 结果 |
 |------------|------------:|----------|-----:|
@@ -79,7 +71,7 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 - v3 的记忆状态为 oracle 真值，查询共享模板，衡量治理后的检索；相似度＋状态过滤的测试 Top-1 为 **99%**，优于完整多特征策略的 94%，不能据此宣称已学得最优权重或完成自动治理。
 - LoCoMo 采用回溯式划分；100 题问答是类别均衡混合得分（含拒答准确率），不是全量官方 F1。BM25 / RRF / 抽取式事实候选尚未接入在线服务；收益证明强词法基线的价值。
 - 标准 P@K 为命中不同相关证据数 / K；旧 `hits / min(K, gold数)` 已改名 `capped_recall`。旧 31% / 32% 为 yes/no judge accuracy，旧“五项全部达标”及不等预算 Token 节省结论不再使用。
-- [自动治理 v4 审计](docs/competition/auto-governance-audit.md)属于诊断实验：129 轮、73 查询，标签与构造线索仍待复核，不能替代固定检索下的自动治理验收。真实多 Agent 协作、百万级并发和学习权重仍待验证。
+- [自动治理 v4 审计](docs/research/auto-governance-audit.md)属于诊断实验：129 轮、73 查询，标签与构造线索仍待复核，不能替代固定检索下的自动治理验收。真实多 Agent 协作、百万级并发和学习权重仍待验证。
 
 ## 实现清单与兼容能力
 
@@ -137,12 +129,12 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 
 ## 快速开始
 
-### Windows 一键启动（开发版 / 竞赛演示）
+### Windows 一键启动（开发版演示）
 
 安装并启动 Docker Desktop 后，直接双击仓库根目录的：
 
 ```text
-启动灵枢竞赛版.cmd
+启动灵枢开发版.cmd
 ```
 
 启动器会自动构建并启动 PostgreSQL、Redis、Qdrant、Rust 后端和 React 前端，待服务就绪后直接打开“动态记忆引擎”控制台。首次构建可能需要几分钟，后续会复用 Docker 缓存。
@@ -373,10 +365,10 @@ OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，当前覆盖
 
 ## 已知局限
 
-- **自动治理未达标**：事实状态自动判定的 Macro-F1 为规则 44.74% / LLM 22.97%，错误淘汰率 23–27%，远高于 <5% 目标。当前依赖保守的争议保留与人工裁决，不自动判定事实真伪。详见[自动治理审计](docs/competition/auto-governance-audit.md)。
+- **自动治理未达标**：事实状态自动判定的 Macro-F1 为规则 44.74% / LLM 22.97%，错误淘汰率 23–27%，远高于 <5% 目标。当前依赖保守的争议保留与人工裁决，不自动判定事实真伪。详见[自动治理审计](docs/research/auto-governance-audit.md)。
 - **Pro 已开放**：个人私有记忆手动增量同步可用，接收后可供免费本机 MCP 使用。远程 MCP 与商业高级治理仍未开放；开发版检索参数的本地持久化保留。团队 MCP 和按席位账单仍属规划能力；有效 Team 订阅已可创建团队工作区，受邀 Free 用户可加入。详见[版本权益实施说明](docs/version-entitlements.md)。
 - 桌面安装包已携带 MCP 二进制，设置页可为支持的客户端一键写入配置；部分客户端仍需手动粘贴配置，源码运行仍需先构建 `lingshu-mcp`。
-- 竞赛评测已增加 LoCoMo 强词法基线、按官方类别规则计分的本地问答、300 查询合成集与消融；尚缺生产检索接入、真实样本、权重路由、百万级并发压测与真实多 Agent 协作。旧版指标口径已纠正，详见[实验报告](docs/competition/experiment-report.md)。
+- 离线评测已增加 LoCoMo 强词法基线、按官方类别规则计分的本地问答、300 查询合成集与消融；尚缺生产检索接入、真实样本、权重路由、百万级并发压测与真实多 Agent 协作。旧版指标口径已纠正，详见[实验报告](docs/research/experiment-report.md)。
 - 前端暂未提供生成式 API 客户端；当前 OpenAPI 门禁校验代码生成结果与提交的 `openapi.json` 一致性。
 
 ## 文档索引
@@ -385,10 +377,10 @@ OpenAPI 3.1 由 [utoipa](https://github.com/juhaku/utoipa) 生成，当前覆盖
 - [版本权益实施说明](./docs/version-entitlements.md) — 各档当前已开放与尚未开放的能力
 - [并发写入与冲突治理](./docs/memory-write-consistency.md) — MCP 与 REST 共用的写入协议、争议与裁决
 - [产品需求文档](./AI-PersonalAssistant-PRD.md) — 完整产品规格（历史设计稿，不代表当前定位）
-- [中兴 1529 竞赛交付索引](./docs/competition/README.md) — 命题映射、部署演示、架构、创新点与实验报告
-- [竞赛实验报告](./docs/competition/experiment-report.md) — 静态基线、自适应检索、消融实验与证据边界
+- [记忆引擎研究索引](./docs/research/README.md) — 研究说明、部署演示、架构、创新点与实验报告
+- [记忆引擎实验报告](./docs/research/experiment-report.md) — 静态基线、自适应检索、消融实验与证据边界
 - [产品定位与版本体系](./docs/product-positioning.md) · [权益实施说明](./docs/version-entitlements.md)
-- [并发写入协议](./docs/memory-write-consistency.md) · [自动治理审计](./docs/competition/auto-governance-audit.md)
+- [并发写入协议](./docs/memory-write-consistency.md) · [自动治理审计](./docs/research/auto-governance-audit.md)
 - [开发版使用说明](./开发版使用说明.md)
 - [SoulLedger 设计决策](./docs/soulledger-design-decisions.md)
 - [MVP 完成度](./docs/mvp-status.md)

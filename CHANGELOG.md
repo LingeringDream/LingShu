@@ -47,7 +47,7 @@
 - `feat(eval)`: add an end-to-end QA F1 measurement (retrieval + local generation + LLM-as-judge) and a real resident-set-size probe measured in isolated child processes.
 - `fix(retrieval)`: teach `for_query` English before/after markers and a new aggregation intent, so summary-style questions stop being ranked by recency.
 - `perf(retrieval)`: rewrite `lexical_similarity` as packed-u64 merge scanning — roughly 20x faster, with an equivalence test proving identical output.
-- `docs`: rewrite the competition experiment report with a requirement-to-evidence mapping table, per-difficulty results, measured RSS, and an explicit resolved / unresolved evidence boundary section.
+- `docs`: rewrite the memory experiment report with a requirement-to-evidence mapping table, per-difficulty results, measured RSS, and an explicit resolved / unresolved evidence boundary section.
 - `ux(downloads)`: drop the GitHub download buttons from the download hub. Builds are now distributed through the network drive only, and the docs, FAQ and status copy were updated to match.
 
 ### Version 1.6.0
@@ -95,7 +95,7 @@
 - `feat(retrieval)`: add temporal conflict governance, adaptive six-factor reranking, stale-memory filtering, and a static RAG comparison mode.
 - `feat(benchmark)`: add a reproducible 60-turn dataset, baseline comparison, ablation experiments, threshold reporting, and the Memory Evolution Lab UI.
 - `feat(desktop)`: add embedded PostgreSQL support for the self-contained Windows sidecar package.
-- `docs`: add the ZTE 1529 competition delivery index, architecture, deployment guide, innovation brief, experiment report, and evidence boundaries.
+- `docs`: add the memory engine research index, architecture, deployment guide, innovation brief, experiment report, and evidence boundaries.
 
 ## 2026-08-31
 
