@@ -1,0 +1,43 @@
+name: Build Status
+
+# Publish standard commit statuses so release and container builds can be
+# followed by integrations that read statuses but cannot list workflow runs.
+on:
+  workflow_run:
+    workflows: [Release, Docker Build]
+    types: [requested, in_progress, completed]
+  push:
+    branches: [main]
+    paths: [.github/workflows/build-status.yml]
+
+permissions:
+  actions: read
+  statuses: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const repository = { owner: context.repo.owner, repo: context.repo.repo };
+            let runs;
+            if (context.eventName === 'workflow_run') {
+              runs = [context.payload.workflow_run];
+            } else {
+              // On initial installation, report the existing release runs too.
+              runs = (await github.rest.actions.listWorkflowRuns({
+                ...repository, workflow_id: 'release.yml', per_page: 10,
+              })).data.workflow_runs;
+            }
+            for (const run of runs.reverse()) {
+              const state = run.status !== 'completed' ? 'pending'
+                : run.conclusion === 'success' ? 'success' : 'failure';
+              await github.rest.repos.createCommitStatus({
+                ...repository, sha: run.head_sha, state,
+                context: run.name === 'Release' ? 'lingshu/release' : 'lingshu/docker',
+                description: `${run.name}: ${run.conclusion || run.status}`,
+                target_url: run.html_url,
+              });
+            }
