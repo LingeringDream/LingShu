@@ -482,6 +482,30 @@ button {
   margin-bottom: 18px;
 }
 
+.overview-message {
+  padding: 16px 22px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.advanced-permissions {
+  margin: 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.advanced-permissions summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.advanced-permissions > p {
+  margin: 12px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 .dashboard-card {
   border-radius: 16px;
   overflow: hidden;
@@ -871,8 +895,12 @@ button {
     font-size: 21px;
   }
 
-  .user-menu-button span:not(.user-avatar) {
-    display: none;
+  .user-menu-button {
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .dashboard-scroll {

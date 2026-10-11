@@ -73,7 +73,7 @@ impl EmbeddedDatabase {
             password_file: root.join("postgresql.password"),
             data_dir,
             host: "127.0.0.1".to_string(),
-            port: DATABASE_PORT,
+            port: embedded_database_port()?,
             username: DATABASE_USER.to_string(),
             password: DATABASE_PASSWORD.to_string(),
             temporary: false,
@@ -100,7 +100,10 @@ impl EmbeddedDatabase {
                 .context("create LingShu desktop database")?;
         }
 
-        tracing::info!(port = DATABASE_PORT, "Embedded PostgreSQL ready");
+        tracing::info!(
+            port = postgresql.settings().port,
+            "Embedded PostgreSQL ready"
+        );
         Ok(Self { postgresql })
     }
 
@@ -182,9 +185,29 @@ fn remove_stale_postmaster_pid(installation_dir: &Path, data_dir: &Path) -> anyh
 /// location must be derived from the platform's per-user data directory —
 /// never from the current directory.
 fn application_data_root() -> anyhow::Result<PathBuf> {
+    if let Some(directory) = std::env::var_os("LINGSHU_EMBEDDED_DB_ROOT") {
+        let directory = PathBuf::from(directory);
+        anyhow::ensure!(
+            directory.is_absolute(),
+            "LINGSHU_EMBEDDED_DB_ROOT must be absolute"
+        );
+        return Ok(directory);
+    }
     Ok(application_data_base()?
         .join(Path::new("com.lingshu.desktop"))
         .join("embedded-postgresql"))
+}
+
+fn embedded_database_port() -> anyhow::Result<u16> {
+    match std::env::var("LINGSHU_EMBEDDED_DB_PORT") {
+        Ok(value) => {
+            let port: u16 = value.parse().context("invalid LINGSHU_EMBEDDED_DB_PORT")?;
+            anyhow::ensure!(port != 0, "embedded database port must not be zero");
+            Ok(port)
+        }
+        Err(std::env::VarError::NotPresent) => Ok(DATABASE_PORT),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Per-user application-data directory for the current platform.

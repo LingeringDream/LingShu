@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
+
+## [1.6.2] - 2026-10-11
+
+### Added
+- 命令行客户端 `lingshu`：后台 start / stop / status、按需启动的 stdio MCP、Cursor / Claude / Codex 接入配置及备份、网页控制台、升级与卸载。
+- macOS / Linux shell 和 Windows PowerShell 安装器；预构建包自带 PostgreSQL、MCP 与网页，无需 Docker。校验归档后切换版本，升级与卸载默认保留 CLI 数据。
+- 四平台 CLI 打包与发布流程，包含真实安装、记忆、MCP、升级、卸载和显式清除数据的回归。
+
+### Changed
+- 个人客户端收敛为记忆管理、MCP 接入与基础聊天；移除辅助主入口、首页日历提醒轮询与桌宠默认窗口。
+- 后端支持 CLI 网页静态资源、独立内置数据库目录与端口，桌面默认数据库配置保持兼容。
 
 - `fix(retrieval)`: supplement nearest candidates with a bounded exact-phrase channel, strengthen literal name/identifier evidence in lexical scoring, and preserve the duplicate-similarity metric. Add a paired 10-query quality regression; synthetic gains are not a real-world accuracy claim.
 

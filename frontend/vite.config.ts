@@ -67,7 +67,8 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: {
           main: path.resolve(__dirname, 'index.html'),
-          pet: path.resolve(__dirname, 'pet.html'),
+          // 桌宠仅保留开发入口，不进入个人记忆客户端产物。
+          ...(!isClientBuild ? { pet: path.resolve(__dirname, 'pet.html') } : {}),
         },
       },
     },

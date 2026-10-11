@@ -9,8 +9,98 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare-release:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create draft if absent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            release_flags=()
+            case "$GITHUB_REF_NAME" in *alpha*|*beta*|*rc*) release_flags+=(--prerelease);; esac
+            notes_file="docs/releases/$GITHUB_REF_NAME.md"
+            if [ -f "$notes_file" ]; then
+              gh release create "$GITHUB_REF_NAME" --verify-tag --draft "${release_flags[@]}" --title "灵枢 LingShu $GITHUB_REF_NAME" --notes-file "$notes_file"
+            else
+              gh release create "$GITHUB_REF_NAME" --verify-tag --draft "${release_flags[@]}" --title "灵枢 LingShu $GITHUB_REF_NAME" --notes "CLI bundles include the memory service, PostgreSQL, MCP and a web console. Desktop installers are uploaded separately."
+            fi
+          fi
+
+  build-cli:
+    name: CLI (${{ matrix.target }})
+    needs: prepare-release
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: npm ci
+        working-directory: frontend
+      - name: CLI unit tests
+        run: cargo test --locked -p lingshu-cli
+      - name: Build self-contained bundle
+        run: python scripts/package-cli.py --target ${{ matrix.target }}
+      - name: Install, MCP, upgrade and uninstall regression
+        shell: bash
+        run: python scripts/test-cli-install.py --archive "$(find dist/cli -name '*.tar.gz' -o -name '*.zip' | head -1)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist/cli/*
+          if-no-files-found: error
+
+  publish-cli:
+    name: Publish verified CLI bundles
+    needs: build-cli
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: dist/cli
+      - name: Upload CLI assets and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" dist/cli/* scripts/install.sh scripts/install.ps1 --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false
+
   build-macos:
     name: Build macOS App
+    needs: prepare-release
     runs-on: macos-latest
     permissions:
       contents: write # needed to create/upload release assets
@@ -34,15 +124,8 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      # ── Build server sidecar ──────────────────────────────────
-      - name: Build backend (release)
-        run: cargo build -p lingshu-server --release
-
-      - name: Place sidecar binary
-        run: |
-          mkdir -p src-tauri/binaries
-          cp target/release/lingshu-server src-tauri/binaries/lingshu-server-aarch64-apple-darwin
-          chmod +x src-tauri/binaries/lingshu-server-aarch64-apple-darwin
+      - name: Build self-contained backend and MCP sidecars
+        run: ./scripts/build-sidecar.sh aarch64-apple-darwin
 
       # ── Build Tauri .app + .dmg ───────────────────────────────
       - name: Build Tauri app
@@ -64,29 +147,10 @@ jobs:
           codesign --force --deep --sign - \
             "src-tauri/target/release/bundle/macos/灵枢 LingShu.app"
 
-      # ── Create GitHub Release ─────────────────────────────────
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "灵枢 LingShu ${{ github.ref_name }}"
-          body: |
-            macOS and Windows desktop packages.
-
-            **macOS install:**
-            1. Open DMG → drag to Applications
-            2. First launch: right-click → Open, or run:
-               `xattr -cr /Applications/灵枢\ LingShu.app`
-
-            **Runtime dependencies:** Docker Desktop + Ollama running locally
-
-            **Supported packages:** macOS 14+ (Apple Silicon), Windows 10/11 (x64)
-          files: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+      - name: Upload macOS installer
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" src-tauri/target/release/bundle/dmg/*.dmg --clobber
 
   build-windows:
     name: Build Windows App
@@ -120,12 +184,7 @@ jobs:
         run: npm run tauri build -- --bundles nsis
         working-directory: frontend
 
-      - name: Upload Windows installer to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: src-tauri/target/release/bundle/nsis/*.exe
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+      - name: Upload Windows installer
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload $env:GITHUB_REF_NAME (Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe).FullName --clobber

@@ -18,6 +18,7 @@ export default [
         window: 'readonly',
         fetch: 'readonly',
         crypto: 'readonly',
+        structuredClone: 'readonly',
         Blob: 'readonly',
         URL: 'readonly',
         TextDecoder: 'readonly',

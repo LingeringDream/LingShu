@@ -7,19 +7,23 @@
 
 [中文](./README.md)
 
-LingShu is a user-controlled memory layer that connects AI tools for individuals, teams, and enterprises, while also providing its own desktop companion. Users can work in the LingShu client, connect Claude, Cursor, Codex, and other tools through MCP, or embed its memory capabilities through the current HTTP API; Python and TypeScript SDKs are planned. See the [product positioning and editions](docs/product-positioning.md) for the complete model.
+LingShu is a personal shared-memory layer for AI tools. MCP lets Claude, Cursor, Codex and other tools carry your preferences, project decisions and experience across conversations. The client focuses on memory management, MCP setup and basic chat, with optional encrypted cloud sync.
 
-> **LingShu is not another AI. It is the memory layer connecting all of your AIs.**
-
-The desktop client provides long-term memory (SoulLedger), an adjustable personality, proactive suggestions (Thought Queue), tiered system permissions, and platform-adapted calendar scheduling.
+Pets, calendars, task management, personality, thought queues and teams leave the personal client's main flow. Existing data and compatibility APIs remain. See the [current scope](docs/product-scope.md) and [positioning](docs/product-positioning.md).
 
 ---
 
+## Command-line Installation
+
+CLI bundles include the memory service, PostgreSQL, MCP and a web console. Use `lingshu start`, `lingshu connect cursor` and `lingshu open`; Docker is unnecessary and updates/uninstall retain memories by default.
+
+The new CLI assets still need a release. Build from source for offline installation today; see the [CLI guide](docs/cli-installation.md) for supported platforms, commands and limitations.
+
 ## Current Version and Editions
 
-The source version is **1.6.1**. Installer versions and checksums follow the [download manifest](lingshu-cloud/public/downloads.json); platform releases may differ from the source version.
+The source version is **1.6.2**. Installer versions and checksums follow the [download manifest](lingshu-cloud/public/downloads.json); platform releases may differ from the source version.
 
-- **Desktop client:** daily chat, memory, pet, AI-tool integration, and team workspaces. Windows x64 and macOS Apple Silicon packages include PostgreSQL, the backend, and the MCP sidecar; Docker and an external database are unnecessary. Configure Ollama or your own OpenAI-compatible model service separately.
+- **Desktop client:** memory management, MCP setup and basic chat, with optional cloud account and encrypted sync. Windows x64 and macOS Apple Silicon packages include PostgreSQL, the backend, and the MCP sidecar; Docker and an external database are unnecessary. Configure Ollama or your own OpenAI-compatible model service separately.
 - **Development / competition edition:** Docker or source-based browser app with Memory Console, Agent Governance, and Benchmark & Integration. In the current working tree, desktop builds use `npm run build:client` and omit Memory Console; development builds use `npm run build`.
 - **Cloud account / team web app:** login, device management, subscriptions, downloads, and shared team memory; separate from the desktop local session.
 
@@ -57,7 +61,9 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 
 See the [experiment report](docs/competition/experiment-report.md) for protocols, ablations, evidence, and full reproduction commands.
 
-## Features
+## Implemented and Compatibility Capabilities
+
+This inventory records existing implementations, rather than the current product scope. Pets, calendars, personality and thought queues remain legacy modules; future work follows the [current scope](docs/product-scope.md).
 
 | Category | Capability | Status |
 |----------|-----------|--------|
@@ -80,32 +86,11 @@ See the [experiment report](docs/competition/experiment-report.md) for protocols
 
 ## Project Status
 
-The 2026-09-08 source changes unify chat/Gateway/MCP recall, add durable indexing, atomic fact extraction, explicit valid-time queries, bounded consolidation and derived-memory invalidation. They are not a new installer release or a verified production deployment. See the [implementation and migration notes](docs/memory-retrieval-optimization.md): existing summaries become pending review, and index backfill may incur embedding work. Seven synthetic queries are regression evidence, not a mem0 comparison or real-model accuracy benchmark. Six database scenarios were run separately; frontend/cloud test counts below are previous records, not rerun in this batch. Strict Clippy passed for server/vector/mcp-core only.
+The current iteration focuses on personal shared memory: memory management, MCP setup and basic chat. The desktop starts only the main window. Pets, calendars, tasks, personality, thought queues and teams leave the personal flow; existing data, APIs and cloud subscriptions remain compatible.
 
-**Core features and cross-platform desktop infrastructure are complete; the current work is evidence and cloud-account polish.** SoulLedger, personality, thought queue, permission tiers, vector retrieval, signal telemetry, tool calling, and platform-adapted calendar export are implemented. The Rust workspace carries **410 passed and 26 ignored tests**; the frontend has **29 test files and 132 passing tests**; the cloud Worker has **55 passing tests**.
+The memory core includes unified online recall, atomic fact extraction, durable indexing, valid-time queries, bounded consolidation and derived-memory invalidation. See the [implementation and migration notes](docs/memory-retrieval-optimization.md). Research results are not shipped capabilities, and source changes are not installer releases.
 
-- ✅ Rust + Axum backend (API, WebSocket, 33 database migrations)
-- ✅ MCP memory service (`lingshu-mcp` + `lingshu-mcp-core`): stdio transport, 6 tools sharing the same Memory Gateway, permissions, and audit trail as REST
-- ✅ Concurrent writes & adjudication: fact-level transactional locks, `context_scope` isolation, competing claims preserved as `disputed`, human adjudication retains records
-- ✅ Entitlements: Free / Pro / Team tiers computed centrally in the cloud; the client only renders results and the backend re-validates restricted actions
-- ✅ React + TypeScript + Vite frontend (chat + memory/personality/calendar/thought centers + settings + role prompts + workspace)
-- ✅ PostgreSQL + Redis + Qdrant development environment
-- ✅ SoulLedger: memory extraction/dedup, forgetting decay + provenance guardrails, personality evolution, offline LLM semantic consolidation
-- ✅ Semantic memory retrieval (Ollama embeddings + Qdrant, with SQL fallback)
-- ✅ Thought Queue state machine + anti-nag + lifecycle guards + daily maintenance
-- ✅ Permission tiers L0–L4 + audit log, settings persisted to PostgreSQL (migration 0022)
-- ✅ Integration token AES-256-GCM at-rest encryption
-- ✅ Signal telemetry event layer, wired into core business paths
-- ✅ Tauri 2 desktop shell (main + pet windows) + EventKit bridge (macOS 14+ `NSCalendarsFullAccessUsageDescription`)
-- ✅ Calendar: EventKit write-back/delete on macOS, ICS export on Windows/Linux/Web, with NL parsing, CRUD, L1 confirmation, and external_event_id sync where applicable
-- ✅ macOS and Windows self-contained packages with an embedded PostgreSQL runtime
-- ✅ Cloud account: browser PKCE login, device sessions, subscription overview, and download center; encrypted private-memory sync is enabled; remote MCP and advanced governance remain unreleased
-- ✅ Chat: tool-use loop, role prompts, Markdown rendering, streaming SSE responses
-- ✅ Web search: separate L1 permission, result parsing, source preservation, timeout and response-size limits
-- ✅ LLM settings persisted to PostgreSQL (model, max_tokens, context_messages, etc. — survives restarts)
-- ✅ Frontend Vitest unit suite (chatStore / memoryStore / projectStore / MessageBubble / api / tauri / eventkit)
-
-Full product spec: [AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md) (Chinese)
+Next priorities are provenance and conflict UI, MCP connection checks, backup/restore and release reliability. See the [current scope](docs/product-scope.md). The [personal-assistant PRD](./AI-PersonalAssistant-PRD.md) is a historical design.
 
 ## Tech Stack
 

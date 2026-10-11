@@ -9,21 +9,25 @@
 
 [English](./README.en.md)
 
-灵枢是连接不同 AI 工具的个人、团队与企业记忆层，同时提供桌面宠物式 AI 助手。用户既可以直接使用灵枢客户端，也可以通过 MCP 让 Claude、Cursor、Codex 等工具共享同一套记忆，或通过当前 HTTP API 将记忆能力嵌入其他产品；Python / TypeScript SDK 属于后续规划。完整的产品定位、版本权益与付费边界见[产品定位与版本体系](docs/product-positioning.md)。
+灵枢是连接常用 AI 工具的个人共享记忆层。通过 MCP，让 Claude、Cursor、Codex 等工具延续你的偏好、项目决定与经验；个人客户端负责记忆管理、MCP 接入与基础聊天。
 
-> **灵枢不是另一个 AI。灵枢是连接所有 AI 的记忆层。**
-
-桌面客户端具备长期记忆（SoulLedger）、可控人格、主动建议（Thought Queue）、分级系统权限和平台适配的日程能力；记忆内核已扩展出面向多智能体协同的动态记忆沉淀、冲突治理与自适应检索原型。
+当前产品主线是“本地记忆＋MCP＋基础聊天”，云同步按需开启。桌宠、日历、项目任务、人格、思考队列与团队退出个人主流程；旧数据和兼容接口保留。当前边界与验收条件见[产品范围](docs/product-scope.md)，定位与付费边界见[产品定位](docs/product-positioning.md)。
 
 ---
 
+## 命令行安装
+
+个人共享记忆支持 CLI 安装包：`lingshu start` 启动记忆服务，`lingshu connect cursor` 接入 AI 工具，`lingshu open` 打开网页控制台。发行包自带 PostgreSQL，不要求 Docker；升级与卸载默认保留记忆。
+
+新的 CLI 包尚需发布，当前可从源码打包后离线安装；具体命令、支持平台与边界见[命令行安装说明](docs/cli-installation.md)。
+
 ## 当前版本与使用入口
 
-当前源码版本为 **1.6.1**。安装包版本、平台和校验值以账户中心的[下载清单](lingshu-cloud/public/downloads.json)及下载页面为准；源码版本不代表所有平台已同步发布。
+当前源码版本为 **1.6.2**。安装包版本、平台和校验值以账户中心的[下载清单](lingshu-cloud/public/downloads.json)及下载页面为准；源码版本不代表所有平台已同步发布。
 
 | 入口 | 用途 | 运行方式 |
 |------|------|----------|
-| 个人客户端 | 日常聊天、记忆管理、桌宠、AI 工具接入、团队工作区 | Windows x64 / macOS Apple Silicon 桌面安装包；内置 PostgreSQL 与后端、MCP sidecar，无需 Docker 或外置数据库 |
+| 个人客户端 | 记忆管理、MCP 接入、基础聊天；可选云账户与加密同步 | Windows x64 / macOS Apple Silicon 桌面安装包；内置 PostgreSQL 与后端、MCP sidecar，无需 Docker 或外置数据库 |
 | 开发版 / 竞赛版 | 动态记忆引擎、Agent 治理、检索对照与评测演示 | Docker 全栈或源码启动，在浏览器访问 |
 | 云账户与团队网页 | 登录、设备管理、订阅、下载、团队成员与共享记忆 | 云账户服务；与桌面本地会话隔离 |
 
@@ -77,7 +81,9 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 - 标准 P@K 为命中不同相关证据数 / K；旧 `hits / min(K, gold数)` 已改名 `capped_recall`。旧 31% / 32% 为 yes/no judge accuracy，旧“五项全部达标”及不等预算 Token 节省结论不再使用。
 - [自动治理 v4 审计](docs/competition/auto-governance-audit.md)属于诊断实验：129 轮、73 查询，标签与构造线索仍待复核，不能替代固定检索下的自动治理验收。真实多 Agent 协作、百万级并发和学习权重仍待验证。
 
-## 功能概览
+## 实现清单与兼容能力
+
+下表记录已有实现，不等于当前产品范围。桌宠、日历、人格、思考队列等保留为历史兼容模块，后续投入以[产品范围](docs/product-scope.md)为准。
 
 2026-09-08 源码改进（尚未发布新版安装包）：聊天与 Gateway/MCP 共用词法＋向量候选检索；抽取写入原子化，向量索引采用可重试持久化队列；支持显式有效时间查询、有限预算合并和派生摘要失效传播。详见[实现、复现与升级注意事项](docs/memory-retrieval-optimization.md)。7 个合成查询仅用于回归，不是与 mem0 的性能对比或真实模型准确率证明。新迁移会为旧记忆补建索引，并将既有派生摘要保留为待复核；不等于已部署到用户设备。
 
@@ -103,32 +109,11 @@ cargo run -p lingshu-eval --release -- --zte-dataset datasets/zte_memory_v3_test
 
 ## 项目状态
 
-**核心功能与跨平台桌面基础设施已完成，当前进入竞赛证据完善和云账户配套收尾阶段。** SoulLedger 记忆系统、Memory Gateway、冲突治理、自适应检索、人格、思考队列、权限分级、工具调用、日历平台适配等均已实现。当前 Rust workspace 为 **410 passed、26 ignored**，前端为 **29 个测试文件、132 项测试通过**，云账户 Worker 为 **55 项测试通过**。
+当前迭代收敛为个人共享记忆：记忆管理、MCP 接入与基础聊天。客户端默认只启动主窗口；桌宠、日历、任务、人格、思考队列与团队不再进入个人主流程。旧数据、API 与既有云端订阅保留兼容。
 
-- ✅ Rust + Axum 后端（API、WebSocket、33 个数据库迁移）
-- 本轮后端验证：410 项常规测试通过、26 项默认跳过；其中另跑 6 项数据库回归通过。前端和云端测试数字为此前记录，本轮未重跑；严格 Clippy 通过范围为 server、vector、mcp-core，非整个 workspace。
-- ✅ MCP 记忆服务（`lingshu-mcp` + `lingshu-mcp-core`）：stdio 传输，6 个工具，与 REST 共用同一套 Memory Gateway、权限与审计
-- ✅ 并发写入与裁决：事实级事务锁、业务作用域 `context_scope` 隔离、不同主张保留为 `disputed`、人工裁决保留记录
-- ✅ 版本权益：Free / Pro / Team 三档由云端统一计算，客户端只展示结果，受限操作仍由后端校验
-- ✅ React + TypeScript + Vite 前端（聊天 + 记忆/人格/日历/思绪中心 + 设置 + 角色提示词 + 工作区）
-- ✅ PostgreSQL + Redis + Qdrant 开发环境
-- ✅ SoulLedger：记忆提取/去重、遗忘衰减 + 来源护栏、人格演化、离线 LLM 语义合并
-- ✅ Memory Evolution Lab：三层记忆协议、多 Agent Gateway、冲突治理、自适应检索、静态基线与消融评测
-- ✅ 语义记忆检索（Ollama 嵌入 + Qdrant，带 SQL 回退）
-- ✅ 思考队列状态机 + 防打扰 + 生命周期守卫 + 每日维护
-- ✅ 权限分级 L0–L4 + 审计日志，权限设置持久化至 PostgreSQL（migration 0022）
-- ✅ 集成令牌 AES-256-GCM 静态加密
-- ✅ 信号埋点事件层，已接入核心业务路径
-- ✅ Tauri 2 桌面壳（main + pet 窗口）+ EventKit 桥接（macOS 14+ `NSCalendarsFullAccessUsageDescription`）
-- ✅ Apple Calendar：macOS 使用 EventKit；Windows、Linux 和 Web 使用 ICS 导出；均支持自然语言解析、CRUD 与 L1 确认
-- ✅ macOS / Windows 独立版：Sidecar 内置 PostgreSQL 运行时，安装包可独立启动，不依赖 Docker 或外部数据库
-- ✅ 云账户：网页登录 PKCE、设备会话、订阅概览和下载中心；Pro 提供个人私有记忆端到端加密同步；远程 MCP 与高级治理仍未开放
-- ✅ Chat：工具调用（tool-use loop）、角色提示词、Markdown 渲染、流式 SSE 响应
-- ✅ 联网搜索：独立 L1 权限开关、网页结果解析、来源链接保留、超时与响应大小限制
-- ✅ LLM 设置持久化至 PostgreSQL（模型、max_tokens、context_messages 等，重启保留）
-- ✅ 前端 Vitest 单测套件（chatStore / memoryStore / projectStore / MessageBubble / api / tauri / eventkit）
+记忆内核已有统一在线召回、原子事实抽取、持久化索引、有效时间查询、有界合并与派生摘要失效传播，见[实现与升级说明](docs/memory-retrieval-optimization.md)。研究实验不等于上线能力，源码改动也不代表安装包已发布。
 
-完整产品规格：[AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md)
+后续优先改善来源追踪与冲突处理界面、MCP 接入成功检查、备份恢复和发布可靠性。当前范围与验收条件见[产品范围](docs/product-scope.md)；[AI-PersonalAssistant-PRD.md](./AI-PersonalAssistant-PRD.md)保留为历史设计稿。
 
 ## 技术栈
 
@@ -190,7 +175,7 @@ SERVER_HOST=127.0.0.1
 LLM_DEFAULT_MODEL=<你本机已安装的对话模型>
 ```
 
-### 3. 安装 CLI 并运行迁移
+### 3. 安装 sqlx 迁移工具（源码开发）
 
 ```bash
 # sqlx-cli 锁定 0.8.x 以兼容 rustc 1.88（0.9+ 需要 1.94+）

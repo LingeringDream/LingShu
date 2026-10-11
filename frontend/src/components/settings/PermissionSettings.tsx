@@ -15,7 +15,7 @@ interface Permissions {
 }
 
 const TIER_INFO: { key: keyof Permissions; label: string; desc: string; editable: boolean }[] = [
-  { key: 'l0_enabled', label: 'L0 · 聊天与宠物', desc: '桌面宠物、对话、记忆展示', editable: false },
+  { key: 'l0_enabled', label: 'L0 · 聊天与记忆', desc: '本地对话与记忆展示', editable: false },
   { key: 'l1_web_search', label: 'L1 · 联网搜索', desc: '将搜索词发送至公开搜索服务，并在回答中附上来源', editable: true },
   { key: 'l1_calendar', label: 'L1 · 日历', desc: '创建/修改系统日历日程', editable: true },
   { key: 'l1_require_confirmation', label: 'L1 · 日程需确认', desc: '每个日程创建前展示确认卡片', editable: true },
@@ -24,11 +24,11 @@ const TIER_INFO: { key: keyof Permissions; label: string; desc: string; editable
   { key: 'l4_autonomous', label: 'L4 · 自主操控', desc: '屏幕识别 + 自主点击（远期）', editable: true },
 ];
 
-export function PermissionSettings() {
+export function PermissionSettings({ collapsed = true }: { collapsed?: boolean }) {
   const [perms, setPerms] = useState<Permissions | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(!collapsed);
 
   useEffect(() => {
     apiFetch('/api/v1/permissions')

@@ -14,30 +14,13 @@
     "windows": [
       {
         "label": "main",
-        "title": "灵枢 LingShu — 个人助理",
+        "title": "灵枢 LingShu — AI 共享记忆",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
         "minHeight": 600,
         "center": true,
         "visible": true
-      },
-      {
-        "label": "pet",
-        "title": "灵枢",
-        "url": "pet.html",
-        "width": 200,
-        "height": 260,
-        "x": 40,
-        "y": 40,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "resizable": false,
-        "visible": true,
-        "visibleOnAllWorkspaces": true,
-        "skipTaskbar": true,
-        "shadow": false
       }
     ],
     "macOSPrivateApi": true,

@@ -1,8 +1,36 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { AppLayout, type AppSectionKey } from './components/layout/AppLayout';
+import { useState, useEffect, useCallback } from 'react';
+import { AppLayout, resolveAppSection, type AppSectionKey } from './components/layout/AppLayout';
 import { ChatWindow } from './components/chat/ChatWindow';
 import { ChatSettings } from './components/chat/ChatSettings';
 import { MemoryCenter } from './components/memory/MemoryCenter';
+import { PermissionSettings } from './components/settings/PermissionSettings';
+import { AiToolsPanel } from './components/settings/AiToolsPanel';
+import { CloudAccountPanel } from './components/settings/CloudAccountPanel';
+import { useCloudAccountStore } from './stores/cloudAccountStore';
+import { ensureLocalSession, apiFetch } from './lib/api';
+import { isTauri, MAIN_NAVIGATE_EVENT } from './lib/tauri';
+import { isMemoryLabAvailable } from './lib/edition';
+import {
+  DESKTOP_BACKEND_STARTUP_TIMEOUT_MS,
+  WEB_BACKEND_STARTUP_TIMEOUT_MS,
+  localSessionStartupErrorMessage,
+  retryLocalSession,
+} from './lib/localSessionBoot';
+import { installChatSessionSync, useChatStore } from './stores/chatStore';
+
+interface ConversationItem {
+  id: string;
+  title: string | null;
+  created_at: string;
+}
+
+interface MemoryItem {
+  id: string;
+  memory_type: string;
+  content: string;
+  importance: number;
+}
+
 function MemoryLabRoute() {
   const [El, setEl] = useState<React.FC | null>(null);
   useEffect(() => {
@@ -20,107 +48,18 @@ function MemoryLabRoute() {
   }
   return <El />;
 }
-import { WorkspacePage } from './components/workspace/WorkspacePage';
-import { PermissionSettings } from './components/settings/PermissionSettings';
-import { AiToolsPanel } from './components/settings/AiToolsPanel';
-import { CloudAccountPanel } from './components/settings/CloudAccountPanel';
-import { useCloudAccountStore } from './stores/cloudAccountStore';
-import { PersonalityCenter } from './components/personality/PersonalityCenter';
-import { ThoughtQueue } from './components/thoughts/ThoughtQueue';
-
-import {
-  type AvatarControlSettings,
-  AvatarControlPanel,
-} from './components/avatar/AvatarControlPanel';
-import {
-  loadAvatarControlSettings,
-  publishAvatarControlSettings,
-} from './components/avatar/avatarControls';
-import { ensureLocalSession, apiFetch } from './lib/api';
-import { isTauri, MAIN_NAVIGATE_EVENT } from './lib/tauri';
-import { isMemoryLabAvailable } from './lib/edition';
-import {
-  DESKTOP_BACKEND_STARTUP_TIMEOUT_MS,
-  WEB_BACKEND_STARTUP_TIMEOUT_MS,
-  localSessionStartupErrorMessage,
-  retryLocalSession,
-} from './lib/localSessionBoot';
-import { installChatSessionSync, useChatStore } from './stores/chatStore';
-import { useProjectStore } from './stores/projectStore';
-import {
-  collectDueCalendarReminders,
-  prepareCalendarEventsForDisplay,
-  type CalendarRecurrenceRule,
-  type CalendarUrgency,
-} from './lib/calendarPresentation';
-import { publishCalendarReminder } from './lib/calendarReminderEvents';
-
-// ── Dashboard data types ────────────────────────────────────────
-
-interface CalendarEvent {
-  id: string;
-  title: string;
-  start_time: string;
-  end_time: string;
-  status: string;
-  recurrence?: CalendarRecurrenceRule | null;
-}
-
-interface TaskItem {
-  id: string;
-  project_id: string;
-  title: string;
-  status: string;
-  priority: number;
-  due_date: string | null;
-  assignee_id: string | null;
-}
-
-interface ConversationItem {
-  id: string;
-  title: string | null;
-  created_at: string;
-}
-
-interface MemoryItem {
-  id: string;
-  memory_type: string;
-  content: string;
-  importance: number;
-}
 
 export default function App() {
   const cloudAccountName = useCloudAccountStore((state) => state.account?.user.display_name);
   const [sessionState, setSessionState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<AppSectionKey>(() => {
-    const requestedSection = new URLSearchParams(window.location.search).get('section');
-    // 动态记忆引擎只在开发版 / 竞赛版开放；客户端即使带参数也回落到首页。
-    if (requestedSection === 'memory-lab') return isMemoryLabAvailable ? 'memory-lab' : 'home';
-    if (requestedSection === 'ai-tools') return 'ai-tools';
-    return 'home';
-  });
-  const [avatarSettings, setAvatarSettings] = useState<AvatarControlSettings>(() => loadAvatarControlSettings());
-
-  // Dashboard state
-  const [scheduleItems, setScheduleItems] = useState<{
-    id: string;
-    time: string;
-    title: string;
-    state: CalendarUrgency;
-    badge?: string;
-  }[]>([]);
-  const [todoItems, setTodoItems] = useState<{ id: string; title: string; tag?: string }[]>([]);
-  const [recentConversations, setRecentConversations] = useState<{ id: string; title: string; time: string }[]>([]);
-  const [memoryBullets, setMemoryBullets] = useState<string[]>([]);
-  const [dashboardLoading, setDashboardLoading] = useState(false);
-
-  // Stats
-  const [stats, setStats] = useState({ events: 0, tasks: 0, pendingTasks: 0 });
-  const [l1CalendarEnabled, setL1CalendarEnabled] = useState(false);
-
-  const { fetchProjects } = useProjectStore();
-  const remindedCalendarEventIdsRef = useRef<Set<string>>(new Set());
+  const [activeSection, setActiveSection] = useState<AppSectionKey>(() =>
+    resolveAppSection(new URLSearchParams(window.location.search).get('section')),
+  );
+  const [recentConversations, setRecentConversations] = useState<ConversationItem[]>([]);
+  const [recentMemories, setRecentMemories] = useState<MemoryItem[]>([]);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
 
   const bootLocalSession = useCallback(async () => {
     setSessionState('loading');
@@ -165,147 +104,35 @@ export default function App() {
     };
   }, []);
 
-  const updateAvatarSettings = useCallback((settings: AvatarControlSettings) => {
-    setAvatarSettings(settings);
-    publishAvatarControlSettings(settings).catch((error) => {
-      console.error('[avatar] failed to publish control settings:', error);
-    });
-  }, []);
-
-  // ── Fetch dashboard data ──────────────────────────────────────
-
-  const scanCalendarReminders = useCallback(async () => {
-    try {
-      const permRes = await apiFetch('/api/v1/permissions');
-      if (!permRes.ok) return;
-      const perms: { l1_calendar: boolean } = await permRes.json();
-      if (!perms.l1_calendar) return;
-
-      const calRes = await apiFetch('/api/v1/calendar/events?limit=50');
-      if (!calRes.ok) return;
-      const events: CalendarEvent[] = await calRes.json();
-      const reminders = collectDueCalendarReminders(
-        events,
-        new Date(),
-        remindedCalendarEventIdsRef.current,
-      );
-      for (const reminder of reminders) {
-        remindedCalendarEventIdsRef.current.add(reminder.id);
-        await publishCalendarReminder(reminder);
-      }
-    } catch {
-      // Reminder scans are best-effort; the dashboard fetch still surfaces data.
-    }
-  }, []);
-
-  const loadDashboard = useCallback(async () => {
-    setDashboardLoading(true);
-    try {
-      // Gate calendar on L1 permission to avoid 403 noise
-      let l1Calendar = false;
-      try {
-        const permRes = await apiFetch('/api/v1/permissions');
-        if (permRes.ok) {
-          const perms: { l1_calendar: boolean } = await permRes.json();
-          l1Calendar = perms.l1_calendar ?? false;
-        }
-      } catch {
-        // permissions fetch is best-effort; default to disabled
-      }
-      setL1CalendarEnabled(l1Calendar);
-
-      // Calendar events — only when L1 calendar is enabled
-      if (l1Calendar) {
-        const calRes = await apiFetch('/api/v1/calendar/events?limit=5');
-        if (calRes.ok) {
-          const events: CalendarEvent[] = await calRes.json();
-          const visibleEvents = prepareCalendarEventsForDisplay(events).slice(0, 5);
-          setScheduleItems(
-            visibleEvents.map((e) => ({
-              id: e.id,
-              time: e.startsAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-              title: e.title,
-              state: e.urgency,
-              badge: e.displayStatus === '已确认' ? undefined : e.displayStatus,
-            }))
-          );
-          setStats((s) => ({ ...s, events: visibleEvents.length }));
-        }
-      } else {
-        setScheduleItems([]);
-        setStats((s) => ({ ...s, events: 0 }));
-      }
-
-      // Conversations
-      const convRes = await apiFetch('/api/v1/conversations');
-      if (convRes.ok) {
-        const convs: ConversationItem[] = await convRes.json();
-        setRecentConversations(
-          convs.slice(0, 5).map((c) => ({
-            id: c.id,
-            title: c.title || '无标题对话',
-            time: new Date(c.created_at).toLocaleDateString('zh-CN'),
-          }))
-        );
-      }
-
-      // Memories
-      const memRes = await apiFetch('/api/v1/memories?limit=5');
-      if (memRes.ok) {
-        const mems: MemoryItem[] = await memRes.json();
-        setMemoryBullets(mems.map((m) => m.content));
-      }
-
-      // Tasks (via first project)
-      await fetchProjects();
-      const projRes = await apiFetch('/api/v1/projects');
-      if (projRes.ok) {
-        const projs: { id: string }[] = await projRes.json();
-        if (projs.length > 0) {
-          const tasksRes = await apiFetch(`/api/v1/projects/${projs[0].id}/tasks?limit=5`);
-          if (tasksRes.ok) {
-            const tasks: TaskItem[] = await tasksRes.json();
-            setTodoItems(
-              tasks.map((t) => ({
-                id: t.id,
-                title: t.title,
-                tag: t.priority <= 2 ? '高优先级' : undefined,
-              }))
-            );
-            setStats((s) => ({
-              ...s,
-              tasks: tasks.length,
-              pendingTasks: tasks.filter((t) => t.status !== 'done' && t.status !== 'completed').length,
-            }));
-          }
-        }
-      }
-    } catch {
-      // Dashboard is best-effort; errors are non-fatal
-    } finally {
-      setDashboardLoading(false);
-    }
-  }, [fetchProjects]);
-
   useEffect(() => {
-    if (sessionState === 'ready' && activeSection === 'home') {
-      loadDashboard();
-    }
-  }, [sessionState, activeSection, loadDashboard]);
-
-  useEffect(() => {
-    if (sessionState !== 'ready') return undefined;
-
-    scanCalendarReminders();
-    const timer = window.setInterval(scanCalendarReminders, 60_000);
-    const handler = () => scanCalendarReminders();
-    window.addEventListener('calendar-changed', handler);
-
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener('calendar-changed', handler);
+    if (sessionState !== 'ready' || activeSection !== 'home') return;
+    let cancelled = false;
+    setOverviewLoading(true);
+    setOverviewError(null);
+    const load = async () => {
+      const results = await Promise.allSettled([
+        apiFetch('/api/v1/memories?limit=5').then(async (response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return response.json() as Promise<MemoryItem[]>;
+        }),
+        apiFetch('/api/v1/conversations').then(async (response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return response.json() as Promise<ConversationItem[]>;
+        }),
+      ]);
+      if (cancelled) return;
+      if (results[0].status === 'fulfilled') setRecentMemories(results[0].value);
+      else setRecentMemories([]);
+      if (results[1].status === 'fulfilled') setRecentConversations(results[1].value.slice(0, 5));
+      else setRecentConversations([]);
+      if (results.some((result) => result.status === 'rejected')) {
+        setOverviewError('部分最近记录加载失败，请到记忆中心或聊天中查看。');
+      }
+      setOverviewLoading(false);
     };
-  }, [scanCalendarReminders, sessionState]);
+    void load();
+    return () => { cancelled = true; };
+  }, [sessionState, activeSection]);
 
   const openRecentConversation = useCallback(async (conversationId: string) => {
     const loaded = await useChatStore.getState().loadSession(conversationId);
@@ -321,7 +148,7 @@ export default function App() {
     import('@tauri-apps/api/event')
       .then(({ listen }) =>
         listen<string>(MAIN_NAVIGATE_EVENT, (event) => {
-          setActiveSection(event.payload as AppSectionKey);
+          setActiveSection(resolveAppSection(event.payload));
         }),
       )
       .then((fn) => {
@@ -379,182 +206,52 @@ export default function App() {
     );
   }
 
-  const dashboardDate = new Date().toLocaleDateString('zh-CN', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    weekday: 'long',
-  });
-
-  // ── Section renderers ─────────────────────────────────────────
-
   const renderHome = () => (
     <>
       <section className="dashboard-hero">
         <div>
-          <p className="eyebrow">Overview</p>
-          <h2>你好，用户！</h2>
-          <p>{dashboardDate}</p>
-        </div>
-        <div className="hero-hint">
-          <span className="status-dot" />
-          桌面助理在线，等待你的下一步指令
+          <p className="eyebrow">本地共享记忆</p>
+          <h2>让不同 AI 接着你的上下文工作</h2>
+          <p>在这里管理记忆，通过 MCP 接入常用 AI 工具；聊天也使用同一套记忆。</p>
         </div>
       </section>
-
-      <section className="stat-grid" aria-label="今日状态">
-        <button
-          type="button"
-          className="stat-card stat-action-card"
-          onClick={() => setActiveSection('workspace')}
-        >
-          <span className="stat-icon stat-blue" />
-          <div>
-            <p>今日日程</p>
-            <strong>{stats.events} 项</strong>
-            <span>{stats.events > 0 ? `下一个：${scheduleItems[0]?.time || ''} ${scheduleItems[0]?.title || ''}` : '暂无日程'}</span>
-          </div>
+      <section className="stat-grid" aria-label="开始使用">
+        <button type="button" className="stat-card stat-action-card" onClick={() => setActiveSection('memory')}>
+          <div className="stat-icon stat-blue" aria-hidden="true">记</div>
+          <div><h3>管理记忆</h3><p>添加、搜索和修正你的长期记忆</p></div>
         </button>
-        <button
-          type="button"
-          className="stat-card stat-action-card"
-          onClick={() => setActiveSection('workspace')}
-        >
-          <span className="stat-icon stat-orange" />
-          <div>
-            <p>待办事项</p>
-            <strong>{stats.tasks} 项</strong>
-            <span>{stats.pendingTasks} 项待完成</span>
-          </div>
+        <button type="button" className="stat-card stat-action-card" onClick={() => setActiveSection('ai-tools')}>
+          <div className="stat-icon stat-green" aria-hidden="true">连</div>
+          <div><h3>接入 AI 工具</h3><p>让支持 MCP 的工具读取和写入记忆</p></div>
         </button>
-        <button
-          type="button"
-          className="stat-card stat-action-card"
-          onClick={() => setActiveSection('thoughts')}
-        >
-          <span className="stat-icon stat-green" />
-          <div>
-            <p>思维建议</p>
-            <strong>查看</strong>
-            <span>助理主动建议</span>
-          </div>
+        <button type="button" className="stat-card stat-action-card" onClick={() => setActiveSection('chat')}>
+          <div className="stat-icon stat-orange" aria-hidden="true">聊</div>
+          <div><h3>开始聊天</h3><p>配置模型后，用对话积累记忆</p></div>
         </button>
       </section>
-
+      {overviewError && <p className="overview-message" role="alert">{overviewError}</p>}
+      {overviewLoading && <p className="overview-message" role="status">正在加载最近记录…</p>}
       <section className="dashboard-grid">
-        <article className="dashboard-card schedule-card">
-          <div className="card-title-row">
-            <h3>今日日程</h3>
-            <button type="button" onClick={() => setActiveSection('workspace')}>
-              查看全部
-            </button>
-          </div>
-          {dashboardLoading ? (
-            <p style={{ padding: 12, fontSize: 13 }}>加载中...</p>
-          ) : !l1CalendarEnabled ? (
-            <div style={{ padding: 12, fontSize: 13 }}>
-              <p style={{ color: '#888', margin: '0 0 8px 0' }}>需要开启 L1 日历权限</p>
-              <button
-                type="button"
-                onClick={() => setActiveSection('privacy')}
-                style={{
-                  padding: '4px 12px',
-                  fontSize: 12,
-                  border: '1px solid var(--accent)',
-                  borderRadius: 4,
-                  background: 'transparent',
-                  color: 'var(--accent)',
-                  cursor: 'pointer',
-                }}
-              >
-                前往权限设置
+        <article className="dashboard-card">
+          <div className="card-title-row"><h3>最近记忆</h3><button type="button" onClick={() => setActiveSection('memory')}>查看全部</button></div>
+          {!overviewLoading && recentMemories.length === 0 ? (
+            <p className="overview-message">还没有记忆。到记忆中心添加一条，或让接入的 AI 工具写入。</p>
+          ) : (
+            <ul className="memory-bullets">{recentMemories.map((memory) => <li key={memory.id}>{memory.content}</li>)}</ul>
+          )}
+        </article>
+        <article className="dashboard-card">
+          <div className="card-title-row"><h3>最近对话</h3><button type="button" onClick={() => setActiveSection('chat')}>打开聊天</button></div>
+          {!overviewLoading && recentConversations.length === 0 ? (
+            <p className="overview-message">还没有对话。你也可以直接在常用 AI 工具中使用灵枢记忆。</p>
+          ) : (
+            <div className="conversation-list">{recentConversations.map((conversation) => (
+              <button type="button" className="conversation-row" key={conversation.id} onClick={() => void openRecentConversation(conversation.id)}>
+                <span className="conversation-avatar" aria-hidden="true">聊</span>
+                <span>{conversation.title || '无标题对话'}</span>
+                <time>{new Date(conversation.created_at).toLocaleDateString('zh-CN')}</time>
               </button>
-            </div>
-          ) : scheduleItems.length === 0 ? (
-            <p style={{ padding: 12, fontSize: 13, color: '#888' }}>暂无日程。去日历添加吧。</p>
-          ) : (
-            <div className="timeline-list">
-              {scheduleItems.map((item) => (
-                <div key={item.id} className="timeline-item">
-                  <span className={`timeline-dot ${item.state}`} />
-                  <time>{item.time}</time>
-                  <span>
-                    {item.title}
-                    {item.badge && <em className="timeline-status-badge">{item.badge}</em>}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </article>
-
-        <article className="dashboard-card todo-card">
-          <div className="card-title-row">
-            <h3>我的待办</h3>
-            <button type="button" onClick={() => setActiveSection('workspace')}>
-              新建待办
-            </button>
-          </div>
-          {todoItems.length === 0 ? (
-            <p style={{ padding: 12, fontSize: 13, color: '#888' }}>
-              暂无任务。先创建一个项目再添加任务吧。
-            </p>
-          ) : (
-            <div className="todo-list">
-              {todoItems.map((item) => (
-                <label key={item.id} className="todo-row">
-                  <input type="checkbox" />
-                  <span>{item.title}</span>
-                  {item.tag && <em>{item.tag}</em>}
-                </label>
-              ))}
-            </div>
-          )}
-        </article>
-
-        <article className="dashboard-card conversation-card">
-          <div className="card-title-row">
-            <h3>最近对话 / 助理建议</h3>
-            <button type="button" onClick={() => setActiveSection('chat')}>
-              查看全部对话
-            </button>
-          </div>
-          {recentConversations.length === 0 ? (
-            <p style={{ padding: 12, fontSize: 13, color: '#888' }}>暂无对话。</p>
-          ) : (
-            <div className="conversation-list">
-              {recentConversations.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="conversation-row"
-                  onClick={() => void openRecentConversation(item.id)}
-                  title={`打开对话：${item.title}`}
-                >
-                  <span className="conversation-avatar" />
-                  <span>{item.title}</span>
-                  <time>{item.time}</time>
-                </button>
-              ))}
-            </div>
-          )}
-        </article>
-
-        <article className="dashboard-card memory-card">
-          <div className="card-title-row">
-            <h3>记忆摘要</h3>
-            <button type="button" onClick={() => setActiveSection('memory')}>
-              查看全部记忆
-            </button>
-          </div>
-          {memoryBullets.length === 0 ? (
-            <p style={{ padding: 12, fontSize: 13, color: '#888' }}>暂无记忆。</p>
-          ) : (
-            <ul className="memory-bullets">
-              {memoryBullets.map((b, i) => (
-                <li key={i}>{b}</li>
-              ))}
-            </ul>
+            ))}</div>
           )}
         </article>
       </section>
@@ -578,8 +275,6 @@ export default function App() {
             <ChatWindow />
           </section>
         );
-      case 'workspace':
-        return <WorkspacePage />;
       case 'memory':
         return (
           <section className="dashboard-card live-tool-card page-tool-card">
@@ -591,34 +286,16 @@ export default function App() {
         );
       case 'memory-lab':
         return isMemoryLabAvailable ? <MemoryLabRoute /> : renderHome();
-      case 'personality':
-        return (
-          <section className="dashboard-card page-tool-card narrow-tool-card">
-            <PersonalityCenter />
-          </section>
-        );
-      case 'thoughts':
-        return (
-          <section className="dashboard-card page-tool-card narrow-tool-card">
-            <ThoughtQueue />
-          </section>
-        );
-      case 'preferences':
-        return (
-          <section className="dashboard-card page-tool-card narrow-tool-card">
-            <AvatarControlPanel settings={avatarSettings} onChange={updateAvatarSettings} />
-          </section>
-        );
-      case 'privacy':
-        return (
-          <section className="dashboard-card page-tool-card narrow-tool-card">
-            <PermissionSettings />
-          </section>
-        );
       case 'settings':
         return (
           <section className="dashboard-card page-tool-card narrow-tool-card">
+            <div className="card-title-row"><h3>模型与隐私设置</h3></div>
             <ChatSettings collapsed={false} />
+            <details className="advanced-permissions">
+              <summary>高级系统权限</summary>
+              <p>管理已有聊天工具的系统访问权限。仅在需要时开启。</p>
+              <PermissionSettings collapsed={false} />
+            </details>
           </section>
         );
       default:

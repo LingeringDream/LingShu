@@ -127,13 +127,14 @@ async fn main() -> anyhow::Result<()> {
     // before AppState connects, and override any developer DATABASE_URL that
     // may be present in the parent environment.
     #[cfg(feature = "desktop-embedded-db")]
-    let embedded_database = if is_sidecar {
-        let database = embedded_db::EmbeddedDatabase::start().await?;
-        config.database.url = database.database_url();
-        Some(database)
-    } else {
-        None
-    };
+    let embedded_database =
+        if is_sidecar && std::env::var("LINGSHU_EMBEDDED_DB").as_deref() != Ok("0") {
+            let database = embedded_db::EmbeddedDatabase::start().await?;
+            config.database.url = database.database_url();
+            Some(database)
+        } else {
+            None
+        };
     if !is_sidecar {
         let insecure_defaults = [
             "lingshu-local-dev",
@@ -218,6 +219,19 @@ async fn main() -> anyhow::Result<()> {
     }
     .layer(cors)
     .with_state(state);
+
+    // CLI distributions carry the client build beside the binaries. API routes
+    // retain priority; unknown paths stay 404 instead of returning SPA HTML.
+    let app = if let Some(directory) = std::env::var_os("LINGSHU_WEB_DIR") {
+        let directory = std::path::PathBuf::from(directory);
+        anyhow::ensure!(
+            directory.join("index.html").is_file(),
+            "LINGSHU_WEB_DIR has no index.html"
+        );
+        app.fallback_service(tower_http::services::ServeDir::new(directory))
+    } else {
+        app
+    };
 
     // Start server
     let addr = format!("{}:{}", config.server.host, config.server.port);

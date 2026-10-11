@@ -704,7 +704,7 @@ fn main() {
                 }
             }
 
-            // Wait for the backend port before showing windows.
+            // Wait for the backend port before showing the memory console.
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let ready = wait_for_backend(
@@ -713,16 +713,13 @@ fn main() {
                 )
                 .await;
                 if ready {
-                    println!("[lingshu-tauri] backend ready, showing windows");
+                    println!("[lingshu-tauri] backend ready, showing memory console");
                 } else {
                     eprintln!("[lingshu-tauri] backend did not become ready within timeout — start it manually with `cargo run -p lingshu-server`");
                 }
                 if let Some(main) = app_handle.get_webview_window("main") {
                     let _ = main.show();
                     let _ = main.set_focus();
-                }
-                if let Some(pet) = app_handle.get_webview_window("pet") {
-                    let _ = pet.show();
                 }
             });
 
